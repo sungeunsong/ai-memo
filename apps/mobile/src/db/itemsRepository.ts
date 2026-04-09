@@ -1,6 +1,6 @@
 import { SQLiteDatabase } from 'expo-sqlite';
 
-import { SaveUrlPayload, SavedItem } from '@/features/items/types';
+import { ItemMetadataPatch, SaveUrlPayload, SavedItem } from '@/features/items/types';
 
 type ItemRow = {
   id: string;
@@ -58,6 +58,33 @@ export async function listItemsAsync(db: SQLiteDatabase) {
   );
 
   return rows.map(mapItemRow);
+}
+
+export async function updateItemMetadataAsync(
+  db: SQLiteDatabase,
+  itemId: string,
+  patch: ItemMetadataPatch
+) {
+  await db.runAsync(
+    `UPDATE items
+    SET
+      source_url = COALESCE(?, source_url),
+      title = COALESCE(?, title),
+      summary = COALESCE(?, summary),
+      content = COALESCE(?, content),
+      thumbnail_url = COALESCE(?, thumbnail_url),
+      ai_status = COALESCE(?, ai_status),
+      updated_at = ?
+    WHERE id = ?`,
+    patch.sourceUrl ?? null,
+    patch.title ?? null,
+    patch.summary ?? null,
+    patch.content ?? null,
+    patch.thumbnailUrl ?? null,
+    patch.aiStatus ?? null,
+    patch.updatedAt,
+    itemId
+  );
 }
 
 function mapItemRow(row: ItemRow): SavedItem {

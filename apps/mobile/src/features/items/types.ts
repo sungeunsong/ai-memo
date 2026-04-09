@@ -33,3 +33,13 @@ export type SaveUrlPayload = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type ItemMetadataPatch = {
+  sourceUrl?: string | null;
+  title?: string;
+  summary?: string;
+  content?: string;
+  thumbnailUrl?: string | null;
+  aiStatus?: AIStatus;
+  updatedAt: string;
+};

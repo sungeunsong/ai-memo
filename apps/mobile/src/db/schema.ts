@@ -1,6 +1,4 @@
 export const createTablesStatement = `
-PRAGMA journal_mode = WAL;
-
 CREATE TABLE IF NOT EXISTS items (
   id TEXT PRIMARY KEY NOT NULL,
   type TEXT NOT NULL,

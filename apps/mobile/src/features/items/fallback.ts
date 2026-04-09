@@ -1,4 +1,5 @@
 import { SaveUrlPayload } from '@/features/items/types';
+import { extractUrlCandidate } from '@/features/capture/normalizeSharedInput';
 
 const HOST_LABELS: Record<string, string> = {
   'youtube.com': '유튜브 링크',
@@ -6,7 +7,7 @@ const HOST_LABELS: Record<string, string> = {
   'instagram.com': '인스타그램 링크',
 };
 
-export function buildFallbackUrlItem(normalizedUrl: string): SaveUrlPayload {
+export function buildFallbackUrlItem(normalizedUrl: string, rawInput = normalizedUrl): SaveUrlPayload {
   const timestamp = new Date().toISOString();
   const hostname = getHostname(normalizedUrl);
   const title = buildFallbackTitle(hostname);
@@ -15,7 +16,7 @@ export function buildFallbackUrlItem(normalizedUrl: string): SaveUrlPayload {
     id: createItemId(),
     type: 'url',
     sourceUrl: normalizedUrl,
-    rawInput: normalizedUrl,
+    rawInput,
     title,
     summary: `${hostname} 링크를 먼저 저장했습니다.\nAI 요약과 파싱은 비동기로 이어집니다.`,
     content: normalizedUrl,
@@ -28,14 +29,8 @@ export function buildFallbackUrlItem(normalizedUrl: string): SaveUrlPayload {
 }
 
 export function normalizeUrl(input: string) {
-  const trimmed = input.trim();
-
-  if (!trimmed) {
-    throw new Error('URL을 입력해 주세요.');
-  }
-
-  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  const url = new URL(withProtocol);
+  const extracted = extractUrlCandidate(input);
+  const url = new URL(extracted);
 
   if (!['http:', 'https:'].includes(url.protocol)) {
     throw new Error('http 또는 https 링크만 저장할 수 있습니다.');

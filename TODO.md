@@ -5,10 +5,10 @@
 - [ ] MVP Phase 0 범위 확정
 - [x] Expo Prebuild + TypeScript 프로젝트 생성
 - [x] 기본 폴더 구조 결정
-- [ ] 디자인 시스템 초안 정의
-- [ ] 홈/목록 화면 와이어프레임 정리
-- [ ] URL 저장 화면 와이어프레임 정리
-- [ ] 상세 화면 와이어프레임 정리
+- [x] 디자인 시스템 초안 정의
+- [x] 홈/목록 화면 와이어프레임 정리
+- [x] URL 저장 화면 와이어프레임 정리
+- [x] 상세 화면 와이어프레임 정리
 
 ## 프로젝트 세팅
 
@@ -55,12 +55,14 @@
 
 - [x] 제목 fallback 규칙 작성
 - [x] 요약 placeholder 규칙 작성
-- [ ] 썸네일 fallback 규칙 작성
+- [x] 썸네일 fallback 규칙 작성
 - [x] `ai_status` 기본값 처리
 
 ## 이후 단계
 
-- [ ] Android Share Intent 설계
+- [x] Android Share Intent 설계
+- [x] Android Share Intent 패키지 도입
+- [x] 공유 payload -> 현재 저장 흐름 연결
 - [ ] iOS Share Extension 설계
 - [ ] sync queue 설계
 - [ ] Supabase 인증/동기화 설계
