@@ -64,6 +64,8 @@
 - [x] Android Share Intent 패키지 도입
 - [x] 공유 payload -> 현재 저장 흐름 연결
 - [ ] iOS Share Extension 설계
-- [ ] sync queue 설계
+- [x] sync queue 설계
+- [x] sync queue 스키마/큐잉 구현
+- [x] sync worker / 재시도 정책 구현
 - [ ] Supabase 인증/동기화 설계
 - [ ] 소형 온디바이스 AI 검토

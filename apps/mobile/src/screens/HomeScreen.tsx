@@ -51,6 +51,10 @@ export function HomeScreen() {
   const items = useAppStore((state) => state.items);
   const selectedItemId = useAppStore((state) => state.selectedItemId);
   const errorMessage = useAppStore((state) => state.errorMessage);
+  const syncQueuePendingCount = useAppStore((state) => state.syncQueuePendingCount);
+  const syncQueueFailedCount = useAppStore((state) => state.syncQueueFailedCount);
+  const syncWorkerMessage = useAppStore((state) => state.syncWorkerMessage);
+  const isSyncWorkerRunning = useAppStore((state) => state.isSyncWorkerRunning);
   const initialize = useAppStore((state) => state.initialize);
   const saveUrl = useAppStore((state) => state.saveUrl);
   const selectItem = useAppStore((state) => state.selectItem);
@@ -182,9 +186,15 @@ export function HomeScreen() {
             <MetricCard label="저장된 링크" value={`${items.length}`} helper="로컬 DB 기준" />
             <MetricCard label="최근 저장" value={lastSavedAt} helper="앱 재실행 후 복원" />
             <MetricCard
-              label="현재 상태"
-              value={isSaving ? '저장 중' : isInitializing ? '초기화 중' : '준비됨'}
-              helper="AI와 저장 경로 분리"
+              label="동기화 큐"
+              value={syncQueuePendingCount ? `${syncQueuePendingCount} 대기` : '비어 있음'}
+              helper={
+                isSyncWorkerRunning
+                  ? '큐 처리 중'
+                  : syncQueueFailedCount
+                    ? `실패 ${syncQueueFailedCount}건`
+                    : syncWorkerMessage ?? '저장 후 비동기 업로드 준비'
+              }
             />
           </View>
         </View>
@@ -193,6 +203,12 @@ export function HomeScreen() {
           <View style={styles.toast}>
             <View style={styles.toastDot} />
             <Text style={styles.toastText}>{toastMessage}</Text>
+          </View>
+        ) : null}
+
+        {syncWorkerMessage ? (
+          <View style={styles.syncInfoBanner}>
+            <Text style={styles.syncInfoText}>{syncWorkerMessage}</Text>
           </View>
         ) : null}
 
@@ -287,6 +303,7 @@ export function HomeScreen() {
                 <ChecklistItem text="저장 버튼을 누르면 즉시 로컬 DB에 반영되는가" />
                 <ChecklistItem text="앱을 다시 열어도 목록이 그대로 남아 있는가" />
                 <ChecklistItem text="AI가 없어도 화면이 허전하지 않고 읽히는가" />
+                <ChecklistItem text="저장 직후 sync queue가 1건 쌓이는가" />
               </View>
             </View>
           </View>
@@ -363,7 +380,7 @@ export function HomeScreen() {
 
                   <View style={styles.detailGrid}>
                     <MetaBlock label="원본 링크" value={truncateMiddle(selectedItem.sourceUrl ?? '-')} />
-                    <MetaBlock label="동기화" value={selectedItem.syncStatus} />
+                    <MetaBlock label="동기화" value={getSyncStatusLabel(selectedItem.syncStatus)} />
                     <MetaBlock label="생성 시각" value={formatReadableDate(selectedItem.createdAt)} />
                     <MetaBlock label="유형" value={selectedItem.type} />
                   </View>
@@ -529,15 +546,33 @@ function MetaBlock({ label, value }: { label: string; value: string }) {
 }
 
 function getStatusLabel(item: SavedItem) {
+  const syncLabel = getSyncStatusLabel(item.syncStatus);
+
   if (item.aiStatus === 'completed') {
-    return '메타 완료';
+    return `${syncLabel} · 메타 완료`;
   }
 
   if (item.aiStatus === 'failed') {
-    return '기본 저장';
+    return `${syncLabel} · 기본 저장`;
   }
 
-  return '보강 중';
+  return `${syncLabel} · 보강 중`;
+}
+
+function getSyncStatusLabel(syncStatus: SavedItem['syncStatus']) {
+  if (syncStatus === 'queued') {
+    return '동기화 대기';
+  }
+
+  if (syncStatus === 'synced') {
+    return '동기화 완료';
+  }
+
+  if (syncStatus === 'failed') {
+    return '동기화 실패';
+  }
+
+  return '로컬만 저장';
 }
 
 function getItemSourceLabel(item: SavedItem) {
@@ -675,6 +710,20 @@ const styles = StyleSheet.create({
     color: palette.success,
     fontSize: 14,
     lineHeight: 20,
+    fontWeight: '700',
+  },
+  syncInfoBanner: {
+    backgroundColor: '#f5e8d1',
+    borderRadius: 18,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderWidth: 1,
+    borderColor: '#ddbf86',
+  },
+  syncInfoText: {
+    color: palette.textPrimary,
+    fontSize: 13,
+    lineHeight: 19,
     fontWeight: '700',
   },
   metricCard: {

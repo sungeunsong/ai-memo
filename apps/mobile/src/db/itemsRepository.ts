@@ -87,6 +87,24 @@ export async function updateItemMetadataAsync(
   );
 }
 
+export async function updateItemSyncStatusAsync(
+  db: SQLiteDatabase,
+  itemId: string,
+  syncStatus: SavedItem['syncStatus'],
+  updatedAt: string
+) {
+  await db.runAsync(
+    `UPDATE items
+    SET
+      sync_status = ?,
+      updated_at = ?
+    WHERE id = ?`,
+    syncStatus,
+    updatedAt,
+    itemId
+  );
+}
+
 function mapItemRow(row: ItemRow): SavedItem {
   return {
     id: row.id,
