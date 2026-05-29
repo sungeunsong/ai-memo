@@ -239,15 +239,11 @@ export function HomeScreen() {
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.hero}>
-          <View style={styles.heroGlowLarge} />
-          <View style={styles.heroGlowSmall} />
-
           <View style={styles.heroHeader}>
-            <Text style={styles.eyebrow}>AI Memo / Phase 0</Text>
+            <Text style={styles.eyebrow}>AI Memo / Toss Style</Text>
             <Text style={styles.title}>저장은 즉시, 정리는 나중에.</Text>
             <Text style={styles.description}>
-              유튜브와 인스타 링크를 빠르게 쌓아두고, 나중에 온디바이스 AI가 제목과
-              요약을 정리하는 흐름을 먼저 만듭니다.
+              유튜브, 인스타, 노션 문서를 빠르게 쌓아두고, 백그라운드 AI가 핵심 요약을 정리하는 햅틱 감성의 클린 지식 저장소입니다.
             </Text>
           </View>
 
@@ -293,10 +289,22 @@ export function HomeScreen() {
               </View>
             </View>
             <View style={styles.clipboardBannerActions}>
-              <Pressable onPress={() => setClipboardCandidate(null)} style={styles.clipboardBannerCloseBtn}>
+              <Pressable
+                onPress={() => setClipboardCandidate(null)}
+                style={({ pressed }) => [
+                  styles.clipboardBannerCloseBtn,
+                  { transform: [{ scale: pressed ? 0.95 : 1 }] }
+                ]}
+              >
                 <Text style={styles.clipboardBannerCloseBtnText}>닫기</Text>
               </Pressable>
-              <Pressable onPress={handleSaveClipboard} style={styles.clipboardBannerSaveBtn}>
+              <Pressable
+                onPress={handleSaveClipboard}
+                style={({ pressed }) => [
+                  styles.clipboardBannerSaveBtn,
+                  { transform: [{ scale: pressed ? 0.95 : 1 }] }
+                ]}
+              >
                 <Text style={styles.clipboardBannerSaveBtnText}>즉시 저장</Text>
               </Pressable>
             </View>
@@ -347,7 +355,10 @@ export function HomeScreen() {
                     <Pressable
                       key={link.label}
                       onPress={() => setUrlInput(link.value)}
-                      style={styles.quickLink}
+                      style={({ pressed }) => [
+                        styles.quickLink,
+                        { transform: [{ scale: pressed ? 0.95 : 1 }] }
+                      ]}
                     >
                       <Text style={styles.quickLinkText}>{link.label}</Text>
                     </Pressable>
@@ -357,7 +368,12 @@ export function HomeScreen() {
                   <Pressable
                     disabled={isPasting}
                     onPress={handlePaste}
-                    style={[styles.button, styles.secondaryButton]}
+                    style={({ pressed }) => [
+                      styles.button,
+                      styles.secondaryButton,
+                      isPasting && styles.disabledButton,
+                      { transform: [{ scale: pressed ? 0.96 : 1 }] }
+                    ]}
                   >
                     <Text style={styles.secondaryButtonText}>
                       {isPasting ? '붙여넣는 중' : '클립보드 붙여넣기'}
@@ -366,10 +382,11 @@ export function HomeScreen() {
                   <Pressable
                     disabled={isSaving || isInitializing}
                     onPress={handleSave}
-                    style={[
+                    style={({ pressed }) => [
                       styles.button,
                       styles.primaryButton,
                       (isSaving || isInitializing) && styles.disabledButton,
+                      { transform: [{ scale: pressed ? 0.96 : 1 }] }
                     ]}
                   >
                     <Text style={styles.primaryButtonText}>
@@ -434,10 +451,11 @@ export function HomeScreen() {
                       <Pressable
                         key={item.id}
                         onPress={() => selectItem(item.id)}
-                        style={[
+                        style={({ pressed }) => [
                           styles.card,
                           item.id === selectedItem?.id && styles.cardSelected,
                           item.id === highlightedItemId && styles.cardHighlighted,
+                          { transform: [{ scale: pressed ? 0.97 : 1 }] }
                         ]}
                       >
                         <View
@@ -507,7 +525,13 @@ export function HomeScreen() {
                             multiline
                             blurOnSubmit={true}
                           />
-                          <Pressable onPress={handleSaveUserNote} style={styles.noteSaveButton}>
+                          <Pressable
+                            onPress={handleSaveUserNote}
+                            style={({ pressed }) => [
+                              styles.noteSaveButton,
+                              { transform: [{ scale: pressed ? 0.94 : 1 }] }
+                            ]}
+                          >
                             <Text style={styles.noteSaveButtonText}>저장</Text>
                           </Pressable>
                         </View>
@@ -519,9 +543,12 @@ export function HomeScreen() {
                           <View style={styles.extractedUrlsList}>
                             {selectedItem.extractedUrls.map((url, idx) => (
                               <Pressable
-                                key={idx}
+                                key={url + idx}
                                 onPress={() => Linking.openURL(url).catch(() => setToastMessage('링크를 열 수 없습니다.'))}
-                                style={styles.urlClickableRow}
+                                style={({ pressed }) => [
+                                  styles.urlClickableRow,
+                                  { transform: [{ scale: pressed ? 0.96 : 1 }] }
+                                ]}
                               >
                                 <Text style={styles.urlClickableNum}>#{idx + 1}</Text>
                                 <Text style={styles.urlClickableText} numberOfLines={1}>
@@ -690,6 +717,64 @@ function MetaBlock({ label, value }: { label: string; value: string }) {
   );
 }
 
+function getSourceTheme(sourceType: string) {
+  switch (sourceType) {
+    case 'youtube':
+      return {
+        border: 'rgba(239, 68, 68, 0.08)',
+        bg: 'rgba(239, 68, 68, 0.04)',
+        badgeBg: '#fee2e2',
+        badgeText: '#ef4444',
+        label: 'YouTube',
+      };
+    case 'instagram':
+    case 'instagram_post':
+    case 'instagram_reel':
+      return {
+        border: 'rgba(236, 72, 153, 0.08)',
+        bg: 'rgba(236, 72, 153, 0.04)',
+        badgeBg: '#fce7f3',
+        badgeText: '#ec4899',
+        label: sourceType === 'instagram_reel' ? 'Instagram Reel' : sourceType === 'instagram_post' ? 'Instagram Post' : 'Instagram',
+      };
+    case 'notion':
+      return {
+        border: 'rgba(71, 85, 105, 0.08)',
+        bg: 'rgba(71, 85, 105, 0.04)',
+        badgeBg: '#f1f5f9',
+        badgeText: '#475569',
+        label: 'Notion',
+      };
+    case 'google_docs':
+    case 'google_sheets':
+    case 'google_drive':
+    case 'google_form':
+      return {
+        border: 'rgba(59, 130, 246, 0.08)',
+        bg: 'rgba(59, 130, 246, 0.04)',
+        badgeBg: '#dbeafe',
+        badgeText: '#3b82f6',
+        label: sourceType === 'google_docs' ? 'Google Docs' : sourceType === 'google_sheets' ? 'Google Sheets' : sourceType === 'google_form' ? 'Google Form' : 'Google Drive',
+      };
+    case 'manual_text':
+      return {
+        border: 'rgba(249, 115, 22, 0.08)',
+        bg: 'rgba(249, 115, 22, 0.04)',
+        badgeBg: '#ffedd5',
+        badgeText: '#f97316',
+        label: '직접 메모',
+      };
+    default:
+      return {
+        border: 'rgba(49, 130, 246, 0.08)',
+        bg: 'rgba(49, 130, 246, 0.04)',
+        badgeBg: '#e0f2fe',
+        badgeText: '#3182f6',
+        label: 'Web Link',
+      };
+  }
+}
+
 function getStatusLabel(item: SavedItem) {
   const syncLabel = getSyncStatusLabel(item.syncStatus);
 
@@ -766,68 +851,10 @@ function truncateMiddle(value: string) {
   return `${value.slice(0, 20)}...${value.slice(-12)}`;
 }
 
-function getSourceTheme(sourceType: string) {
-  switch (sourceType) {
-    case 'youtube':
-      return {
-        border: 'rgba(239, 68, 68, 0.25)',
-        bg: 'rgba(239, 68, 68, 0.06)',
-        badgeBg: 'rgba(239, 68, 68, 0.16)',
-        badgeText: '#ef4444',
-        label: 'YouTube',
-      };
-    case 'instagram':
-    case 'instagram_post':
-    case 'instagram_reel':
-      return {
-        border: 'rgba(236, 72, 153, 0.25)',
-        bg: 'rgba(236, 72, 153, 0.06)',
-        badgeBg: 'rgba(236, 72, 153, 0.16)',
-        badgeText: '#ec4899',
-        label: sourceType === 'instagram_reel' ? 'Instagram Reel' : sourceType === 'instagram_post' ? 'Instagram Post' : 'Instagram',
-      };
-    case 'notion':
-      return {
-        border: 'rgba(241, 245, 249, 0.22)',
-        bg: 'rgba(241, 245, 249, 0.05)',
-        badgeBg: 'rgba(241, 245, 249, 0.14)',
-        badgeText: '#f1f5f9',
-        label: 'Notion',
-      };
-    case 'google_docs':
-    case 'google_sheets':
-    case 'google_drive':
-    case 'google_form':
-      return {
-        border: 'rgba(59, 130, 246, 0.25)',
-        bg: 'rgba(59, 130, 246, 0.06)',
-        badgeBg: 'rgba(59, 130, 246, 0.16)',
-        badgeText: '#3b82f6',
-        label: sourceType === 'google_docs' ? 'Google Docs' : sourceType === 'google_sheets' ? 'Google Sheets' : sourceType === 'google_form' ? 'Google Form' : 'Google Drive',
-      };
-    case 'manual_text':
-      return {
-        border: 'rgba(249, 115, 22, 0.25)',
-        bg: 'rgba(249, 115, 22, 0.06)',
-        badgeBg: 'rgba(249, 115, 22, 0.16)',
-        badgeText: '#f97316',
-        label: '직접 메모',
-      };
-    default:
-      return {
-        border: 'rgba(139, 92, 246, 0.25)',
-        bg: 'rgba(139, 92, 246, 0.06)',
-        badgeBg: 'rgba(139, 92, 246, 0.16)',
-        badgeText: '#a78bfa',
-        label: 'Web Link',
-      };
-  }
-}
-
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: palette.background,
+    backgroundColor: '#f8f9fa',
   },
   content: {
     padding: spacing[6],
@@ -837,18 +864,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(59, 130, 246, 0.07)',
-    borderRadius: 24,
+    backgroundColor: '#ffffff',
+    borderRadius: 26,
     paddingHorizontal: spacing[5],
     paddingVertical: spacing[4],
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.22)',
+    borderColor: '#e5e8eb',
     gap: spacing[3],
     flexWrap: 'wrap',
-    shadowColor: '#3b82f6',
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 8 },
+    shadowColor: '#000000',
+    shadowOpacity: 0.03,
+    shadowRadius: 15,
+    shadowOffset: { width: 0, height: 6 },
   },
   clipboardBannerLeft: {
     flex: 1,
@@ -858,13 +885,10 @@ const styles = StyleSheet.create({
     minWidth: 260,
   },
   clipboardBannerDot: {
-    width: 12,
-    height: 12,
+    width: 10,
+    height: 10,
     borderRadius: 999,
-    backgroundColor: '#3b82f6',
-    shadowColor: '#3b82f6',
-    shadowRadius: 6,
-    shadowOpacity: 0.8,
+    backgroundColor: '#3182f6',
   },
   clipboardBannerTextColumn: {
     flex: 1,
@@ -887,20 +911,18 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: spacing[3],
     paddingVertical: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderWidth: 1,
-    borderColor: palette.border,
+    backgroundColor: '#f2f4f6',
   },
   clipboardBannerCloseBtnText: {
     color: palette.textSecondary,
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   clipboardBannerSaveBtn: {
     borderRadius: 14,
     paddingHorizontal: spacing[4],
     paddingVertical: 8,
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#3182f6',
   },
   clipboardBannerSaveBtnText: {
     color: '#ffffff',
@@ -909,11 +931,11 @@ const styles = StyleSheet.create({
   },
   rawInputScrollView: {
     maxHeight: 120,
-    backgroundColor: 'rgba(0, 0, 0, 0.22)',
-    borderRadius: 14,
+    backgroundColor: '#f2f4f6',
+    borderRadius: 16,
     padding: spacing[3],
     borderWidth: 1,
-    borderColor: palette.border,
+    borderColor: '#e5e8eb',
   },
   detailRawInputText: {
     color: palette.textSecondary,
@@ -927,25 +949,22 @@ const styles = StyleSheet.create({
   },
   noteInput: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.22)',
-    borderRadius: 14,
+    backgroundColor: '#f2f4f6',
+    borderRadius: 16,
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[2],
     color: palette.textPrimary,
     fontSize: 13,
     minHeight: 44,
     borderWidth: 1,
-    borderColor: palette.border,
+    borderColor: '#e5e8eb',
   },
   noteSaveButton: {
-    backgroundColor: palette.accent,
-    borderRadius: 14,
+    backgroundColor: '#3182f6',
+    borderRadius: 16,
     paddingHorizontal: spacing[4],
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: palette.accent,
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
   },
   noteSaveButtonText: {
     color: '#ffffff',
@@ -959,33 +978,37 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
-    backgroundColor: 'rgba(59, 130, 246, 0.05)',
-    borderRadius: 14,
+    backgroundColor: 'rgba(49, 130, 246, 0.04)',
+    borderRadius: 16,
     paddingHorizontal: spacing[3],
     paddingVertical: 10,
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.16)',
+    borderColor: 'rgba(49, 130, 246, 0.08)',
   },
   urlClickableNum: {
-    color: palette.accentStrong,
+    color: palette.accent,
     fontSize: 12,
     fontWeight: '800',
   },
   urlClickableText: {
     flex: 1,
-    color: '#60a5fa',
+    color: '#3182ce',
     fontSize: 13,
     fontWeight: '700',
   },
   hero: {
     position: 'relative',
     overflow: 'hidden',
-    backgroundColor: '#0f111a',
-    borderRadius: 32,
+    backgroundColor: '#ffffff',
+    borderRadius: 28,
     padding: spacing[7],
     gap: spacing[6],
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: '#e5e8eb',
+    shadowColor: '#000000',
+    shadowOpacity: 0.02,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
   },
   heroGlowLarge: {
     position: 'absolute',
@@ -995,10 +1018,7 @@ const styles = StyleSheet.create({
     height: 250,
     borderRadius: 999,
     backgroundColor: '#8b5cf6',
-    opacity: 0.18,
-    shadowColor: '#8b5cf6',
-    shadowRadius: 100,
-    shadowOpacity: 0.6,
+    opacity: 0,
   },
   heroGlowSmall: {
     position: 'absolute',
@@ -1008,32 +1028,29 @@ const styles = StyleSheet.create({
     height: 160,
     borderRadius: 999,
     backgroundColor: '#ec4899',
-    opacity: 0.18,
-    shadowColor: '#ec4899',
-    shadowRadius: 80,
-    shadowOpacity: 0.6,
+    opacity: 0,
   },
   heroHeader: {
     gap: spacing[3],
   },
   eyebrow: {
-    color: '#a78bfa',
+    color: '#3182f6',
     fontSize: 12,
     fontWeight: '800',
-    letterSpacing: 1.6,
+    letterSpacing: 1.4,
     textTransform: 'uppercase',
   },
   title: {
     color: palette.textPrimary,
-    fontSize: 38,
-    lineHeight: 44,
-    fontWeight: '900',
+    fontSize: 34,
+    lineHeight: 42,
+    fontWeight: '800',
     maxWidth: 540,
   },
   description: {
     color: palette.textSecondary,
-    fontSize: 15,
-    lineHeight: 24,
+    fontSize: 14,
+    lineHeight: 22,
     maxWidth: 560,
   },
   metricsRow: {
@@ -1045,16 +1062,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
-    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+    backgroundColor: '#e8f8f0',
     borderRadius: 18,
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.25)',
+    borderColor: 'rgba(16, 185, 129, 0.1)',
   },
   toastDot: {
-    width: 10,
-    height: 10,
+    width: 8,
+    height: 8,
     borderRadius: 999,
     backgroundColor: palette.success,
   },
@@ -1066,12 +1083,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   syncInfoBanner: {
-    backgroundColor: 'rgba(251, 191, 36, 0.08)',
+    backgroundColor: 'rgba(251, 191, 36, 0.05)',
     borderRadius: 18,
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.25)',
+    borderColor: 'rgba(251, 191, 36, 0.1)',
   },
   syncInfoText: {
     color: '#fbbf24',
@@ -1082,29 +1099,27 @@ const styles = StyleSheet.create({
   metricCard: {
     flexGrow: 1,
     minWidth: 160,
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderRadius: 22,
+    backgroundColor: '#f2f4f6',
+    borderRadius: 20,
     padding: spacing[4],
     gap: spacing[1],
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
   metricLabel: {
     color: palette.textMuted,
     fontSize: 11,
     fontWeight: '800',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
   metricValue: {
     color: palette.textPrimary,
-    fontSize: 26,
-    lineHeight: 30,
+    fontSize: 24,
+    lineHeight: 28,
     fontWeight: '800',
   },
   metricHelper: {
     color: palette.textSecondary,
-    fontSize: 13,
+    fontSize: 12,
     lineHeight: 18,
   },
   workspace: {
@@ -1127,53 +1142,53 @@ const styles = StyleSheet.create({
     flex: 1.08,
   },
   composerCard: {
-    backgroundColor: 'rgba(20, 23, 36, 0.65)',
-    borderRadius: 28,
+    backgroundColor: '#ffffff',
+    borderRadius: 26,
     padding: spacing[6],
     gap: spacing[5],
+    shadowColor: '#000000',
+    shadowOpacity: 0.03,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 2,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 4,
+    borderColor: '#e5e8eb',
   },
   guidanceCard: {
-    backgroundColor: 'rgba(20, 23, 36, 0.45)',
-    borderRadius: 28,
+    backgroundColor: '#ffffff',
+    borderRadius: 26,
     padding: spacing[6],
     gap: spacing[4],
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: '#e5e8eb',
   },
   panel: {
-    backgroundColor: 'rgba(20, 23, 36, 0.65)',
-    borderRadius: 28,
+    backgroundColor: '#ffffff',
+    borderRadius: 26,
     padding: spacing[6],
     gap: spacing[5],
+    shadowColor: '#000000',
+    shadowOpacity: 0.03,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 2,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 4,
+    borderColor: '#e5e8eb',
   },
   panelHeader: {
     gap: spacing[2],
   },
   panelEyebrow: {
-    color: '#a78bfa',
+    color: '#3182f6',
     fontSize: 12,
     fontWeight: '800',
     textTransform: 'uppercase',
-    letterSpacing: 1.2,
+    letterSpacing: 1,
   },
   panelTitle: {
     color: palette.textPrimary,
-    fontSize: 26,
-    lineHeight: 32,
+    fontSize: 24,
+    lineHeight: 30,
     fontWeight: '800',
   },
   panelDescription: {
@@ -1189,7 +1204,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     color: palette.textPrimary,
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
   },
   sectionMeta: {
@@ -1208,15 +1223,13 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   chipAccent: {
-    backgroundColor: palette.accent,
+    backgroundColor: '#3182f6',
   },
   chipNeutral: {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: '#f2f4f6',
   },
   chipText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
   },
   chipAccentText: {
@@ -1226,39 +1239,37 @@ const styles = StyleSheet.create({
     color: palette.textSecondary,
   },
   inputShell: {
-    backgroundColor: 'rgba(0, 0, 0, 0.2)',
-    borderRadius: 24,
+    backgroundColor: '#f9fafb',
+    borderRadius: 22,
     padding: spacing[4],
     gap: spacing[3],
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.04)',
   },
   inputLabel: {
     color: palette.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '800',
   },
   input: {
-    minHeight: 56,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-    borderRadius: 18,
+    minHeight: 52,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     color: palette.textPrimary,
-    fontSize: 15,
+    fontSize: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: '#e5e8eb',
   },
   shareImportBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
-    backgroundColor: 'rgba(251, 191, 36, 0.08)',
+    backgroundColor: 'rgba(251, 191, 36, 0.05)',
     borderRadius: 16,
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[3],
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.25)',
+    borderColor: 'rgba(251, 191, 36, 0.1)',
   },
   shareImportText: {
     flex: 1,
@@ -1273,12 +1284,10 @@ const styles = StyleSheet.create({
     gap: spacing[2],
   },
   quickLink: {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    backgroundColor: '#f2f4f6',
     borderRadius: 999,
     paddingHorizontal: spacing[3],
     paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
   quickLinkText: {
     color: palette.textSecondary,
@@ -1290,12 +1299,10 @@ const styles = StyleSheet.create({
     gap: spacing[3],
   },
   shareHintCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    backgroundColor: '#f9fafb',
     borderRadius: 18,
     padding: spacing[4],
     gap: spacing[2],
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.04)',
   },
   shareHintTitle: {
     color: palette.textPrimary,
@@ -1308,7 +1315,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   button: {
-    borderRadius: 18,
+    borderRadius: 16,
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     minWidth: 132,
@@ -1317,16 +1324,10 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     flex: 1,
-    backgroundColor: palette.accent,
-    shadowColor: palette.accent,
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
+    backgroundColor: '#3182f6',
   },
   secondaryButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: '#f2f4f6',
   },
   disabledButton: {
     opacity: 0.5,
@@ -1337,7 +1338,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   secondaryButtonText: {
-    color: palette.textPrimary,
+    color: palette.textSecondary,
     fontSize: 14,
     fontWeight: '800',
   },
@@ -1350,19 +1351,16 @@ const styles = StyleSheet.create({
     gap: spacing[3],
   },
   checkDot: {
-    width: 10,
-    height: 10,
+    width: 8,
+    height: 8,
     borderRadius: 999,
-    backgroundColor: '#a78bfa',
-    shadowColor: '#a78bfa',
-    shadowRadius: 4,
-    shadowOpacity: 0.7,
+    backgroundColor: '#3182f6',
   },
   checkText: {
     flex: 1,
     color: palette.textSecondary,
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 13,
+    lineHeight: 20,
   },
   cardList: {
     gap: spacing[3],
@@ -1370,19 +1368,20 @@ const styles = StyleSheet.create({
   card: {
     position: 'relative',
     overflow: 'hidden',
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    backgroundColor: '#ffffff',
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'transparent',
   },
   cardSelected: {
-    borderColor: 'rgba(139, 92, 246, 0.4)',
-    backgroundColor: 'rgba(139, 92, 246, 0.04)',
-    shadowColor: '#8b5cf6',
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 4,
+    backgroundColor: '#ffffff',
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#e5e8eb',
   },
   cardHighlighted: {
     transform: [{ scale: 1.01 }],
@@ -1394,10 +1393,10 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     width: 6,
-    backgroundColor: '#8b5cf6',
+    backgroundColor: '#3182f6',
   },
   cardAccentAlt: {
-    backgroundColor: '#a78bfa',
+    backgroundColor: '#3182f6',
   },
   cardContent: {
     paddingVertical: spacing[4],
@@ -1422,51 +1421,51 @@ const styles = StyleSheet.create({
   cardSource: {
     flex: 1,
     color: palette.textMuted,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
   cardTitle: {
     color: palette.textPrimary,
-    fontSize: 19,
-    lineHeight: 25,
+    fontSize: 18,
+    lineHeight: 24,
     fontWeight: '800',
   },
   cardSummary: {
     color: palette.textSecondary,
-    fontSize: 14,
-    lineHeight: 21,
+    fontSize: 13,
+    lineHeight: 20,
   },
   cardTimestamp: {
     color: palette.textMuted,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     paddingTop: spacing[1],
   },
   cardThumbnail: {
-    width: 88,
-    height: 88,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+    width: 80,
+    height: 80,
+    borderRadius: 14,
+    backgroundColor: '#f2f4f6',
   },
   cardThumbnailPlaceholder: {
-    width: 88,
-    height: 88,
-    borderRadius: 16,
+    width: 80,
+    height: 80,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    backgroundColor: '#f9fafb',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: '#e5e8eb',
   },
   cardThumbnailPlaceholderText: {
-    color: palette.accentStrong,
-    fontSize: 18,
+    color: palette.textMuted,
+    fontSize: 14,
     fontWeight: '900',
   },
   pendingBadge: {
-    backgroundColor: 'rgba(251, 191, 36, 0.1)',
+    backgroundColor: 'rgba(251, 191, 36, 0.06)',
     borderRadius: 999,
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[1],
@@ -1476,29 +1475,29 @@ const styles = StyleSheet.create({
   },
   pendingBadgeText: {
     color: '#fbbf24',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
   },
   loadingCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-    borderRadius: 24,
+    backgroundColor: '#ffffff',
+    borderRadius: 26,
     padding: spacing[6],
     gap: spacing[3],
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: '#e5e8eb',
   },
   loadingText: {
     color: palette.textSecondary,
     fontSize: 14,
   },
   initErrorCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-    borderRadius: 24,
+    backgroundColor: '#ffffff',
+    borderRadius: 26,
     padding: spacing[6],
     gap: spacing[3],
     borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
+    borderColor: 'rgba(239, 68, 68, 0.1)',
   },
   initErrorTitle: {
     color: palette.textPrimary,
@@ -1511,43 +1510,43 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   emptyState: {
-    backgroundColor: 'rgba(255, 255, 255, 0.01)',
-    borderRadius: 24,
+    backgroundColor: '#f9fafb',
+    borderRadius: 26,
     padding: spacing[6],
     gap: spacing[3],
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: '#e5e8eb',
   },
   emptyTitle: {
     color: palette.textPrimary,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
   },
   emptyDescription: {
     color: palette.textSecondary,
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 13,
+    lineHeight: 20,
   },
   detailCard: {
     gap: spacing[4],
   },
   detailHero: {
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    backgroundColor: '#f9fafb',
     borderRadius: 24,
     padding: spacing[5],
     gap: spacing[3],
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: '#e5e8eb',
   },
   detailHeroText: {
     gap: spacing[2],
   },
   detailTitle: {
     color: palette.textPrimary,
-    fontSize: 24,
-    lineHeight: 30,
-    fontWeight: '900',
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '800',
   },
   detailSource: {
     color: palette.textSecondary,
@@ -1563,22 +1562,22 @@ const styles = StyleSheet.create({
     gap: spacing[2],
   },
   thumbnailPreview: {
-    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+    backgroundColor: '#f9fafb',
     borderRadius: 20,
     padding: spacing[4],
     gap: spacing[2],
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: '#e5e8eb',
   },
   thumbnailImage: {
     width: '100%',
     aspectRatio: 16 / 9,
     borderRadius: 14,
-    backgroundColor: '#000000',
+    backgroundColor: '#f2f4f6',
   },
   thumbnailTitle: {
     color: palette.textPrimary,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
   },
   thumbnailUrl: {
