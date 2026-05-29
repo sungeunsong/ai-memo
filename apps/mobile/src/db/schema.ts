@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS items (
   thumbnail_url TEXT,
   ai_status TEXT NOT NULL,
   sync_status TEXT NOT NULL,
+  user_note TEXT,
+  extracted_urls TEXT,
+  source_type TEXT NOT NULL,
+  saved_from TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

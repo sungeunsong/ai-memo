@@ -1,4 +1,4 @@
-export function extractUrlCandidate(input: string) {
+export function extractUrlCandidate(input: string): string {
   const trimmed = input.trim();
 
   if (!trimmed) {
@@ -28,7 +28,94 @@ export function extractUrlCandidate(input: string) {
   return normalizedCandidate;
 }
 
-function tryNormalizeAsUrl(value: string) {
+export function extractAllUrls(input: string): string[] {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  // 텍스트 전체에서 URL 패턴 매칭
+  const urlRegex = /\b(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+  const matches = trimmed.match(urlRegex) ?? [];
+  const normalizedUrls: string[] = [];
+
+  for (const match of matches) {
+    const cleaned = match.replace(/[)\],.!?]+$/, '');
+    const normalized = tryNormalizeAsUrl(cleaned);
+    if (normalized && !normalizedUrls.includes(normalized)) {
+      normalizedUrls.push(normalized);
+    }
+  }
+
+  // 프로토콜이 없는 도메인 기반 패턴 추가 매칭 (ex: youtube.com/watch...)
+  const domainPatternRegex = /\b(?:youtube\.com|m\.youtube\.com|youtu\.be|instagram\.com|www\.instagram\.com|notion\.so|notion\.site)\/[^\s<>"']+/gi;
+  const domainMatches = trimmed.match(domainPatternRegex) ?? [];
+  for (const match of domainMatches) {
+    const cleaned = match.replace(/[)\],.!?]+$/, '');
+    const normalized = tryNormalizeAsUrl(cleaned);
+    if (normalized && !normalizedUrls.includes(normalized)) {
+      normalizedUrls.push(normalized);
+    }
+  }
+
+  return normalizedUrls;
+}
+
+export function classifySourceType(sourceUrl: string | null, rawText: string): string {
+  if (!sourceUrl) {
+    return 'manual_text';
+  }
+
+  try {
+    const url = new URL(sourceUrl);
+    const hostname = url.hostname.replace(/^www\./, '');
+
+    if (hostname === 'youtube.com' || hostname === 'youtu.be' || hostname === 'm.youtube.com') {
+      return 'youtube';
+    }
+
+    if (hostname === 'instagram.com' || hostname === 'm.instagram.com') {
+      if (url.pathname.includes('/p/')) {
+        return 'instagram_post';
+      }
+      if (url.pathname.includes('/reel/') || url.pathname.includes('/reels/')) {
+        return 'instagram_reel';
+      }
+      return 'instagram';
+    }
+
+    if (hostname === 'notion.so' || hostname === 'notion.site' || hostname.includes('notion')) {
+      return 'notion';
+    }
+
+    if (hostname === 'docs.google.com') {
+      if (url.pathname.startsWith('/document/')) {
+        return 'google_docs';
+      }
+      if (url.pathname.startsWith('/spreadsheets/')) {
+        return 'google_sheets';
+      }
+      if (url.pathname.startsWith('/forms/')) {
+        return 'google_form';
+      }
+      return 'google_drive';
+    }
+
+    if (hostname === 'drive.google.com') {
+      return 'google_drive';
+    }
+
+    if (hostname === 'forms.gle') {
+      return 'google_form';
+    }
+
+    return 'web';
+  } catch {
+    return 'web';
+  }
+}
+
+export function tryNormalizeAsUrl(value: string): string | null {
   try {
     const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
     const url = new URL(withProtocol);

@@ -43,6 +43,23 @@ export async function initializeDatabase() {
 
   const database = await getDatabaseAsync();
   await database.execAsync(createTablesStatement);
+
+  // 마이그레이션: 기존 테이블에 신규 컬럼이 없을 경우 추가
+  const migrations = [
+    'ALTER TABLE items ADD COLUMN user_note TEXT;',
+    'ALTER TABLE items ADD COLUMN extracted_urls TEXT;',
+    'ALTER TABLE items ADD COLUMN source_type TEXT DEFAULT "web";',
+    'ALTER TABLE items ADD COLUMN saved_from TEXT DEFAULT "manual";'
+  ];
+
+  for (const query of migrations) {
+    try {
+      await database.execAsync(query);
+    } catch {
+      // 이미 컬럼이 존재할 경우 발생하는 에러는 안전하게 무시합니다.
+    }
+  }
+
   return database;
 }
 
@@ -316,6 +333,10 @@ function updateWebItem(itemId: string, patch: ItemMetadataPatch) {
           ...(patch.content ? { content: patch.content } : null),
           ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
           ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
+          ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),
+          ...(patch.extractedUrls !== undefined ? { extractedUrls: patch.extractedUrls } : null),
+          ...(patch.sourceType ? { sourceType: patch.sourceType } : null),
+          ...(patch.savedFrom ? { savedFrom: patch.savedFrom } : null),
           updatedAt: patch.updatedAt,
         }
       : item
@@ -420,6 +441,10 @@ function buildItemSyncJob(item: SavedItem): CreateSyncJobPayload {
       thumbnailUrl: item.thumbnailUrl,
       aiStatus: item.aiStatus,
       syncStatus: item.syncStatus,
+      userNote: item.userNote,
+      extractedUrls: item.extractedUrls,
+      sourceType: item.sourceType,
+      savedFrom: item.savedFrom,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
     }),

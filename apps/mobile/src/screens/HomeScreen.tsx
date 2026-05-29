@@ -12,6 +12,9 @@ import {
   TextInput,
   View,
   useWindowDimensions,
+  Linking,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -22,6 +25,7 @@ import {
   hasUnsupportedSharedFiles,
 } from '@/features/capture/shareIntent';
 import { useAppStore } from '@/store';
+import { getHostname } from '@/features/items/fallback';
 import { palette } from '@/theme/palette';
 import { spacing } from '@/theme/spacing';
 
@@ -42,6 +46,7 @@ export function HomeScreen() {
   const [isImportingShare, setIsImportingShare] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
+  const [userNoteInput, setUserNoteInput] = useState('');
   const processedShareSignatureRef = useRef<string | null>(null);
   const { width } = useWindowDimensions();
   const isReady = useAppStore((state) => state.isReady);
@@ -58,6 +63,7 @@ export function HomeScreen() {
   const initialize = useAppStore((state) => state.initialize);
   const saveUrl = useAppStore((state) => state.saveUrl);
   const selectItem = useAppStore((state) => state.selectItem);
+  const updateUserNote = useAppStore((state) => state.updateUserNote);
   const clearError = useAppStore((state) => state.clearError);
   const { hasShareIntent, shareIntent, resetShareIntent, error: shareIntentError } =
     useShareIntentContext();
@@ -66,6 +72,69 @@ export function HomeScreen() {
   const isWideLayout = width >= 940;
   const lastSavedAt = items[0]?.createdAt ? formatRelativeTime(items[0].createdAt) : '아직 없음';
   const runtimeErrorMessage = errorMessage ?? shareIntentError ?? null;
+
+  useEffect(() => {
+    setUserNoteInput(selectedItem?.userNote ?? '');
+  }, [selectedItem?.id, selectedItem?.userNote]);
+
+  async function handleSaveUserNote() {
+    if (!selectedItem) {
+      return;
+    }
+    await updateUserNote(selectedItem.id, userNoteInput);
+    setToastMessage('퀵 메모를 안전하게 로컬 DB에 저장했습니다.');
+  }
+
+  const [clipboardCandidate, setClipboardCandidate] = useState<string | null>(null);
+
+  useEffect(() => {
+    void checkClipboard();
+
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        void checkClipboard();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [items]);
+
+  async function checkClipboard() {
+    try {
+      const text = await Clipboard.getStringAsync();
+      const trimmed = text.trim();
+      if (!trimmed) {
+        setClipboardCandidate(null);
+        return;
+      }
+
+      if (items.length > 0 && items[0].rawInput === trimmed) {
+        setClipboardCandidate(null);
+        return;
+      }
+
+      setClipboardCandidate(trimmed);
+    } catch {
+      setClipboardCandidate(null);
+    }
+  }
+
+  async function handleSaveClipboard() {
+    if (!clipboardCandidate) {
+      return;
+    }
+    const result = await saveUrl(clipboardCandidate, 'clipboard');
+    if (result.ok) {
+      const nextSelectedItem = useAppStore.getState().selectedItemId;
+      setToastMessage('클립보드 내용을 즉시 저장하고 분류를 마쳤습니다.');
+      if (nextSelectedItem) {
+        setHighlightedItemId(nextSelectedItem);
+      }
+      setClipboardCandidate(null);
+    }
+  }
 
   useEffect(() => {
     if (!toastMessage) {
@@ -212,6 +281,28 @@ export function HomeScreen() {
           </View>
         ) : null}
 
+        {clipboardCandidate ? (
+          <View style={styles.clipboardBanner}>
+            <View style={styles.clipboardBannerLeft}>
+              <View style={styles.clipboardBannerDot} />
+              <View style={styles.clipboardBannerTextColumn}>
+                <Text style={styles.clipboardBannerTitle}>클립보드에 복사된 내용이 있습니다</Text>
+                <Text style={styles.clipboardBannerDesc} numberOfLines={1}>
+                  "{clipboardCandidate.replace(/\s+/g, ' ')}"
+                </Text>
+              </View>
+            </View>
+            <View style={styles.clipboardBannerActions}>
+              <Pressable onPress={() => setClipboardCandidate(null)} style={styles.clipboardBannerCloseBtn}>
+                <Text style={styles.clipboardBannerCloseBtnText}>닫기</Text>
+              </Pressable>
+              <Pressable onPress={handleSaveClipboard} style={styles.clipboardBannerSaveBtn}>
+                <Text style={styles.clipboardBannerSaveBtnText}>즉시 저장</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
         <View style={[styles.workspace, isWideLayout && styles.workspaceWide]}>
           <View style={[styles.leftColumn, isWideLayout && styles.leftColumnWide]}>
             <View style={styles.composerCard}>
@@ -337,25 +428,28 @@ export function HomeScreen() {
                 <EmptyState />
               ) : (
                 <View style={styles.cardList}>
-                  {items.map((item, index) => (
-                    <Pressable
-                      key={item.id}
-                      onPress={() => selectItem(item.id)}
-                      style={[
-                        styles.card,
-                        item.id === selectedItem?.id && styles.cardSelected,
-                        item.id === highlightedItemId && styles.cardHighlighted,
-                      ]}
-                    >
-                      <View
+                  {items.map((item) => {
+                    const theme = getSourceTheme(item.sourceType);
+                    return (
+                      <Pressable
+                        key={item.id}
+                        onPress={() => selectItem(item.id)}
                         style={[
-                          styles.cardAccent,
-                          index % 2 === 1 && styles.cardAccentAlt,
+                          styles.card,
+                          item.id === selectedItem?.id && styles.cardSelected,
+                          item.id === highlightedItemId && styles.cardHighlighted,
                         ]}
-                      />
-                      <ItemCard item={item} />
-                    </Pressable>
-                  ))}
+                      >
+                        <View
+                          style={[
+                            styles.cardAccent,
+                            { backgroundColor: theme.badgeText },
+                          ]}
+                        />
+                        <ItemCard item={item} />
+                      </Pressable>
+                    );
+                  })}
                 </View>
               )}
             </View>
@@ -369,55 +463,106 @@ export function HomeScreen() {
               </View>
 
               {selectedItem ? (
-                <View style={styles.detailCard}>
-                  <View style={styles.detailHero}>
-                    <View style={styles.detailHeroText}>
-                      <Text style={styles.detailTitle}>{selectedItem.title}</Text>
-                      <Text style={styles.detailSource}>{selectedItem.sourceUrl ?? '-'}</Text>
-                    </View>
-                    <StatusBadge label={getStatusLabel(selectedItem)} />
-                  </View>
+                (() => {
+                  const theme = getSourceTheme(selectedItem.sourceType);
+                  return (
+                    <View style={styles.detailCard}>
+                      <View style={[styles.detailHero, { borderColor: theme.border, backgroundColor: theme.bg }]}>
+                        <View style={styles.detailHeroText}>
+                          <Text style={styles.detailTitle}>{selectedItem.title}</Text>
+                          <Text style={[styles.detailSource, { color: theme.badgeText, fontWeight: '700' }]}>
+                            {theme.label} · {selectedItem.sourceUrl ? getHostname(selectedItem.sourceUrl) : '로컬'}
+                          </Text>
+                        </View>
+                        <View style={[styles.pendingBadge, { backgroundColor: theme.badgeBg }]}>
+                          <Text style={[styles.pendingBadgeText, { color: theme.badgeText }]}>
+                            {getStatusLabel(selectedItem)}
+                          </Text>
+                        </View>
+                      </View>
 
-                  <View style={styles.detailGrid}>
-                    <MetaBlock label="원본 링크" value={truncateMiddle(selectedItem.sourceUrl ?? '-')} />
-                    <MetaBlock label="동기화" value={getSyncStatusLabel(selectedItem.syncStatus)} />
-                    <MetaBlock label="생성 시각" value={formatReadableDate(selectedItem.createdAt)} />
-                    <MetaBlock label="유형" value={selectedItem.type} />
-                  </View>
+                      <View style={styles.detailGrid}>
+                        <MetaBlock label="원본 링크" value={selectedItem.sourceUrl ? truncateMiddle(selectedItem.sourceUrl) : '없음'} />
+                        <MetaBlock label="동기화" value={getSyncStatusLabel(selectedItem.syncStatus)} />
+                        <MetaBlock label="생성 시각" value={formatReadableDate(selectedItem.createdAt)} />
+                        <MetaBlock label="유형" value={selectedItem.type === 'url' ? '링크 저장' : '텍스트 메모'} />
+                      </View>
 
-                  <View style={styles.thumbnailPanel}>
-                    <Text style={styles.detailLabel}>썸네일</Text>
-                    <View style={styles.thumbnailPreview}>
-                      {selectedItem.thumbnailUrl ? (
-                        <>
-                          <Image
-                            source={{ uri: selectedItem.thumbnailUrl }}
-                            style={styles.thumbnailImage}
-                            resizeMode="cover"
+                      <View style={styles.detailSection}>
+                        <Text style={styles.detailLabel}>원문 (SNS DM / 캡션 전체)</Text>
+                        <ScrollView style={styles.rawInputScrollView} nestedScrollEnabled showsVerticalScrollIndicator={true}>
+                          <Text style={styles.detailRawInputText}>{selectedItem.rawInput}</Text>
+                        </ScrollView>
+                      </View>
+
+                      <View style={styles.detailSection}>
+                        <Text style={styles.detailLabel}>퀵 한 줄 메모</Text>
+                        <View style={styles.noteInputRow}>
+                          <TextInput
+                            style={styles.noteInput}
+                            placeholder="보낸 사람이나 저장한 맥락을 잊지 않게 적어두세요."
+                            placeholderTextColor={palette.textMuted}
+                            value={userNoteInput}
+                            onChangeText={setUserNoteInput}
+                            multiline
+                            blurOnSubmit={true}
                           />
-                          <Text style={styles.thumbnailTitle}>대표 이미지 후보를 찾았습니다</Text>
-                          <Text style={styles.thumbnailUrl}>{truncateMiddle(selectedItem.thumbnailUrl)}</Text>
-                        </>
-                      ) : (
-                        <Text style={styles.thumbnailEmptyText}>
-                          아직 썸네일을 찾지 못했습니다. 도메인별 파서가 더 붙으면 정확도가 올라갑니다.
-                        </Text>
+                          <Pressable onPress={handleSaveUserNote} style={styles.noteSaveButton}>
+                            <Text style={styles.noteSaveButtonText}>저장</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+
+                      {selectedItem.extractedUrls && selectedItem.extractedUrls.length > 0 ? (
+                        <View style={styles.detailSection}>
+                          <Text style={styles.detailLabel}>추출된 링크 목록 ({selectedItem.extractedUrls.length}개)</Text>
+                          <View style={styles.extractedUrlsList}>
+                            {selectedItem.extractedUrls.map((url, idx) => (
+                              <Pressable
+                                key={idx}
+                                onPress={() => Linking.openURL(url).catch(() => setToastMessage('링크를 열 수 없습니다.'))}
+                                style={styles.urlClickableRow}
+                              >
+                                <Text style={styles.urlClickableNum}>#{idx + 1}</Text>
+                                <Text style={styles.urlClickableText} numberOfLines={1}>
+                                  {url}
+                                </Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                        </View>
+                      ) : null}
+
+                      {selectedItem.type === 'url' && (
+                        <View style={styles.thumbnailPanel}>
+                          <Text style={styles.detailLabel}>썸네일</Text>
+                          <View style={styles.thumbnailPreview}>
+                            {selectedItem.thumbnailUrl ? (
+                              <>
+                                <Image
+                                  source={{ uri: selectedItem.thumbnailUrl }}
+                                  style={styles.thumbnailImage}
+                                  resizeMode="cover"
+                                />
+                                <Text style={styles.thumbnailTitle}>대표 이미지 후보를 찾았습니다</Text>
+                                <Text style={styles.thumbnailUrl}>{truncateMiddle(selectedItem.thumbnailUrl)}</Text>
+                              </>
+                            ) : (
+                              <Text style={styles.thumbnailEmptyText}>
+                                아직 썸네일을 찾지 못했습니다. 도메인별 파서가 더 붙으면 정확도가 올라갑니다.
+                              </Text>
+                            )}
+                          </View>
+                        </View>
                       )}
+
+                      <View style={styles.detailSection}>
+                        <Text style={styles.detailLabel}>AI 정리 및 요약</Text>
+                        <Text style={styles.detailValue}>{selectedItem.summary}</Text>
+                      </View>
                     </View>
-                  </View>
-
-                  <View style={styles.detailSection}>
-                    <Text style={styles.detailLabel}>요약 placeholder</Text>
-                    <Text style={styles.detailValue}>{selectedItem.summary}</Text>
-                  </View>
-
-                  <View style={styles.detailSection}>
-                    <Text style={styles.detailLabel}>다음 단계</Text>
-                    <Text style={styles.detailValue}>
-                      URL 파싱, 썸네일 선택, AI 후처리, 공유 진입점 연결을 이어서 붙입니다.
-                    </Text>
-                  </View>
-                </View>
+                  );
+                })()
               ) : (
                 <View style={styles.detailEmpty}>
                   <Text style={styles.detailEmptyTitle}>아직 선택된 항목이 없습니다</Text>
@@ -621,6 +766,64 @@ function truncateMiddle(value: string) {
   return `${value.slice(0, 20)}...${value.slice(-12)}`;
 }
 
+function getSourceTheme(sourceType: string) {
+  switch (sourceType) {
+    case 'youtube':
+      return {
+        border: '#ffccd0',
+        bg: '#fff5f5',
+        badgeBg: '#ffe3e6',
+        badgeText: '#e53e3e',
+        label: 'YouTube',
+      };
+    case 'instagram':
+    case 'instagram_post':
+    case 'instagram_reel':
+      return {
+        border: '#fbcfe8',
+        bg: '#fdf2f8',
+        badgeBg: '#fce7f3',
+        badgeText: '#db2777',
+        label: sourceType === 'instagram_reel' ? 'Instagram Reel' : sourceType === 'instagram_post' ? 'Instagram Post' : 'Instagram',
+      };
+    case 'notion':
+      return {
+        border: '#cbd5e1',
+        bg: '#f8fafc',
+        badgeBg: '#e2e8f0',
+        badgeText: '#475569',
+        label: 'Notion',
+      };
+    case 'google_docs':
+    case 'google_sheets':
+    case 'google_drive':
+    case 'google_form':
+      return {
+        border: '#bfdbfe',
+        bg: '#eff6ff',
+        badgeBg: '#dbeafe',
+        badgeText: '#2563eb',
+        label: sourceType === 'google_docs' ? 'Google Docs' : sourceType === 'google_sheets' ? 'Google Sheets' : sourceType === 'google_form' ? 'Google Form' : 'Google Drive',
+      };
+    case 'manual_text':
+      return {
+        border: '#fed7aa',
+        bg: '#fff7ed',
+        badgeBg: '#ffedd5',
+        badgeText: '#ea580c',
+        label: '직접 메모',
+      };
+    default:
+      return {
+        border: '#e6d5bf',
+        bg: '#fff9f1',
+        badgeBg: '#f6ebd9',
+        badgeText: '#a05e03',
+        label: 'Web Link',
+      };
+  }
+}
+
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -629,6 +832,140 @@ const styles = StyleSheet.create({
   content: {
     padding: spacing[6],
     gap: spacing[6],
+  },
+  clipboardBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#eff6ff',
+    borderRadius: 22,
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[4],
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    gap: spacing[3],
+    flexWrap: 'wrap',
+  },
+  clipboardBannerLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    minWidth: 260,
+  },
+  clipboardBannerDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: '#3b82f6',
+  },
+  clipboardBannerTextColumn: {
+    flex: 1,
+    gap: 2,
+  },
+  clipboardBannerTitle: {
+    color: palette.textPrimary,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  clipboardBannerDesc: {
+    color: palette.textSecondary,
+    fontSize: 13,
+  },
+  clipboardBannerActions: {
+    flexDirection: 'row',
+    gap: spacing[2],
+  },
+  clipboardBannerCloseBtn: {
+    borderRadius: 14,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 8,
+    backgroundColor: palette.background,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  clipboardBannerCloseBtnText: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  clipboardBannerSaveBtn: {
+    borderRadius: 14,
+    paddingHorizontal: spacing[4],
+    paddingVertical: 8,
+    backgroundColor: '#3b82f6',
+  },
+  clipboardBannerSaveBtnText: {
+    color: palette.surfaceRaised,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  rawInputScrollView: {
+    maxHeight: 120,
+    backgroundColor: palette.background,
+    borderRadius: 12,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  detailRawInputText: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  noteInputRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    alignItems: 'stretch',
+  },
+  noteInput: {
+    flex: 1,
+    backgroundColor: palette.background,
+    borderRadius: 12,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    color: palette.textPrimary,
+    fontSize: 13,
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  noteSaveButton: {
+    backgroundColor: palette.accentStrong,
+    borderRadius: 12,
+    paddingHorizontal: spacing[4],
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noteSaveButtonText: {
+    color: palette.surfaceRaised,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  extractedUrlsList: {
+    gap: spacing[2],
+  },
+  urlClickableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: palette.background,
+    borderRadius: 12,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  urlClickableNum: {
+    color: palette.accentStrong,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  urlClickableText: {
+    flex: 1,
+    color: '#3182ce',
+    fontSize: 13,
+    fontWeight: '700',
   },
   hero: {
     position: 'relative',

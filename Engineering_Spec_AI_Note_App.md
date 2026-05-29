@@ -11,6 +11,8 @@ This document defines the technical architecture, stack, and implementation guid
 - Fast capture (<3s)
 - AI failure must not block save
 - Replaceable AI engine
+- Capture must preserve raw text and source context
+- Searchability is a core product requirement, not a later polish item
 
 ---
 
@@ -45,16 +47,20 @@ App Layers:
 - Share Extension (iOS)
 - Clipboard input
 - URL/Text input
+- Raw DM/caption text input
 
 2. Parse Layer
 - Metadata extraction
 - Content normalization
 - Image candidates
+- Multiple URL extraction
+- Source type classification
 
 3. AI Layer
 - Title generation
 - Summary generation
 - Thumbnail selection
+- Tag suggestion
 
 4. Data Layer
 - SQLite
@@ -68,7 +74,9 @@ App Layers:
 
 ## 5. Data Flow
 
-Capture → Parse → AI → Local Save → Sync Queue → Server Sync
+Capture → Parse → Local Save → UI Update → AI/Metadata Jobs → Sync Queue → Server Sync
+
+The local save step must happen before AI. AI and metadata enrichment can update the item later, but they must never be required for initial persistence.
 
 ---
 
@@ -76,12 +84,19 @@ Capture → Parse → AI → Local Save → Sync Queue → Server Sync
 
 Items:
 - id
-- type (url, text)
+- type (url, text, mixed)
 - title
 - summary
 - content
 - url
 - thumbnail
+- source_type
+- raw_text
+- extracted_urls
+- user_note
+- tags
+- status
+- saved_from
 - folder_id
 
 Folders:

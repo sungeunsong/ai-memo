@@ -3,6 +3,7 @@
 ## 현재 우선순위
 
 - [ ] MVP Phase 0 범위 확정
+- [ ] Capture Inbox v1 범위 확정
 - [x] Expo Prebuild + TypeScript 프로젝트 생성
 - [x] 기본 폴더 구조 결정
 - [x] 디자인 시스템 초안 정의
@@ -30,7 +31,11 @@
 ## 핵심 UX
 
 - [x] URL 입력 화면 구현
+- [ ] URL 없는 텍스트 저장 구현
+- [ ] DM/캡션처럼 URL과 텍스트가 섞인 입력 저장
+- [ ] 여러 URL 추출 및 저장
 - [x] 붙여넣기 버튼 구현
+- [ ] 앱 실행 시 클립보드 저장 후보 제안
 - [x] URL 유효성 검사 구현
 - [x] 저장 버튼 동작 구현
 - [x] 저장 성공 피드백 UI 구현
@@ -43,6 +48,11 @@
 - [x] 목록 카드 컴포넌트 구현
 - [x] 상세 화면 최소 버전 구현
 - [x] 상세 화면 상태 배지 placeholder 구현
+- [ ] 상세 화면에 원문 텍스트 표시
+- [ ] 상세 화면에 사용자 메모 표시/편집
+- [ ] 외부 링크 열기 버튼 추가
+- [ ] 검색 기능 구현
+- [ ] source type 필터 구현
 
 ## 저장 플로우
 
@@ -50,6 +60,12 @@
 - [x] 저장 직후 목록 즉시 반영
 - [x] 앱 재실행 데이터 복원 확인
 - [ ] 저장 실패 케이스 처리
+- [ ] `raw_text` 저장
+- [ ] `extracted_urls` 저장
+- [ ] `source_type` 자동 분류
+- [ ] `saved_from` 저장
+- [ ] `status` 기본값 처리
+- [ ] 태그 저장 구조 추가
 
 ## fallback 처리
 
@@ -63,6 +79,8 @@
 - [x] Android Share Intent 설계
 - [x] Android Share Intent 패키지 도입
 - [x] 공유 payload -> 현재 저장 흐름 연결
+- [ ] Android 공유 실기기 테스트
+- [ ] Instagram DM 링크 길게 누르기/공유/복사 UX 실기기 확인
 - [ ] iOS Share Extension 설계
 - [x] sync queue 설계
 - [x] sync queue 스키마/큐잉 구현

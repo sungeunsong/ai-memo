@@ -3,12 +3,15 @@
 ## 1. 제품 방향
 
 이 제품은 먼저 빠른 노트앱처럼 동작해야 하고, 그 다음에 AI 앱처럼 느껴져야 한다.
+더 구체적으로는 인스타그램, DM, Notion, Google Docs 등에서 흘러오는 정보를 잃어버리지 않게 모으는 capture inbox가 먼저 되어야 한다.
 
 핵심 원칙:
 - 첫 설치 용량은 가볍게 유지한다
 - 저장은 AI 없이도 반드시 성공해야 한다
 - AI는 로컬 저장 이후에만 실행한다
 - 대형 온디바이스 모델은 첫 출시 필수 요소가 아니다
+- 링크가 없어도 원문 텍스트는 저장할 수 있어야 한다
+- 저장된 항목은 출처와 검색 가능성이 보장되어야 한다
 
 ---
 
@@ -50,16 +53,21 @@
 
 ### Phase 1: MVP 출시
 목표:
-- 결정적 규칙 기반 보강만으로도 충분히 쓸 만한 저장 앱을 출시한다
+- 결정적 규칙 기반 보강만으로도 충분히 쓸 만한 capture inbox를 출시한다
 
 범위:
 - URL/텍스트 입력
 - Android Share Intent + iOS Share Extension 기본 구조
+- DM/캡션처럼 URL과 텍스트가 섞인 입력 저장
+- URL 없는 텍스트 저장
+- 여러 URL 추출
+- Instagram/Notion/Google Docs/Drive/YouTube source type 자동 분류
 - 메타데이터 추출 Parse 레이어
 - fallback 제목 생성
 - fallback 3줄 요약
 - fallback 썸네일 선택
-- 폴더 지정
+- 사용자 메모
+- 태그 또는 상태 관리
 - 로컬 검색
 - 백그라운드 sync queue
 
@@ -72,6 +80,9 @@ AI 전략:
 - 입력부터 저장 완료까지 3초 이내
 - AI 실패가 저장을 막지 않는다
 - 오프라인 저장 후 나중에 동기화된다
+- 인스타그램 공유 링크와 DM 복사 텍스트를 저장할 수 있다
+- Notion/Google Docs/Drive 링크가 일반 웹 링크와 구분된다
+- 저장된 항목을 검색으로 다시 찾을 수 있다
 
 ### Phase 1.5: 경량 온디바이스 AI
 목표:
@@ -136,6 +147,10 @@ AI 전략:
 - 저장 트랜잭션 안정성
 - sync queue 구조
 - Android/iOS 캡처 진입점
+- URL 없는 텍스트 저장
+- raw text와 extracted URLs 저장
+- source type 자동 분류
+- 로컬 검색
 
 ### 다운로드형 AI 전에 반드시 해결할 것
 - 교체 가능한 AI 엔진 계약
@@ -195,5 +210,6 @@ Saved Item -> Sync Queue -> Server Sync
 
 바로 구현을 시작할 때는 아래 문서를 기준으로 본다.
 
+- 제품 전략: `Capture_Inbox_Product_Strategy.md`
 - 세부 실행 계획: `Execution_Plan_MVP_Phase0.md`
 - 작업 체크리스트: `TODO.md`

@@ -9,7 +9,7 @@ import {
   updateItemMetadataAsync,
 } from '@/db';
 import { fetchMetadataPatch } from '@/features/metadata/service';
-import { buildFallbackUrlItem, normalizeUrl } from '@/features/items/fallback';
+import { buildFallbackItem, normalizeUrl } from '@/features/items/fallback';
 import {
   ItemMetadataPatch,
   SavedItem,
@@ -37,8 +37,9 @@ type AppStore = {
   syncWorkerMessage: string | null;
   isSyncWorkerRunning: boolean;
   initialize: () => Promise<void>;
-  saveUrl: (input: string) => Promise<SaveUrlResult>;
+  saveUrl: (input: string, savedFrom?: string) => Promise<SaveUrlResult>;
   selectItem: (itemId: string) => void;
+  updateUserNote: (itemId: string, userNote: string) => Promise<void>;
   clearError: () => void;
 };
 
@@ -100,7 +101,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     return initializationPromise;
   },
-  async saveUrl(input) {
+  async saveUrl(input, savedFrom = 'manual') {
     if (!get().isReady) {
       await get().initialize();
     }
@@ -115,9 +116,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         throw new Error('로컬 저장소를 준비하지 못했습니다. 다시 시도해 주세요.');
       }
 
-      const normalizedUrl = normalizeUrl(input);
+      if (!input || !input.trim()) {
+        throw new Error('저장할 내용을 입력해 주세요.');
+      }
+
       const fallbackItem = {
-        ...buildFallbackUrlItem(normalizedUrl, input),
+        ...buildFallbackItem(input, savedFrom),
         syncStatus: 'queued' as const,
       };
       const syncJob = buildItemSyncJob(fallbackItem);
@@ -131,7 +135,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         syncWorkerMessage: null,
       }));
 
-      void enrichSavedItemMetadata(fallbackItem.id, fallbackItem.sourceUrl, set, get);
+      if (fallbackItem.type === 'url' && fallbackItem.sourceUrl) {
+        void enrichSavedItemMetadata(fallbackItem.id, fallbackItem.sourceUrl, set, get);
+      }
       void runSyncWorker(set);
 
       return { ok: true };
@@ -153,6 +159,48 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({
       selectedItemId: itemId,
     });
+  },
+  async updateUserNote(itemId, userNote) {
+    const databaseReady = get().isReady;
+    if (!databaseReady) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    await updateItemMetadataAsync(itemId, { userNote, updatedAt });
+
+    const nextItems = get().items.map((item) => {
+      if (item.id === itemId) {
+        return {
+          ...item,
+          userNote,
+          updatedAt,
+        };
+      }
+      return item;
+    });
+
+    set({
+      items: nextItems,
+    });
+
+    const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
+    if (itemToQueue) {
+      await queueUpsertItemSyncAsync(itemToQueue);
+
+      set((state) => ({
+        items: state.items.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                syncStatus: 'queued',
+              }
+            : item
+        ),
+      }));
+    }
+
+    void runSyncWorker(set);
   },
   clearError() {
     set({
@@ -194,6 +242,10 @@ async function enrichSavedItemMetadata(
       thumbnailUrl: itemToQueue.thumbnailUrl,
       aiStatus: itemToQueue.aiStatus,
       syncStatus: 'queued',
+      userNote: itemToQueue.userNote,
+      extractedUrls: itemToQueue.extractedUrls,
+      sourceType: itemToQueue.sourceType,
+      savedFrom: itemToQueue.savedFrom,
       createdAt: itemToQueue.createdAt,
       updatedAt: itemToQueue.updatedAt,
     });
@@ -227,6 +279,10 @@ function applyMetadataPatch(item: SavedItem, itemId: string, patch: ItemMetadata
     ...(patch.content ? { content: patch.content } : null),
     ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
     ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
+    ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),
+    ...(patch.extractedUrls !== undefined ? { extractedUrls: patch.extractedUrls } : null),
+    ...(patch.sourceType ? { sourceType: patch.sourceType } : null),
+    ...(patch.savedFrom ? { savedFrom: patch.savedFrom } : null),
     updatedAt: patch.updatedAt,
   };
 }

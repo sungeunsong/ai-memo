@@ -19,6 +19,10 @@ export type SavedItem = {
   thumbnailUrl: string | null;
   aiStatus: AIStatus;
   syncStatus: SyncStatus;
+  userNote: string | null;
+  extractedUrls: string[];
+  sourceType: string;
+  savedFrom: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -26,7 +30,7 @@ export type SavedItem = {
 export type SaveUrlPayload = {
   id: string;
   type: ItemType;
-  sourceUrl: string;
+  sourceUrl: string | null;
   rawInput: string;
   title: string;
   summary: string;
@@ -34,6 +38,10 @@ export type SaveUrlPayload = {
   thumbnailUrl: string | null;
   aiStatus: AIStatus;
   syncStatus: SyncStatus;
+  userNote: string | null;
+  extractedUrls: string[];
+  sourceType: string;
+  savedFrom: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -45,6 +53,10 @@ export type ItemMetadataPatch = {
   content?: string;
   thumbnailUrl?: string | null;
   aiStatus?: AIStatus;
+  userNote?: string | null;
+  extractedUrls?: string[];
+  sourceType?: string;
+  savedFrom?: string;
   updatedAt: string;
 };
 

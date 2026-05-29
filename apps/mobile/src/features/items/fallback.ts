@@ -1,5 +1,5 @@
 import { SaveUrlPayload } from '@/features/items/types';
-import { extractUrlCandidate } from '@/features/capture/normalizeSharedInput';
+import { extractAllUrls, classifySourceType } from '@/features/capture/normalizeSharedInput';
 
 const HOST_LABELS: Record<string, string> = {
   'youtube.com': '유튜브 링크',
@@ -7,48 +7,93 @@ const HOST_LABELS: Record<string, string> = {
   'instagram.com': '인스타그램 링크',
 };
 
-export function buildFallbackUrlItem(normalizedUrl: string, rawInput = normalizedUrl): SaveUrlPayload {
+export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): SaveUrlPayload {
   const timestamp = new Date().toISOString();
-  const hostname = getHostname(normalizedUrl);
-  const title = buildFallbackTitle(hostname);
+  const extractedUrls = extractAllUrls(rawInput);
+  const primaryUrl = extractedUrls[0] ?? null;
+  
+  const type = primaryUrl ? 'url' : 'text';
+  const sourceType = classifySourceType(primaryUrl, rawInput);
+  
+  let title = '';
+  let summary = '';
+  let content = rawInput;
+
+  if (type === 'url' && primaryUrl) {
+    const hostname = getHostname(primaryUrl);
+    
+    // 노션이나 구글 등의 문서인 경우 조금 더 친절한 Fallback 제목 제공
+    if (sourceType === 'notion') {
+      title = `Notion 문서 (${formatDate(timestamp)})`;
+    } else if (sourceType.startsWith('google_')) {
+      const typeLabel = sourceType === 'google_docs' ? '문서' : sourceType === 'google_sheets' ? '스프레드시트' : sourceType === 'google_form' ? '설문지' : '드라이브';
+      title = `Google ${typeLabel} (${formatDate(timestamp)})`;
+    } else {
+      title = buildFallbackTitle(hostname);
+    }
+
+    summary = `${hostname} 링크를 저장했습니다. AI 요약과 파싱이 비동기로 진행됩니다.`;
+    content = primaryUrl;
+  } else {
+    // 텍스트 메모인 경우
+    const preview = rawInput.trim().replace(/\s+/g, ' ').slice(0, 20);
+    title = preview ? `메모: ${preview}${rawInput.trim().length > 20 ? '...' : ''}` : `새 텍스트 메모 (${formatDate(timestamp)})`;
+    summary = `원문 텍스트 메모를 저장했습니다.`;
+  }
 
   return {
     id: createItemId(),
-    type: 'url',
-    sourceUrl: normalizedUrl,
+    type,
+    sourceUrl: primaryUrl,
     rawInput,
     title,
-    summary: `${hostname} 링크를 먼저 저장했습니다.\nAI 요약과 파싱은 비동기로 이어집니다.`,
-    content: normalizedUrl,
+    summary,
+    content,
     thumbnailUrl: null,
     aiStatus: 'pending',
     syncStatus: 'local_only',
+    userNote: null,
+    extractedUrls,
+    sourceType,
+    savedFrom,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
 }
 
+// 하위 호환성 유지용 래퍼
+export function buildFallbackUrlItem(normalizedUrl: string, rawInput = normalizedUrl): SaveUrlPayload {
+  return buildFallbackItem(rawInput, 'manual');
+}
+
 export function normalizeUrl(input: string) {
-  const extracted = extractUrlCandidate(input);
-  const url = new URL(extracted);
-
-  if (!['http:', 'https:'].includes(url.protocol)) {
-    throw new Error('http 또는 https 링크만 저장할 수 있습니다.');
+  try {
+    const extracted = extractAllUrls(input)[0];
+    if (!extracted) {
+      return input.trim();
+    }
+    const url = new URL(extracted);
+    return url.toString();
+  } catch {
+    return input.trim();
   }
-
-  if (!url.hostname.includes('.')) {
-    throw new Error('올바른 링크 형식인지 확인해 주세요.');
-  }
-
-  return url.toString();
 }
 
 export function getHostname(url: string) {
-  return new URL(url).hostname.replace(/^www\./, '');
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return 'web';
+  }
 }
 
 function buildFallbackTitle(hostname: string) {
   return HOST_LABELS[hostname] ?? `${hostname} 저장 링크`;
+}
+
+function formatDate(isoString: string) {
+  const date = new Date(isoString);
+  return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
 function createItemId() {
