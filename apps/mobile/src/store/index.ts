@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { Alert } from 'react-native';
 
 import {
   getSavedItemsAsync,
@@ -40,6 +41,7 @@ type AppStore = {
   saveUrl: (input: string, savedFrom?: string) => Promise<SaveUrlResult>;
   selectItem: (itemId: string) => void;
   updateUserNote: (itemId: string, userNote: string) => Promise<void>;
+  retryEnrichMetadata: (itemId: string) => Promise<void>;
   clearError: () => void;
 };
 
@@ -87,7 +89,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           syncQueueFailedCount: syncQueueSummary.failedCount,
         });
 
-        void runSyncWorker(set);
+        void runSyncWorker(set, get);
       } catch (error) {
         set({
           isReady: false,
@@ -138,7 +140,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (fallbackItem.type === 'url' && fallbackItem.sourceUrl) {
         void enrichSavedItemMetadata(fallbackItem.id, fallbackItem.sourceUrl, set, get);
       }
-      void runSyncWorker(set);
+      void runSyncWorker(set, get);
 
       return { ok: true };
     } catch (error) {
@@ -200,7 +202,86 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }));
     }
 
-    void runSyncWorker(set);
+    void runSyncWorker(set, get);
+  },
+  async retryEnrichMetadata(itemId) {
+    if (!get().isReady) {
+      return;
+    }
+
+    const item = get().items.find((i) => i.id === itemId);
+    if (!item) {
+      return;
+    }
+
+    set({
+      isSaving: true,
+      errorMessage: null,
+    });
+
+    try {
+      const initialPatch: ItemMetadataPatch = {
+        aiStatus: 'pending',
+        updatedAt: new Date().toISOString(),
+      };
+      await updateItemMetadataAsync(itemId, initialPatch);
+      set((state) => ({
+        items: state.items.map((i) => applyMetadataPatch(i, itemId, initialPatch)),
+      }));
+
+      // 지능형 URL 복구 파이프라인:
+      // 과거 데이터 수집 오류 등으로 인해 item.sourceUrl이 '없음' 상태이더라도,
+      // 원문(rawInput)에서 정규식으로 다시 링크를 추출하여 복구 시도를 지원합니다.
+      const urlRegex = /(https?:\/\/[^\s]+)/g;
+      const extractedUrls = item.rawInput.match(urlRegex);
+      const activeUrl = item.sourceUrl || (extractedUrls && extractedUrls[0]) || null;
+
+      if (item.type === 'url' || activeUrl) {
+        // 복원된 URL을 DB 및 Zustand 스토어에 바인딩
+        if (activeUrl && !item.sourceUrl) {
+          const urlPatch: ItemMetadataPatch = {
+            sourceUrl: activeUrl,
+            updatedAt: new Date().toISOString(),
+          };
+          await updateItemMetadataAsync(itemId, urlPatch);
+          set((state) => ({
+            items: state.items.map((i) => applyMetadataPatch(i, itemId, urlPatch)),
+          }));
+        }
+
+        await enrichSavedItemMetadata(itemId, activeUrl || item.sourceUrl!, set, get);
+      } else {
+        // 일반 텍스트의 경우, enrich 단계는 생략하고 완료 처리하거나 기본 처리 가능
+        const patch: ItemMetadataPatch = {
+          aiStatus: 'completed',
+          updatedAt: new Date().toISOString(),
+        };
+        await updateItemMetadataAsync(itemId, patch);
+        set((state) => ({
+          items: state.items.map((i) => applyMetadataPatch(i, itemId, patch)),
+        }));
+      }
+
+      set({ isSaving: false });
+    } catch (error) {
+      console.error('[Retry] 에러 발생:', error);
+      // 모바일 폰 화면에 에러 팝업을 직접 띄워 실시간 디버깅을 돕습니다.
+      Alert.alert(
+        'AI 분석 오류 발생',
+        error instanceof Error ? error.message : '알 수 없는 에러가 발생했습니다.'
+      );
+
+      const patch: ItemMetadataPatch = {
+        aiStatus: 'failed',
+        updatedAt: new Date().toISOString(),
+      };
+      await updateItemMetadataAsync(itemId, patch).catch(() => {});
+      set((state) => ({
+        items: state.items.map((i) => applyMetadataPatch(i, itemId, patch)),
+        isSaving: false,
+        errorMessage: error instanceof Error ? error.message : '재분석 중 오류가 발생했습니다.',
+      }));
+    }
   },
   clearError() {
     set({
@@ -220,51 +301,66 @@ async function enrichSavedItemMetadata(
   ) => void,
   get: () => AppStore
 ) {
-  const patch = await fetchMetadataPatch(sourceUrl);
-  await updateItemMetadataAsync(itemId, patch);
+  console.log(`[SyncWorker] 메타데이터 보강을 시작합니다. URL: ${sourceUrl}`);
+  try {
+    const patch = await fetchMetadataPatch(sourceUrl);
+    await updateItemMetadataAsync(itemId, patch);
 
-  const nextItems = get().items.map((item) => applyMetadataPatch(item, itemId, patch));
-  const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
+    const nextItems = get().items.map((item) => applyMetadataPatch(item, itemId, patch));
+    const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
 
-  set({
-    items: nextItems,
-  });
-
-  if (itemToQueue) {
-    await queueUpsertItemSyncAsync({
-      id: itemToQueue.id,
-      type: itemToQueue.type,
-      sourceUrl: itemToQueue.sourceUrl,
-      rawInput: itemToQueue.rawInput,
-      title: itemToQueue.title,
-      summary: itemToQueue.summary,
-      content: itemToQueue.content,
-      thumbnailUrl: itemToQueue.thumbnailUrl,
-      aiStatus: itemToQueue.aiStatus,
-      syncStatus: 'queued',
-      userNote: itemToQueue.userNote,
-      extractedUrls: itemToQueue.extractedUrls,
-      sourceType: itemToQueue.sourceType,
-      savedFrom: itemToQueue.savedFrom,
-      createdAt: itemToQueue.createdAt,
-      updatedAt: itemToQueue.updatedAt,
+    set({
+      items: nextItems,
     });
 
-    set((state) => ({
-      items: state.items.map((item) =>
-        item.id === itemId
-          ? {
-              ...item,
-              syncStatus: 'queued',
-            }
-          : item
-      ),
-      syncWorkerMessage: null,
-    }));
-  }
+    if (itemToQueue) {
+      await queueUpsertItemSyncAsync({
+        id: itemToQueue.id,
+        type: itemToQueue.type,
+        sourceUrl: itemToQueue.sourceUrl,
+        rawInput: itemToQueue.rawInput,
+        title: itemToQueue.title,
+        summary: itemToQueue.summary,
+        content: itemToQueue.content,
+        thumbnailUrl: itemToQueue.thumbnailUrl,
+        aiStatus: itemToQueue.aiStatus,
+        syncStatus: 'queued',
+        userNote: itemToQueue.userNote,
+        extractedUrls: itemToQueue.extractedUrls,
+        sourceType: itemToQueue.sourceType,
+        savedFrom: itemToQueue.savedFrom,
+        createdAt: itemToQueue.createdAt,
+        updatedAt: itemToQueue.updatedAt,
+      });
 
-  void runSyncWorker(set);
+      set((state) => ({
+        items: state.items.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                syncStatus: 'queued',
+              }
+            : item
+        ),
+        syncWorkerMessage: null,
+      }));
+    }
+  } catch (error) {
+    console.error(`[SyncWorker] 메타데이터 보강 실패, 기본 저장 유지:`, error);
+    const patch: ItemMetadataPatch = {
+      aiStatus: 'failed',
+      updatedAt: new Date().toISOString(),
+    };
+    await updateItemMetadataAsync(itemId, patch).catch(() => {});
+    set((state) => ({
+      items: state.items.map((item) => applyMetadataPatch(item, itemId, patch)),
+    }));
+  } finally {
+    console.log('[SyncWorker] 메타데이터 보강 단계 완료. 동기화 워커를 구동합니다.');
+    void runSyncWorker(set, get);
+  }
 }
+
 
 function applyMetadataPatch(item: SavedItem, itemId: string, patch: ItemMetadataPatch) {
   if (item.id !== itemId) {
@@ -273,7 +369,7 @@ function applyMetadataPatch(item: SavedItem, itemId: string, patch: ItemMetadata
 
   return {
     ...item,
-    ...(patch.sourceUrl !== undefined ? { sourceUrl: patch.sourceUrl } : null),
+    ...(patch.sourceUrl !== undefined && patch.sourceUrl ? { sourceUrl: patch.sourceUrl } : null),
     ...(patch.title ? { title: patch.title } : null),
     ...(patch.summary ? { summary: patch.summary } : null),
     ...(patch.content ? { content: patch.content } : null),
@@ -303,6 +399,10 @@ function buildItemSyncJob(item: SavedItem) {
       thumbnailUrl: item.thumbnailUrl,
       aiStatus: item.aiStatus,
       syncStatus: item.syncStatus,
+      userNote: item.userNote,
+      extractedUrls: item.extractedUrls,
+      sourceType: item.sourceType,
+      savedFrom: item.savedFrom,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
     }),
@@ -315,15 +415,19 @@ function buildItemSyncJob(item: SavedItem) {
   };
 }
 
+
+
 async function runSyncWorker(
   set: (
     partial:
       | Partial<AppStore>
       | AppStore
       | ((state: AppStore) => Partial<AppStore> | AppStore)
-  ) => void
+  ) => void,
+  get: () => AppStore
 ) {
   if (syncWorkerPromise) {
+    console.log('[SyncWorker] 이미 동기화 워커가 구동 중입니다. 대기합니다.');
     return syncWorkerPromise;
   }
 
@@ -331,13 +435,21 @@ async function runSyncWorker(
     set({
       isSyncWorkerRunning: true,
     });
+    console.log('[SyncWorker] 동기화 작업을 시작합니다...');
 
     try {
       const result = await runSyncQueueOnce();
-      const summary = await getSyncQueueSummaryAsync();
+      console.log(`[SyncWorker] 동기화 큐 1회 실행 완료. 결과: ${JSON.stringify(result)}`);
+      
+      // SQLite 로컬 DB로부터 동기화 결과가 실시간 반영된 최신 아이템 및 큐 개수를 로드합니다.
+      const [items, summary] = await Promise.all([
+        getSavedItemsAsync(),
+        getSyncQueueSummaryAsync(),
+      ]);
+      console.log(`[SyncWorker] 로컬 DB 리로드 완료. 총 아이템 수: ${items.length}, 대기 큐: ${summary.pendingCount}건`);
 
       set((state) => ({
-        items: state.items,
+        items,
         syncQueuePendingCount: summary.pendingCount,
         syncQueueFailedCount: summary.failedCount,
         syncWorkerMessage:
@@ -349,9 +461,14 @@ async function runSyncWorker(
         isSyncWorkerRunning: false,
       }));
     } catch (error) {
-      const summary = await getSyncQueueSummaryAsync();
+      console.error('[SyncWorker] 동기화 수행 중 예외 에러 발생:', error);
+      const [items, summary] = await Promise.all([
+        getSavedItemsAsync().catch(() => get().items),
+        getSyncQueueSummaryAsync().catch(() => ({ pendingCount: 0, failedCount: 0 })),
+      ]);
 
       set({
+        items,
         syncQueuePendingCount: summary.pendingCount,
         syncQueueFailedCount: summary.failedCount,
         syncWorkerMessage: error instanceof Error ? error.message : '동기화 워커 실행에 실패했습니다.',
@@ -364,3 +481,4 @@ async function runSyncWorker(
 
   return syncWorkerPromise;
 }
+

@@ -29,61 +29,188 @@ import { getHostname } from '@/features/items/fallback';
 import { palette } from '@/theme/palette';
 import { spacing } from '@/theme/spacing';
 
-const quickLinks = [
-  {
-    label: '유튜브 예시',
-    value: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-  },
-  {
-    label: '인스타 예시',
-    value: 'https://www.instagram.com/p/C4J0Example/',
-  },
+const KEYWORD_EMOJIS: Record<string, string> = {
+  // 요리 재료
+  '감자': '🥔',
+  '양파': '🧅',
+  '베이컨': '🥓',
+  '모짜렐라 치즈': '🧀',
+  '체다 치즈': '🧀',
+  '생크림': '🥛',
+  '버터': '🧈',
+  '소금': '🧂',
+  '후추': '🧂',
+  '치즈': '🧀',
+  '계란': '🥚',
+  '마늘': '🧄',
+  
+  // 운동 부위
+  '하체': '🔥',
+  '허벅지': '🦵',
+  '둔근': '🍑',
+  '둔근(엉덩이)': '🍑',
+  '상체': '💪',
+  '가슴': '🏋️‍♂️',
+  '등': '💪',
+  '복근': '🍫',
+  '코어': '🧘',
+  
+  // 여행 테마 및 스팟
+  '국내': '🇰🇷',
+  '해외': '✈️',
+  '호캉스': '🏨',
+  '힐링 온천': '♨️',
+  '강원도': '🌊',
+  '강릉': '🌊',
+  '제주': '🌴',
+  '오션뷰': '🌊',
+  '온천': '♨️',
+};
+
+const CATEGORY_TABS = [
+  { label: '전체 🔍', value: 'all' },
+  { label: '육아 👶', value: 'parenting' },
+  { label: '여행 ✈️', value: 'travel' },
+  { label: '요리 🍳', value: 'recipe' },
+  { label: '운동 💪', value: 'workout' },
+  { label: '기타 🏷️', value: 'other' },
 ];
 
+function extractDynamicChips(items: SavedItem[]): Array<{ label: string; value: string }> {
+  const counts: Record<string, number> = {};
+  let hasRecipe = false;
+  let hasWorkout = false;
+  let hasTravel = false;
+
+  items.forEach((item) => {
+    const structured = tryParseStructuredContent(item.content);
+    const category = structured?.category || item.sourceType;
+
+    if (category === 'recipe') {
+      hasRecipe = true;
+      if (structured && structured.ingredients) {
+        (structured.ingredients as string[]).forEach((ing) => {
+          counts[ing] = (counts[ing] || 0) + 1;
+        });
+      }
+    } else if (category === 'workout') {
+      hasWorkout = true;
+      if (structured && structured.targetMuscles) {
+        (structured.targetMuscles as string[]).forEach((muscle) => {
+          counts[muscle] = (counts[muscle] || 0) + 1;
+        });
+      }
+    } else if (category === 'travel') {
+      hasTravel = true;
+      if (structured) {
+        if (structured.travelTheme) {
+          structured.travelTheme.split('/').map((t: string) => t.trim()).forEach((theme: string) => {
+            counts[theme] = (counts[theme] || 0) + 1;
+          });
+        }
+        if (structured.highlights) {
+          (structured.highlights as string[]).forEach((h) => {
+            counts[h] = (counts[h] || 0) + 1;
+          });
+        }
+      }
+    }
+  });
+
+  // 1. 기본 전체 및 고정 카테고리 조립
+  const chips = [{ label: '전체 🔍', value: '' }];
+  if (hasRecipe) chips.push({ label: '레시피 🍳', value: '레시피' });
+  if (hasWorkout) chips.push({ label: '운동루틴 💪', value: '운동' });
+  if (hasTravel) chips.push({ label: '여행정보 ✈', value: '여행' });
+
+  // 2. 누적 빈도가 높은 순으로 상위 8개 키워드를 추출하여 해시태그 칩으로 이식
+  const sortedKeywords = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([key]) => key);
+
+  sortedKeywords.forEach((keyword) => {
+    // 테마 명칭에 '국내', '해외', '호캉스'가 중복 노출되는 걸 가볍게 방지
+    if (keyword === '국내' || keyword === '해외' || keyword === '호캉스') {
+      return;
+    }
+    const emoji = KEYWORD_EMOJIS[keyword] || '🏷';
+    chips.push({ label: `#${keyword} ${emoji}`, value: keyword });
+  });
+
+  return chips;
+}
+
 export function HomeScreen() {
+  const scrollViewRef = useRef<ScrollView>(null);
   const [urlInput, setUrlInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [isPasting, setIsPasting] = useState(false);
   const [isImportingShare, setIsImportingShare] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
-  const [userNoteInput, setUserNoteInput] = useState('');
+  
+  // 모바일 좁은 화면 전용 바텀 시트 상세 모달 제어용 상태
+  const [isDetailVisible, setIsDetailVisible] = useState(false);
+
+  // 도메인 특화 체크리스트 상태 및 로컬스토리지 영속화
+  const [checkedItems, setCheckedItems] = useState<Record<string, Record<string, boolean>>>({});
+
+  useEffect(() => {
+    try {
+      if (Platform.OS === 'web') {
+        const saved = localStorage.getItem('ai_memo_checked_items');
+        if (saved) {
+          setCheckedItems(JSON.parse(saved));
+        }
+      }
+    } catch (e) {
+      console.log('Failed to load checked items', e);
+    }
+  }, []);
+
+  const handleToggleCheck = (itemId: string, key: string) => {
+    setCheckedItems((prev) => {
+      const itemChecked = prev[itemId] || {};
+      const next = {
+        ...prev,
+        [itemId]: {
+          ...itemChecked,
+          [key]: !itemChecked[key],
+        },
+      };
+      try {
+        if (Platform.OS === 'web') {
+          localStorage.setItem('ai_memo_checked_items', JSON.stringify(next));
+        }
+      } catch (e) {
+        console.log('Failed to save checked items', e);
+      }
+      return next;
+    });
+  };
+
   const processedShareSignatureRef = useRef<string | null>(null);
   const { width } = useWindowDimensions();
   const isReady = useAppStore((state) => state.isReady);
   const isInitializing = useAppStore((state) => state.isInitializing);
-  const hasInitializationAttempted = useAppStore((state) => state.hasInitializationAttempted);
   const isSaving = useAppStore((state) => state.isSaving);
   const items = useAppStore((state) => state.items);
   const selectedItemId = useAppStore((state) => state.selectedItemId);
   const errorMessage = useAppStore((state) => state.errorMessage);
   const syncQueuePendingCount = useAppStore((state) => state.syncQueuePendingCount);
-  const syncQueueFailedCount = useAppStore((state) => state.syncQueueFailedCount);
   const syncWorkerMessage = useAppStore((state) => state.syncWorkerMessage);
   const isSyncWorkerRunning = useAppStore((state) => state.isSyncWorkerRunning);
-  const initialize = useAppStore((state) => state.initialize);
   const saveUrl = useAppStore((state) => state.saveUrl);
   const selectItem = useAppStore((state) => state.selectItem);
-  const updateUserNote = useAppStore((state) => state.updateUserNote);
   const clearError = useAppStore((state) => state.clearError);
   const { hasShareIntent, shareIntent, resetShareIntent, error: shareIntentError } =
     useShareIntentContext();
 
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0] ?? null;
   const isWideLayout = width >= 940;
-  const lastSavedAt = items[0]?.createdAt ? formatRelativeTime(items[0].createdAt) : '아직 없음';
   const runtimeErrorMessage = errorMessage ?? shareIntentError ?? null;
-
-  useEffect(() => {
-    setUserNoteInput(selectedItem?.userNote ?? '');
-  }, [selectedItem?.id, selectedItem?.userNote]);
-
-  async function handleSaveUserNote() {
-    if (!selectedItem) {
-      return;
-    }
-    await updateUserNote(selectedItem.id, userNoteInput);
-    setToastMessage('퀵 메모를 안전하게 로컬 DB에 저장했습니다.');
-  }
 
   const [clipboardCandidate, setClipboardCandidate] = useState<string | null>(null);
 
@@ -115,7 +242,18 @@ export function HomeScreen() {
         return;
       }
 
-      setClipboardCandidate(trimmed);
+      // 클립보드 피로도 감소를 위한 스마트 필터:
+      // 1. 유효한 URL 형태이거나
+      // 2. 일반 텍스트의 경우 글자 수가 20자 이상인 경우에만 수집 제안을 띄웁니다.
+      const urlRegex = /(https?:\/\/[^\s]+)/g;
+      const isUrl = urlRegex.test(trimmed);
+      const isLongText = trimmed.length >= 20;
+
+      if (isUrl || isLongText) {
+        setClipboardCandidate(trimmed);
+      } else {
+        setClipboardCandidate(null);
+      }
     } catch {
       setClipboardCandidate(null);
     }
@@ -128,7 +266,7 @@ export function HomeScreen() {
     const result = await saveUrl(clipboardCandidate, 'clipboard');
     if (result.ok) {
       const nextSelectedItem = useAppStore.getState().selectedItemId;
-      setToastMessage('클립보드 내용을 즉시 저장하고 분류를 마쳤습니다.');
+      setToastMessage('클립보드 내용을 성공적으로 수집했습니다.');
       if (nextSelectedItem) {
         setHighlightedItemId(nextSelectedItem);
       }
@@ -175,7 +313,7 @@ export function HomeScreen() {
       }
 
       processedShareSignatureRef.current = currentSignature;
-      setToastMessage('이미지와 파일 공유는 아직 준비 중입니다. 지금은 링크 공유만 저장합니다.');
+      setToastMessage('파일 공유는 지원되지 않으며 링크 공유만 보존 가능합니다.');
       resetShareIntent();
       return;
     }
@@ -199,7 +337,7 @@ export function HomeScreen() {
       if (result.ok) {
         const nextSelectedItem = useAppStore.getState().selectedItemId;
         setUrlInput('');
-        setToastMessage('공유된 링크를 로컬에 저장했습니다. 메타데이터를 이어서 보강합니다.');
+        setToastMessage('공유된 지식이 수집함에 저장되었습니다.');
         if (nextSelectedItem) {
           setHighlightedItemId(nextSelectedItem);
         }
@@ -210,59 +348,125 @@ export function HomeScreen() {
     })();
   }, [clearError, hasShareIntent, resetShareIntent, saveUrl, shareIntent]);
 
-  async function handlePaste() {
-    setIsPasting(true);
-    clearError();
-
-    try {
-      const clipboardText = await Clipboard.getStringAsync();
-      setUrlInput(clipboardText);
-    } finally {
-      setIsPasting(false);
-    }
-  }
-
   async function handleSave() {
+    if (!urlInput.trim()) {
+      return;
+    }
     const result = await saveUrl(urlInput);
 
     if (result.ok) {
       const nextSelectedItem = useAppStore.getState().selectedItemId;
       setUrlInput('');
-      setToastMessage('링크를 로컬에 저장했습니다. 메타데이터를 이어서 보강합니다.');
+      setToastMessage('수집함에 안전하게 저장되었습니다.');
       if (nextSelectedItem) {
         setHighlightedItemId(nextSelectedItem);
+        if (!isWideLayout) {
+          setIsDetailVisible(true);
+        }
       }
     }
   }
 
+  function handleSelectItem(itemId: string) {
+    selectItem(itemId);
+    if (!isWideLayout) {
+      setIsDetailVisible(true);
+    }
+  }
+
+  // ==========================================
+  // 도메인 구조화 정보 검색 필터링 로직 구현
+  // ==========================================
+  const filteredItems = items.filter((item) => {
+    // 1. 카테고리 고정 탭 필터링 연동
+    if (selectedCategory !== 'all') {
+      const itemCat = getItemCategory(item);
+      if (itemCat !== selectedCategory) {
+        return false;
+      }
+    }
+
+    // 2. 검색어 필터링 연동
+    if (!searchQuery.trim()) {
+      return true;
+    }
+    const query = searchQuery.toLowerCase().trim();
+
+    // 1. 기본 제목 및 메모 본문 검색
+    if (item.title.toLowerCase().includes(query) || (item.userNote && item.userNote.toLowerCase().includes(query))) {
+      return true;
+    }
+
+    // 2. 구조화 정보 내부 검색 (요리 재료, 운동 부위, 여행지)
+    const structured = tryParseStructuredContent(item.content);
+    
+    // 3. 지능형 자연어 도메인 매핑 검색
+    const category = structured?.category || item.sourceType;
+    if (category) {
+      if ((query === '요리' || query === '레시피') && category === 'recipe') return true;
+      if ((query === '운동' || query === '헬스' || query === '홈트') && category === 'workout') return true;
+      if ((query === '여행' || query === '호캉스') && category === 'travel') return true;
+    }
+
+    if (structured) {
+      // 요리 레시피 재료 스캔 (ex: '감자' 검색 시 감자 그라탕 레시피 필터 노출)
+      if (structured.category === 'recipe' && structured.ingredients) {
+        return (structured.ingredients as string[]).some((ing) => ing.toLowerCase().includes(query));
+      }
+      // 운동 타겟 부위 스캔 (ex: '하체' 검색 시 홈트 루틴 필터 노출)
+      if (structured.category === 'workout' && structured.targetMuscles) {
+        return (structured.targetMuscles as string[]).some((muscle) => muscle.toLowerCase().includes(query));
+      }
+      // 여행지 테마 및 세부 장소 스캔
+      if (structured.category === 'travel') {
+        if (structured.location && structured.location.toLowerCase().includes(query)) return true;
+        if (structured.travelTheme && structured.travelTheme.toLowerCase().includes(query)) return true;
+        if (structured.highlights) {
+          return (structured.highlights as string[]).some((h) => h.toLowerCase().includes(query));
+        }
+        if (structured.checklist) {
+          return (structured.checklist as string[]).some((c) => c.toLowerCase().includes(query));
+        }
+      }
+    }
+
+    return false;
+  });
+
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.hero}>
-          <View style={styles.heroHeader}>
-            <Text style={styles.eyebrow}>AI Memo / Toss Style</Text>
-            <Text style={styles.title}>저장은 즉시, 정리는 나중에.</Text>
-            <Text style={styles.description}>
-              유튜브, 인스타, 노션 문서를 빠르게 쌓아두고, 백그라운드 AI가 핵심 요약을 정리하는 햅틱 감성의 클린 지식 저장소입니다.
+      {/* 초미니멀 럭셔리 헤더 */}
+      <View style={styles.header}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.headerEyebrow}>KNOWLEDGE INBOX</Text>
+          <Text style={styles.headerLogo}>AI MEMO</Text>
+        </View>
+        <View style={styles.headerRight}>
+          <View style={styles.syncIndicator}>
+            <View style={[
+              styles.syncPulseDot,
+              isSyncWorkerRunning && styles.syncPulseDotActive,
+              syncQueuePendingCount > 0 && styles.syncPulseDotPending
+            ]} />
+            <Text style={styles.syncIndicatorText}>
+              {isSyncWorkerRunning 
+                ? '동기화 중...' 
+                : syncQueuePendingCount 
+                  ? `${syncQueuePendingCount}건 대기` 
+                  : '원격 동기화 완료'}
             </Text>
           </View>
-
-          <View style={styles.metricsRow}>
-            <MetricCard label="저장된 링크" value={`${items.length}`} helper="로컬 DB 기준" />
-            <MetricCard label="최근 저장" value={lastSavedAt} helper="앱 재실행 후 복원" />
-            <MetricCard
-              label="동기화 큐"
-              value={syncQueuePendingCount ? `${syncQueuePendingCount} 대기` : '비어 있음'}
-              helper={
-                isSyncWorkerRunning
-                  ? '큐 처리 중'
-                  : syncQueueFailedCount
-                    ? `실패 ${syncQueueFailedCount}건`
-                    : syncWorkerMessage ?? '저장 후 비동기 업로드 준비'
-              }
-            />
-          </View>
         </View>
+      </View>
+
+      <ScrollView 
+        ref={scrollViewRef}
+        contentContainerStyle={styles.content} 
+        showsVerticalScrollIndicator={false}
+      >
+        {/* 네온 백그라운드 오라 글로우 데코레이션 */}
+        <View style={styles.heroGlowLarge} />
+        <View style={styles.heroGlowSmall} />
 
         {toastMessage ? (
           <View style={styles.toast}>
@@ -282,7 +486,7 @@ export function HomeScreen() {
             <View style={styles.clipboardBannerLeft}>
               <View style={styles.clipboardBannerDot} />
               <View style={styles.clipboardBannerTextColumn}>
-                <Text style={styles.clipboardBannerTitle}>클립보드에 복사된 내용이 있습니다</Text>
+                <Text style={styles.clipboardBannerTitle}>클립보드에 감지된 링크가 있습니다</Text>
                 <Text style={styles.clipboardBannerDesc} numberOfLines={1}>
                   "{clipboardCandidate.replace(/\s+/g, ' ')}"
                 </Text>
@@ -305,122 +509,93 @@ export function HomeScreen() {
                   { transform: [{ scale: pressed ? 0.95 : 1 }] }
                 ]}
               >
-                <Text style={styles.clipboardBannerSaveBtnText}>즉시 저장</Text>
+                <Text style={styles.clipboardBannerSaveBtnText}>수집하기</Text>
               </Pressable>
             </View>
           </View>
         ) : null}
 
+        {/* 럭셔리 Floating-style 캡처 입력 바 */}
+        <View style={styles.floatingComposer}>
+          <TextInput
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            onChangeText={setUrlInput}
+            placeholder="수집할 유튜브, 인스타, 노션 링크를 붙여넣으세요"
+            placeholderTextColor={palette.textMuted}
+            style={styles.floatingInput}
+            value={urlInput}
+          />
+          {isImportingShare ? (
+            <ActivityIndicator size="small" color={palette.accent} style={styles.floatingLoader} />
+          ) : null}
+          <Pressable 
+            disabled={isSaving || isInitializing || !urlInput.trim()}
+            onPress={handleSave} 
+            style={({ pressed }) => [
+              styles.floatingSaveBtn,
+              (isSaving || isInitializing || !urlInput.trim()) && styles.floatingSaveBtnDisabled,
+              { transform: [{ scale: pressed ? 0.96 : 1 }] }
+            ]}
+          >
+            <Text style={styles.floatingSaveBtnText}>
+              {isSaving ? '수집 중' : '수집'}
+            </Text>
+          </Pressable>
+        </View>
+
+        {/* 프리미엄 통합 스마트 재료/부위 검색 바 */}
+        <View style={styles.floatingSearchShell}>
+          <Text style={styles.searchIcon}>🔍</Text>
+          <TextInput
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setSearchQuery}
+            placeholder="수집한 지식 제목, 요리 재료(예: 감자), 운동 부위 검색..."
+            placeholderTextColor={palette.textMuted}
+            style={styles.floatingSearchInput}
+            value={searchQuery}
+          />
+          {searchQuery ? (
+            <Pressable onPress={() => setSearchQuery('')} style={styles.searchClearBtn}>
+              <Text style={styles.searchClearBtnText}>✕</Text>
+            </Pressable>
+          ) : null}
+        </View>
+
+        {/* 고정 카테고리 탭 (Fixed Category Tabs) */}
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false} 
+          contentContainerStyle={styles.quickChipsContainer}
+        >
+          {CATEGORY_TABS.map((tab) => {
+            const isActive = selectedCategory === tab.value;
+            return (
+              <Pressable
+                key={tab.value}
+                onPress={() => setSelectedCategory(tab.value)}
+                style={({ pressed }) => [
+                  styles.quickChip,
+                  isActive && styles.quickChipActive,
+                  { transform: [{ scale: pressed ? 0.94 : 1 }] }
+                ]}
+              >
+                <Text style={[styles.quickChipText, isActive && styles.quickChipTextActive]}>
+                  {tab.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
         <View style={[styles.workspace, isWideLayout && styles.workspaceWide]}>
           <View style={[styles.leftColumn, isWideLayout && styles.leftColumnWide]}>
-            <View style={styles.composerCard}>
-              <View style={styles.panelHeader}>
-                <Text style={styles.panelEyebrow}>Quick Capture</Text>
-                <Text style={styles.panelTitle}>링크를 붙여넣거나 공유 버튼으로 저장</Text>
-                <Text style={styles.panelDescription}>
-                  저장은 로컬에서 먼저 끝내고, 목록에 즉시 반영합니다. 안드로이드 공유 시트
-                  에서 `AI Memo`를 선택하면 자동 저장 흐름으로 들어옵니다.
-                </Text>
-              </View>
-
-              <View style={styles.tipRow}>
-                <Chip label="저장 우선" tone="accent" />
-                <Chip label="AI 비동기" tone="neutral" />
-                <Chip label="local-first" tone="neutral" />
-                <Chip label="Android 공유" tone="neutral" />
-              </View>
-
-              <View style={styles.inputShell}>
-                <Text style={styles.inputLabel}>저장할 URL 또는 공유된 텍스트</Text>
-                <TextInput
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                  onChangeText={setUrlInput}
-                  placeholder="youtube.com 또는 instagram.com 링크를 붙여넣으세요"
-                  placeholderTextColor={palette.textMuted}
-                  style={styles.input}
-                  value={urlInput}
-                />
-                {isImportingShare ? (
-                  <View style={styles.shareImportBanner}>
-                    <ActivityIndicator size="small" color={palette.accentStrong} />
-                    <Text style={styles.shareImportText}>
-                      공유 시트에서 전달된 링크를 저장하는 중입니다.
-                    </Text>
-                  </View>
-                ) : null}
-                <View style={styles.quickLinkRow}>
-                  {quickLinks.map((link) => (
-                    <Pressable
-                      key={link.label}
-                      onPress={() => setUrlInput(link.value)}
-                      style={({ pressed }) => [
-                        styles.quickLink,
-                        { transform: [{ scale: pressed ? 0.95 : 1 }] }
-                      ]}
-                    >
-                      <Text style={styles.quickLinkText}>{link.label}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <View style={styles.actionRow}>
-                  <Pressable
-                    disabled={isPasting}
-                    onPress={handlePaste}
-                    style={({ pressed }) => [
-                      styles.button,
-                      styles.secondaryButton,
-                      isPasting && styles.disabledButton,
-                      { transform: [{ scale: pressed ? 0.96 : 1 }] }
-                    ]}
-                  >
-                    <Text style={styles.secondaryButtonText}>
-                      {isPasting ? '붙여넣는 중' : '클립보드 붙여넣기'}
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    disabled={isSaving || isInitializing}
-                    onPress={handleSave}
-                    style={({ pressed }) => [
-                      styles.button,
-                      styles.primaryButton,
-                      (isSaving || isInitializing) && styles.disabledButton,
-                      { transform: [{ scale: pressed ? 0.96 : 1 }] }
-                    ]}
-                  >
-                    <Text style={styles.primaryButtonText}>
-                      {isSaving ? '저장 중...' : '로컬에 저장'}
-                    </Text>
-                  </Pressable>
-                </View>
-                <View style={styles.shareHintCard}>
-                  <Text style={styles.shareHintTitle}>공유 버튼 테스트</Text>
-                  <Text style={styles.shareHintText}>
-                    {Platform.OS === 'android'
-                      ? '유튜브나 인스타에서 공유 버튼을 누른 뒤 AI Memo를 선택하면 링크가 자동 저장됩니다. 이 기능은 dev build에서 동작합니다.'
-                      : '지금 화면에서는 붙여넣기로 흐름을 먼저 검증합니다. Android 공유 인입은 dev build에서 테스트합니다.'}
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.guidanceCard}>
-              <Text style={styles.sectionTitle}>이번 단계에서 확인할 기준</Text>
-              <View style={styles.checklist}>
-                <ChecklistItem text="저장 버튼을 누르면 즉시 로컬 DB에 반영되는가" />
-                <ChecklistItem text="앱을 다시 열어도 목록이 그대로 남아 있는가" />
-                <ChecklistItem text="AI가 없어도 화면이 허전하지 않고 읽히는가" />
-                <ChecklistItem text="저장 직후 sync queue가 1건 쌓이는가" />
-              </View>
-            </View>
-          </View>
-
-          <View style={[styles.rightColumn, isWideLayout && styles.rightColumnWide]}>
             <View style={styles.panel}>
               <View style={styles.panelTopRow}>
-                <Text style={styles.sectionTitle}>저장 목록</Text>
-                <Text style={styles.sectionMeta}>{items.length} items</Text>
+                <Text style={styles.sectionTitle}>수집된 Inbox 지식</Text>
+                <Text style={styles.sectionMeta}>{filteredItems.length} items</Text>
               </View>
 
               {isInitializing ? (
@@ -428,29 +603,16 @@ export function HomeScreen() {
                   <ActivityIndicator color={palette.accent} />
                   <Text style={styles.loadingText}>로컬 데이터를 불러오는 중입니다.</Text>
                 </View>
-              ) : !isReady && hasInitializationAttempted ? (
-                <View style={styles.initErrorCard}>
-                  <Text style={styles.initErrorTitle}>로컬 저장소 초기화에 실패했습니다</Text>
-                  <Text style={styles.initErrorDescription}>
-                    저장소 준비가 끝나지 않아 목록을 읽지 못했습니다. 다시 시도해 주세요.
-                  </Text>
-                  <Pressable
-                    onPress={() => void initialize()}
-                    style={[styles.button, styles.secondaryButton]}
-                  >
-                    <Text style={styles.secondaryButtonText}>다시 시도</Text>
-                  </Pressable>
-                </View>
-              ) : items.length === 0 ? (
+              ) : filteredItems.length === 0 ? (
                 <EmptyState />
               ) : (
                 <View style={styles.cardList}>
-                  {items.map((item) => {
+                  {filteredItems.map((item) => {
                     const theme = getSourceTheme(item.sourceType);
                     return (
                       <Pressable
                         key={item.id}
-                        onPress={() => selectItem(item.id)}
+                        onPress={() => handleSelectItem(item.id)}
                         style={({ pressed }) => [
                           styles.card,
                           item.id === selectedItem?.id && styles.cardSelected,
@@ -461,7 +623,10 @@ export function HomeScreen() {
                         <View
                           style={[
                             styles.cardAccent,
-                            { backgroundColor: theme.badgeText },
+                            { 
+                              backgroundColor: theme.badgeText,
+                              opacity: item.id === selectedItem?.id ? 1 : 0.45,
+                            },
                           ]}
                         />
                         <ItemCard item={item} />
@@ -471,163 +636,570 @@ export function HomeScreen() {
                 </View>
               )}
             </View>
+          </View>
 
-            <View style={styles.panel}>
-              <View style={styles.panelTopRow}>
-                <Text style={styles.sectionTitle}>선택한 항목</Text>
-                <Text style={styles.sectionMeta}>
-                  {selectedItem ? formatRelativeTime(selectedItem.createdAt) : '선택 없음'}
-                </Text>
-              </View>
-
-              {selectedItem ? (
-                (() => {
-                  const theme = getSourceTheme(selectedItem.sourceType);
-                  return (
-                    <View style={styles.detailCard}>
-                      <View style={[styles.detailHero, { borderColor: theme.border, backgroundColor: theme.bg }]}>
-                        <View style={styles.detailHeroText}>
-                          <Text style={styles.detailTitle}>{selectedItem.title}</Text>
-                          <Text style={[styles.detailSource, { color: theme.badgeText, fontWeight: '700' }]}>
-                            {theme.label} · {selectedItem.sourceUrl ? getHostname(selectedItem.sourceUrl) : '로컬'}
-                          </Text>
-                        </View>
-                        <View style={[styles.pendingBadge, { backgroundColor: theme.badgeBg }]}>
-                          <Text style={[styles.pendingBadgeText, { color: theme.badgeText }]}>
-                            {getStatusLabel(selectedItem)}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.detailGrid}>
-                        <MetaBlock label="원본 링크" value={selectedItem.sourceUrl ? truncateMiddle(selectedItem.sourceUrl) : '없음'} />
-                        <MetaBlock label="동기화" value={getSyncStatusLabel(selectedItem.syncStatus)} />
-                        <MetaBlock label="생성 시각" value={formatReadableDate(selectedItem.createdAt)} />
-                        <MetaBlock label="유형" value={selectedItem.type === 'url' ? '링크 저장' : '텍스트 메모'} />
-                      </View>
-
-                      <View style={styles.detailSection}>
-                        <Text style={styles.detailLabel}>원문 (SNS DM / 캡션 전체)</Text>
-                        <ScrollView style={styles.rawInputScrollView} nestedScrollEnabled showsVerticalScrollIndicator={true}>
-                          <Text style={styles.detailRawInputText}>{selectedItem.rawInput}</Text>
-                        </ScrollView>
-                      </View>
-
-                      <View style={styles.detailSection}>
-                        <Text style={styles.detailLabel}>퀵 한 줄 메모</Text>
-                        <View style={styles.noteInputRow}>
-                          <TextInput
-                            style={styles.noteInput}
-                            placeholder="보낸 사람이나 저장한 맥락을 잊지 않게 적어두세요."
-                            placeholderTextColor={palette.textMuted}
-                            value={userNoteInput}
-                            onChangeText={setUserNoteInput}
-                            multiline
-                            blurOnSubmit={true}
-                          />
-                          <Pressable
-                            onPress={handleSaveUserNote}
-                            style={({ pressed }) => [
-                              styles.noteSaveButton,
-                              { transform: [{ scale: pressed ? 0.94 : 1 }] }
-                            ]}
-                          >
-                            <Text style={styles.noteSaveButtonText}>저장</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-
-                      {selectedItem.extractedUrls && selectedItem.extractedUrls.length > 0 ? (
-                        <View style={styles.detailSection}>
-                          <Text style={styles.detailLabel}>추출된 링크 목록 ({selectedItem.extractedUrls.length}개)</Text>
-                          <View style={styles.extractedUrlsList}>
-                            {selectedItem.extractedUrls.map((url, idx) => (
-                              <Pressable
-                                key={url + idx}
-                                onPress={() => Linking.openURL(url).catch(() => setToastMessage('링크를 열 수 없습니다.'))}
-                                style={({ pressed }) => [
-                                  styles.urlClickableRow,
-                                  { transform: [{ scale: pressed ? 0.96 : 1 }] }
-                                ]}
-                              >
-                                <Text style={styles.urlClickableNum}>#{idx + 1}</Text>
-                                <Text style={styles.urlClickableText} numberOfLines={1}>
-                                  {url}
-                                </Text>
-                              </Pressable>
-                            ))}
-                          </View>
-                        </View>
-                      ) : null}
-
-                      {selectedItem.type === 'url' && (
-                        <View style={styles.thumbnailPanel}>
-                          <Text style={styles.detailLabel}>썸네일</Text>
-                          <View style={styles.thumbnailPreview}>
-                            {selectedItem.thumbnailUrl ? (
-                              <>
-                                <Image
-                                  source={{ uri: selectedItem.thumbnailUrl }}
-                                  style={styles.thumbnailImage}
-                                  resizeMode="cover"
-                                />
-                                <Text style={styles.thumbnailTitle}>대표 이미지 후보를 찾았습니다</Text>
-                                <Text style={styles.thumbnailUrl}>{truncateMiddle(selectedItem.thumbnailUrl)}</Text>
-                              </>
-                            ) : (
-                              <Text style={styles.thumbnailEmptyText}>
-                                아직 썸네일을 찾지 못했습니다. 도메인별 파서가 더 붙으면 정확도가 올라갑니다.
-                              </Text>
-                            )}
-                          </View>
-                        </View>
-                      )}
-
-                      <View style={styles.detailSection}>
-                        <Text style={styles.detailLabel}>AI 정리 및 요약</Text>
-                        <Text style={styles.detailValue}>{selectedItem.summary}</Text>
-                      </View>
-                    </View>
-                  );
-                })()
-              ) : (
-                <View style={styles.detailEmpty}>
-                  <Text style={styles.detailEmptyTitle}>아직 선택된 항목이 없습니다</Text>
-                  <Text style={styles.detailEmptyText}>
-                    첫 링크를 저장하면 오른쪽 패널에서 상세 상태를 바로 확인할 수 있습니다.
+          {/* 태블릿/웹 전용 우측 분할 화면 상세뷰 */}
+          {isWideLayout && (
+            <View style={[styles.rightColumn, isWideLayout && styles.rightColumnWide]}>
+              <View style={styles.panel}>
+                <View style={styles.panelTopRow}>
+                  <Text style={styles.sectionTitle}>선택한 지식 상세</Text>
+                  <Text style={styles.sectionMeta}>
+                    {selectedItem ? formatRelativeTime(selectedItem.createdAt) : '선택 없음'}
                   </Text>
                 </View>
-              )}
+
+                {selectedItem ? (
+                  <DetailContent 
+                    selectedItem={selectedItem} 
+                    checkedItems={checkedItems} 
+                    onToggleCheck={handleToggleCheck} 
+                  />
+                ) : (
+                  <DetailEmpty />
+                )}
+              </View>
             </View>
+          )}
+        </View>
+      </ScrollView>
+
+      {/* 모바일 화면용 프리미엄 스윙 바텀 시트 */}
+      {!isWideLayout && isDetailVisible && selectedItem && (
+        <View style={styles.bottomSheetBackdrop}>
+          <Pressable style={styles.backdropClickable} onPress={() => setIsDetailVisible(false)} />
+          <View style={styles.bottomSheetContainer}>
+            <View style={styles.bottomSheetHeader}>
+              <View style={styles.bottomSheetHandle} />
+              <Pressable 
+                onPress={() => setIsDetailVisible(false)} 
+                style={({ pressed }) => [
+                  styles.bottomSheetCloseBtn,
+                  { transform: [{ scale: pressed ? 0.85 : 1 }] }
+                ]}
+              >
+                <Text style={styles.bottomSheetCloseBtnText}>✕</Text>
+              </Pressable>
+            </View>
+            <ScrollView contentContainerStyle={styles.bottomSheetContent} showsVerticalScrollIndicator={false}>
+              <DetailContent 
+                selectedItem={selectedItem} 
+                checkedItems={checkedItems} 
+                onToggleCheck={handleToggleCheck} 
+              />
+            </ScrollView>
           </View>
         </View>
+      )}
 
-        {runtimeErrorMessage ? (
-          <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>{runtimeErrorMessage}</Text>
-          </View>
-        ) : null}
-      </ScrollView>
+      {runtimeErrorMessage ? (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{runtimeErrorMessage}</Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  helper,
-}: {
-  label: string;
-  value: string;
-  helper: string;
+// ==========================================
+// 럭셔리 세부 정보 렌더링 서브 컴포넌트 (도메인 특화 템플릿 장착)
+// ==========================================
+function DetailContent({ 
+  selectedItem,
+  checkedItems,
+  onToggleCheck,
+}: { 
+  selectedItem: SavedItem;
+  checkedItems: Record<string, Record<string, boolean>>;
+  onToggleCheck: (itemId: string, key: string) => void;
 }) {
+  const theme = getSourceTheme(selectedItem.sourceType);
+  const [userNoteInput, setUserNoteInput] = useState('');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isMetaExpanded, setIsMetaExpanded] = useState(false);
+  const updateUserNote = useAppStore((state) => state.updateUserNote);
+  const retryEnrichMetadata = useAppStore((state) => state.retryEnrichMetadata);
+  const isSaving = useAppStore((state) => state.isSaving);
+
+  useEffect(() => {
+    setUserNoteInput(selectedItem.userNote ?? '');
+  }, [selectedItem.id, selectedItem.userNote]);
+
+  async function handleSaveUserNote() {
+    await updateUserNote(selectedItem.id, userNoteInput);
+    setToastMessage('메모가 저장되었습니다.');
+  }
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const t = setTimeout(() => setToastMessage(null), 1800);
+    return () => clearTimeout(t);
+  }, [toastMessage]);
+
+  const structured = tryParseStructuredContent(selectedItem.content);
+
   return (
-    <View style={styles.metricCard}>
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={styles.metricValue}>{value}</Text>
-      <Text style={styles.metricHelper}>{helper}</Text>
+    <View style={styles.detailCard}>
+      {toastMessage ? (
+        <View style={styles.toast}>
+          <View style={styles.toastDot} />
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </View>
+      ) : null}
+
+      {/* 1. 헤더 히어로 영역 */}
+      <View style={[styles.detailHero, { borderColor: theme.border, backgroundColor: theme.bg }]}>
+        <View style={styles.detailHeroText}>
+          <Text style={styles.detailTitle}>{selectedItem.title}</Text>
+          <Text style={[styles.detailSource, { color: theme.badgeText, fontWeight: '700' }]}>
+            {theme.label} · {selectedItem.sourceUrl ? getHostname(selectedItem.sourceUrl) : '로컬'}
+          </Text>
+        </View>
+        <View style={styles.detailHeroActionsRow}>
+          <View style={[styles.pendingBadge, { backgroundColor: theme.badgeBg }]}>
+            <Text style={[styles.pendingBadgeText, { color: theme.badgeText }]}>
+              {getStatusLabel(selectedItem)}
+            </Text>
+          </View>
+          {selectedItem.sourceUrl ? (
+            <Pressable
+              onPress={() => Linking.openURL(selectedItem.sourceUrl!).catch(() => {})}
+              style={({ pressed }) => [
+                styles.openSourceBtn,
+                { transform: [{ scale: pressed ? 0.95 : 1 }] }
+              ]}
+            >
+              <Text style={styles.openSourceBtnText}>원본 링크 열기 🔗</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+
+      {/* 2. 퀵 한 줄 메모 (최상단 배치로 개선) */}
+      <View style={styles.detailSection}>
+        <Text style={styles.detailLabel}>퀵 한 줄 메모</Text>
+        <View style={styles.noteInputRow}>
+          <TextInput
+            style={styles.noteInput}
+            placeholder="보낸 사람이나 저장한 맥락을 잊지 않게 적어두세요."
+            placeholderTextColor={palette.textMuted}
+            value={userNoteInput}
+            onChangeText={setUserNoteInput}
+            multiline
+            blurOnSubmit={true}
+          />
+          <Pressable
+            onPress={handleSaveUserNote}
+            style={({ pressed }) => [
+              styles.noteSaveButton,
+              { transform: [{ scale: pressed ? 0.94 : 1 }] }
+            ]}
+          >
+            <Text style={styles.noteSaveButtonText}>저장</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* 3. AI 정리 및 요약 카드 */}
+      <View style={styles.summaryCard}>
+        <View style={styles.summaryHeader}>
+          <Text style={styles.summaryTitle}>✨ AI 정리 요약 상세</Text>
+          <Pressable
+            disabled={isSaving || selectedItem.aiStatus === 'pending'}
+            onPress={async () => {
+              await retryEnrichMetadata(selectedItem.id);
+              setToastMessage('AI 분석을 다시 요청했습니다.');
+            }}
+            style={({ pressed }) => [
+              styles.reanalyzeBtn,
+              (pressed || isSaving || selectedItem.aiStatus === 'pending') && { opacity: 0.5 }
+            ]}
+          >
+            {isSaving || selectedItem.aiStatus === 'pending' ? (
+              <ActivityIndicator size="small" color="#c084fc" />
+            ) : (
+              <Text style={styles.reanalyzeBtnText}>AI 재분석 🧪</Text>
+            )}
+          </Pressable>
+        </View>
+        <Text style={styles.summaryValue}>
+          {structured?.detailedAnalysis || selectedItem.summary || 'AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.'}
+        </Text>
+      </View>
+
+      {/* 3. 도메인 특화 구조화 데이터 */}
+      {structured && structured.category === 'recipe' && (
+        <View style={styles.domainSpecCard}>
+          <View style={[styles.domainSpecHeader, { borderLeftColor: '#ef4444' }]}>
+            <Text style={styles.domainSpecHeaderEmoji}>🍳</Text>
+            <View>
+              <Text style={styles.domainSpecTitle}>AI 장보기 요리 재료 목록</Text>
+              <Text style={styles.domainSpecSub}>난이도: {structured.difficulty} · 조리시간: {structured.cookTime}</Text>
+            </View>
+          </View>
+
+          {/* 실시간 재료 준비율 프로그레스 바 */}
+          {(() => {
+            const list = (structured.ingredients as string[]) || [];
+            const total = list.length;
+            const checked = list.filter((ing) => checkedItems[selectedItem.id]?.[ing]).length;
+            const ratio = total > 0 ? (checked / total) * 100 : 0;
+            return (
+              <View style={styles.progressBarContainer}>
+                <View style={styles.progressBarHeader}>
+                  <Text style={styles.progressBarLabel}>재료 준비율</Text>
+                  <Text style={styles.progressBarValue}>{total}개 중 {checked}개 준비 완료 ({Math.round(ratio)}%)</Text>
+                </View>
+                <View style={styles.progressBarBg}>
+                  <View style={[styles.progressBarFill, { width: `${ratio}%`, backgroundColor: '#8b5cf6' }]} />
+                </View>
+              </View>
+            );
+          })()}
+
+          <View style={styles.ingredientsGrid}>
+            {(structured.ingredients as string[]).map((ing) => {
+              const isChecked = !!checkedItems[selectedItem.id]?.[ing];
+              return (
+                <Pressable
+                  key={ing}
+                  onPress={() => onToggleCheck(selectedItem.id, ing)}
+                  style={({ pressed }) => [
+                    styles.ingredientBadge,
+                    isChecked && styles.ingredientBadgeChecked,
+                    { transform: [{ scale: pressed ? 0.95 : 1 }] }
+                  ]}
+                >
+                  <Text style={[styles.ingredientBadgeDot, isChecked && styles.ingredientBadgeDotChecked]}>
+                    {isChecked ? '✔' : '○'}
+                  </Text>
+                  <Text style={[styles.ingredientBadgeText, isChecked && styles.ingredientBadgeTextChecked]}>
+                    {ing}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      )}
+
+      {structured && structured.category === 'workout' && (
+        <View style={styles.domainSpecCard}>
+          <View style={[styles.domainSpecHeader, { borderLeftColor: '#8b5cf6' }]}>
+            <Text style={styles.domainSpecHeaderEmoji}>💪</Text>
+            <View>
+              <Text style={styles.domainSpecTitle}>AI 스마트 운동 루틴 & 타겟 부위</Text>
+              <Text style={styles.domainSpecSub}>필요도구: {(structured.equipments as string[]).join(', ')}</Text>
+            </View>
+          </View>
+          
+          <View style={styles.muscleRow}>
+            <Text style={styles.muscleLabel}>타겟 부위</Text>
+            <View style={styles.muscleBadgeRow}>
+              {(structured.targetMuscles as string[]).map((m) => (
+                <Text key={m} style={styles.muscleBadge}>{m}</Text>
+              ))}
+            </View>
+          </View>
+
+          {/* 스마트 홈트 수행 완료 프로그레스 바 */}
+          {(() => {
+            const list = (structured.routine as string[]) || [];
+            const total = list.length;
+            const checked = list.filter((r) => checkedItems[selectedItem.id]?.[r]).length;
+            const ratio = total > 0 ? (checked / total) * 100 : 0;
+            return (
+              <View style={styles.progressBarContainer}>
+                <View style={styles.progressBarHeader}>
+                  <Text style={styles.progressBarLabel}>루틴 완수도</Text>
+                  <Text style={styles.progressBarValue}>{total}개 중 {checked}개 완료 ({Math.round(ratio)}%)</Text>
+                </View>
+                <View style={styles.progressBarBg}>
+                  <View style={[styles.progressBarFill, { width: `${ratio}%`, backgroundColor: '#8b5cf6' }]} />
+                </View>
+              </View>
+            );
+          })()}
+
+          <View style={styles.routineList}>
+            {(structured.routine as string[]).map((r, idx) => {
+              const isChecked = !!checkedItems[selectedItem.id]?.[r];
+              return (
+                <Pressable
+                  key={r}
+                  onPress={() => onToggleCheck(selectedItem.id, r)}
+                  style={({ pressed }) => [
+                    styles.routineItem,
+                    isChecked && styles.routineItemChecked,
+                    { transform: [{ scale: pressed ? 0.97 : 1 }] }
+                  ]}
+                >
+                  <Text style={[styles.routineIndex, isChecked && styles.routineIndexChecked]}>
+                    {isChecked ? '✔' : idx + 1}
+                  </Text>
+                  <Text style={[styles.routineText, isChecked && styles.routineTextChecked]}>
+                    {r}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      )}
+
+      {structured && structured.category === 'travel' && (
+        <View style={styles.domainSpecCard}>
+          <View style={[styles.domainSpecHeader, { borderLeftColor: '#3b82f6' }]}>
+            <Text style={styles.domainSpecHeaderEmoji}>✈</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.domainSpecTitle}>AI 호캉스 코스 및 숙소 예산 정보</Text>
+              <Text style={styles.domainSpecSub}>테마: {structured.travelTheme}</Text>
+            </View>
+            {/* 국내/해외/호캉스 테마 선명 배지 */}
+            <View style={styles.travelThemeBadgeRow}>
+              {structured.travelTheme && structured.travelTheme.includes('국내') && (
+                <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', borderColor: '#3b82f6' }]}>국내 🇰🇷</Text>
+              )}
+              {structured.travelTheme && structured.travelTheme.includes('해외') && (
+                <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(236, 72, 153, 0.15)', color: '#fbcfe8', borderColor: '#ec4899' }]}>해외 ✈</Text>
+              )}
+              {structured.travelTheme && structured.travelTheme.includes('호캉스') && (
+                <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(139, 92, 246, 0.15)', color: '#c084fc', borderColor: '#8b5cf6' }]}>호캉스 🏨</Text>
+              )}
+            </View>
+          </View>
+
+          <View style={styles.travelGrid}>
+            <View style={styles.travelGridBlock}>
+              <Text style={styles.travelBlockLabel}>📍 호텔 위치</Text>
+              <Text style={styles.travelBlockVal}>{structured.location}</Text>
+            </View>
+            <View style={styles.travelGridBlock}>
+              <Text style={styles.travelBlockLabel}>💵 1박 예상 예산</Text>
+              <Text style={styles.travelBlockVal}>{structured.budget}</Text>
+            </View>
+          </View>
+
+          <View style={styles.travelHighlightRow}>
+            <Text style={styles.travelHighlightLabel}>핵심 요약 스팟</Text>
+            <View style={styles.travelHighlightsContainer}>
+              {(structured.highlights as string[]).map((h) => (
+                <Text key={h} style={styles.travelHighlightText}>⭐ {h}</Text>
+              ))}
+            </View>
+          </View>
+
+          {/* 여행 준비물/체크리스트 프로그레스 바 & 리스트 */}
+          {structured.checklist && (structured.checklist as string[]).length > 0 && (
+            <View style={styles.travelChecklistSection}>
+              <Text style={styles.travelHighlightLabel}>여행 준비물 및 예약 체크리스트</Text>
+              
+              {(() => {
+                const list = (structured.checklist as string[]) || [];
+                const total = list.length;
+                const checked = list.filter((item) => checkedItems[selectedItem.id]?.[item]).length;
+                const ratio = total > 0 ? (checked / total) * 100 : 0;
+                return (
+                  <View style={styles.progressBarContainer}>
+                    <View style={styles.progressBarHeader}>
+                      <Text style={styles.progressBarLabel}>준비 완료도</Text>
+                      <Text style={styles.progressBarValue}>{total}개 중 {checked}개 완료 ({Math.round(ratio)}%)</Text>
+                    </View>
+                    <View style={styles.progressBarBg}>
+                      <View style={[styles.progressBarFill, { width: `${ratio}%`, backgroundColor: '#3b82f6' }]} />
+                    </View>
+                  </View>
+                );
+              })()}
+
+              <View style={styles.travelChecklistGrid}>
+                {(structured.checklist as string[]).map((item) => {
+                  const isChecked = !!checkedItems[selectedItem.id]?.[item];
+                  return (
+                    <Pressable
+                      key={item}
+                      onPress={() => onToggleCheck(selectedItem.id, item)}
+                      style={({ pressed }) => [
+                        styles.travelChecklistItem,
+                        isChecked && styles.travelChecklistItemChecked,
+                        { transform: [{ scale: pressed ? 0.96 : 1 }] }
+                      ]}
+                    >
+                      <Text style={[styles.travelChecklistIcon, isChecked && styles.travelChecklistIconChecked]}>
+                        {isChecked ? '✔' : '□'}
+                      </Text>
+                      <Text style={[styles.travelChecklistText, isChecked && styles.travelChecklistTextChecked]}>
+                        {item}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* 4. 추출된 링크 목록 */}
+      {selectedItem.extractedUrls && selectedItem.extractedUrls.length > 0 ? (
+        <View style={styles.detailSection}>
+          <Text style={styles.detailLabel}>추출된 링크 목록 ({selectedItem.extractedUrls.length}개)</Text>
+          <View style={styles.extractedUrlsList}>
+            {selectedItem.extractedUrls.map((url, idx) => (
+              <Pressable
+                key={url + idx}
+                onPress={() => Linking.openURL(url).catch(() => {})}
+                style={({ pressed }) => [
+                  styles.urlClickableRow,
+                  { transform: [{ scale: pressed ? 0.96 : 1 }] }
+                ]}
+              >
+                <Text style={urlClickableNumStyle(selectedItem.sourceType)}>#{idx + 1}</Text>
+                <Text style={urlClickableTextStyle(selectedItem.sourceType)} numberOfLines={1}>
+                  {url}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      {/* 6. 썸네일 */}
+      {selectedItem.type === 'url' && selectedItem.thumbnailUrl ? (
+        <View style={styles.thumbnailPanel}>
+          <Text style={styles.detailLabel}>썸네일</Text>
+          <View style={styles.thumbnailPreview}>
+            <Image
+              source={{ uri: selectedItem.thumbnailUrl }}
+              style={styles.thumbnailImage as any}
+              resizeMode="cover"
+            />
+            <Text style={styles.thumbnailTitle}>대표 이미지 후보를 찾았습니다</Text>
+            <Text style={styles.thumbnailUrl}>{truncateMiddle(selectedItem.thumbnailUrl)}</Text>
+          </View>
+        </View>
+      ) : null}
+
+      {/* 7. 기술 상세 메타 정보 (접이식) */}
+      <View style={styles.collapsibleArea}>
+        <Pressable
+          onPress={() => setIsMetaExpanded(!isMetaExpanded)}
+          style={({ pressed }) => [
+            styles.collapsibleHeader,
+            { opacity: pressed ? 0.7 : 1 }
+          ]}
+        >
+          <Text style={styles.collapsibleHeaderText}>
+            {isMetaExpanded ? '기술 상세 메타 정보 접기 ▴' : '기술 상세 메타 정보 보기 ▾'}
+          </Text>
+        </Pressable>
+        {isMetaExpanded ? (
+          <View style={styles.collapsibleContent}>
+            <View style={styles.detailGrid}>
+              <MetaBlock label="원본 링크" value={selectedItem.sourceUrl ? truncateMiddle(selectedItem.sourceUrl) : '없음'} />
+              <MetaBlock label="동기화" value={getSyncStatusLabel(selectedItem.syncStatus)} />
+              <MetaBlock label="생성 시각" value={formatReadableDate(selectedItem.createdAt)} />
+              <MetaBlock label="유형" value={selectedItem.type === 'url' ? '링크 저장' : '텍스트 메모'} />
+            </View>
+
+            <View style={styles.detailSection}>
+              <Text style={styles.detailLabel}>원문 전체</Text>
+              <ScrollView style={styles.rawInputScrollView} nestedScrollEnabled showsVerticalScrollIndicator={true}>
+                <Text style={styles.detailRawInputText}>{selectedItem.rawInput}</Text>
+              </ScrollView>
+            </View>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
+}
+
+function DetailEmpty() {
+  return (
+    <View style={styles.detailEmpty}>
+      <Text style={styles.detailEmptyTitle}>아직 선택된 항목이 없습니다</Text>
+      <Text style={styles.detailEmptyText}>
+        첫 지식을 수집하면 오른쪽 패널에서 상세 상태를 바로 확인할 수 있습니다.
+      </Text>
+    </View>
+  );
+}
+
+// ==========================================
+// 보조 렌더링 헬퍼 함수들
+// ==========================================
+function tryParseStructuredContent(content: string) {
+  try {
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+
+function getItemCategory(item: SavedItem): string {
+  const structured = tryParseStructuredContent(item.content);
+  const category = structured?.category || item.sourceType;
+
+  if (category === 'parenting') {
+    return 'parenting';
+  }
+  if (category === 'travel') {
+    return 'travel';
+  }
+  if (category === 'recipe') {
+    return 'recipe';
+  }
+  if (category === 'workout') {
+    return 'workout';
+  }
+
+  const title = item.title.toLowerCase();
+  const content = item.content.toLowerCase();
+
+  // 육아 키워드 감지
+  if (
+    title.includes('기저귀') || title.includes('분유') || title.includes('육아') || title.includes('아동') || title.includes('출산') || title.includes('다자녀') ||
+    content.includes('기저귀') || content.includes('분유') || content.includes('육아') || content.includes('아동') || content.includes('출산') || content.includes('다자녀')
+  ) {
+    return 'parenting';
+  }
+
+  // 여행 키워드 감지
+  if (
+    title.includes('여행') || title.includes('호캉스') || title.includes('항공권') ||
+    content.includes('여행') || content.includes('호캉스') || content.includes('항공권')
+  ) {
+    return 'travel';
+  }
+
+  // 요리 키워드 감지
+  if (
+    title.includes('레시피') || title.includes('요리') || title.includes('조리법') ||
+    content.includes('레시피') || content.includes('요리') || content.includes('조리법')
+  ) {
+    return 'recipe';
+  }
+
+  // 운동 키워드 감지
+  if (
+    title.includes('운동') || title.includes('루틴') || title.includes('홈트') || title.includes('헬스') ||
+    content.includes('운동') || content.includes('루틴') || content.includes('홈트') || content.includes('헬스')
+  ) {
+    return 'workout';
+  }
+
+  return 'other';
+}
+
+function urlClickableNumStyle(sourceType: string) {
+  const theme = getSourceTheme(sourceType);
+  return [styles.urlClickableNum, { color: theme.badgeText }];
+}
+
+function urlClickableTextStyle(sourceType: string) {
+  const theme = getSourceTheme(sourceType);
+  return [styles.urlClickableText, { color: theme.badgeText }];
 }
 
 function ItemCard({ item }: { item: SavedItem }) {
@@ -636,11 +1208,11 @@ function ItemCard({ item }: { item: SavedItem }) {
       <View style={styles.cardRow}>
         <View style={styles.cardTextColumn}>
           <View style={styles.cardMetaRow}>
-            <Text style={styles.cardSource}>{getItemSourceLabel(item)}</Text>
+            <Text style={styles.cardSource} numberOfLines={1}>{getItemSourceLabel(item)}</Text>
             <StatusBadge label={getStatusLabel(item)} compact />
           </View>
-          <Text style={styles.cardTitle}>{item.title}</Text>
-          <Text style={styles.cardSummary}>{item.summary}</Text>
+          <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
+          <Text style={styles.cardSummary} numberOfLines={3}>{item.summary || '요약된 내용이 없습니다.'}</Text>
           <Text style={styles.cardTimestamp}>{formatReadableDate(item.createdAt)}</Text>
         </View>
         <ThumbnailThumb item={item} />
@@ -654,7 +1226,7 @@ function ThumbnailThumb({ item }: { item: SavedItem }) {
     return (
       <Image
         source={{ uri: item.thumbnailUrl }}
-        style={styles.cardThumbnail}
+        style={styles.cardThumbnail as any}
         resizeMode="cover"
       />
     );
@@ -669,22 +1241,12 @@ function ThumbnailThumb({ item }: { item: SavedItem }) {
   );
 }
 
-function ChecklistItem({ text }: { text: string }) {
-  return (
-    <View style={styles.checklistItem}>
-      <View style={styles.checkDot} />
-      <Text style={styles.checkText}>{text}</Text>
-    </View>
-  );
-}
-
 function EmptyState() {
   return (
     <View style={styles.emptyState}>
-      <Text style={styles.emptyTitle}>아직 저장된 링크가 없습니다</Text>
+      <Text style={styles.emptyTitle}>수집함이 비어 있습니다</Text>
       <Text style={styles.emptyDescription}>
-        유튜브나 인스타 URL을 붙여넣으면 목록에 바로 쌓이고, 재실행 후에도 그대로 남아
-        있어야 합니다.
+        유튜브, 인스타그램, 노션 링크를 복사하여 붙여넣으면 즉시 분류되어 이곳에 차곡차곡 안전하게 쌓입니다.
       </Text>
     </View>
   );
@@ -694,16 +1256,6 @@ function StatusBadge({ label, compact = false }: { label: string; compact?: bool
   return (
     <View style={[styles.pendingBadge, compact && styles.pendingBadgeCompact]}>
       <Text style={styles.pendingBadgeText}>{label}</Text>
-    </View>
-  );
-}
-
-function Chip({ label, tone }: { label: string; tone: 'accent' | 'neutral' }) {
-  return (
-    <View style={[styles.chip, tone === 'accent' ? styles.chipAccent : styles.chipNeutral]}>
-      <Text style={[styles.chipText, tone === 'accent' ? styles.chipAccentText : styles.chipNeutralText]}>
-        {label}
-      </Text>
     </View>
   );
 }
@@ -721,55 +1273,66 @@ function getSourceTheme(sourceType: string) {
   switch (sourceType) {
     case 'youtube':
       return {
-        border: 'rgba(239, 68, 68, 0.08)',
-        bg: 'rgba(239, 68, 68, 0.04)',
-        badgeBg: '#fee2e2',
-        badgeText: '#ef4444',
+        border: 'rgba(239, 68, 68, 0.2)',
+        bg: 'rgba(239, 68, 68, 0.1)',
+        badgeBg: 'rgba(239, 68, 68, 0.18)',
+        badgeText: '#fca5a5',
         label: 'YouTube',
+      };
+    case 'parenting':
+      return {
+        border: 'rgba(251, 146, 60, 0.2)',
+        bg: 'rgba(251, 146, 60, 0.1)',
+        badgeBg: 'rgba(251, 146, 60, 0.18)',
+        badgeText: '#fdbb2d',
+        label: '육아 👶',
       };
     case 'instagram':
     case 'instagram_post':
     case 'instagram_reel':
+    case 'workout':
       return {
-        border: 'rgba(236, 72, 153, 0.08)',
-        bg: 'rgba(236, 72, 153, 0.04)',
-        badgeBg: '#fce7f3',
-        badgeText: '#ec4899',
-        label: sourceType === 'instagram_reel' ? 'Instagram Reel' : sourceType === 'instagram_post' ? 'Instagram Post' : 'Instagram',
+        border: 'rgba(236, 72, 153, 0.2)',
+        bg: 'rgba(236, 72, 153, 0.1)',
+        badgeBg: 'rgba(236, 72, 153, 0.18)',
+        badgeText: '#fbcfe8',
+        label: sourceType === 'workout' ? '홈트/운동' : sourceType === 'instagram_reel' ? 'Instagram Reel' : sourceType === 'instagram_post' ? 'Instagram Post' : 'Instagram',
       };
     case 'notion':
+    case 'recipe':
       return {
-        border: 'rgba(71, 85, 105, 0.08)',
-        bg: 'rgba(71, 85, 105, 0.04)',
-        badgeBg: '#f1f5f9',
-        badgeText: '#475569',
-        label: 'Notion',
+        border: 'rgba(239, 68, 68, 0.2)',
+        bg: 'rgba(239, 68, 68, 0.1)',
+        badgeBg: 'rgba(239, 68, 68, 0.18)',
+        badgeText: '#fca5a5',
+        label: sourceType === 'recipe' ? '레시피 요리' : 'Notion',
       };
     case 'google_docs':
     case 'google_sheets':
     case 'google_drive':
     case 'google_form':
+    case 'travel':
       return {
-        border: 'rgba(59, 130, 246, 0.08)',
-        bg: 'rgba(59, 130, 246, 0.04)',
-        badgeBg: '#dbeafe',
-        badgeText: '#3b82f6',
-        label: sourceType === 'google_docs' ? 'Google Docs' : sourceType === 'google_sheets' ? 'Google Sheets' : sourceType === 'google_form' ? 'Google Form' : 'Google Drive',
+        border: 'rgba(59, 130, 246, 0.2)',
+        bg: 'rgba(59, 130, 246, 0.1)',
+        badgeBg: 'rgba(59, 130, 246, 0.18)',
+        badgeText: '#93c5fd',
+        label: sourceType === 'travel' ? '여행 코스' : sourceType === 'google_docs' ? 'Google Docs' : sourceType === 'google_sheets' ? 'Google Sheets' : sourceType === 'google_form' ? 'Google Form' : 'Google Drive',
       };
     case 'manual_text':
       return {
-        border: 'rgba(249, 115, 22, 0.08)',
-        bg: 'rgba(249, 115, 22, 0.04)',
-        badgeBg: '#ffedd5',
-        badgeText: '#f97316',
+        border: 'rgba(249, 115, 22, 0.2)',
+        bg: 'rgba(249, 115, 22, 0.1)',
+        badgeBg: 'rgba(249, 115, 22, 0.18)',
+        badgeText: '#fcd34d',
         label: '직접 메모',
       };
     default:
       return {
-        border: 'rgba(49, 130, 246, 0.08)',
-        bg: 'rgba(49, 130, 246, 0.04)',
-        badgeBg: '#e0f2fe',
-        badgeText: '#3182f6',
+        border: 'rgba(139, 92, 246, 0.2)',
+        bg: 'rgba(139, 92, 246, 0.1)',
+        badgeBg: 'rgba(139, 92, 246, 0.18)',
+        badgeText: '#c084fc',
         label: 'Web Link',
       };
   }
@@ -810,7 +1373,11 @@ function getItemSourceLabel(item: SavedItem) {
     return '직접 입력';
   }
 
-  return new URL(item.sourceUrl).hostname.replace(/^www\./, '');
+  try {
+    return new URL(item.sourceUrl).hostname.replace(/^www\./, '');
+  } catch {
+    return 'web link';
+  }
 }
 
 function formatRelativeTime(value: string) {
@@ -851,31 +1418,115 @@ function truncateMiddle(value: string) {
   return `${value.slice(0, 20)}...${value.slice(-12)}`;
 }
 
+// ==========================================
+// 프리미엄 다크 스타일 정의 (도메인 특화 템플릿 포함)
+// ==========================================
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: palette.background,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[6],
+    paddingTop: spacing[5],
+    paddingBottom: spacing[3],
+    borderBottomWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.background,
+    zIndex: 10,
+  },
+  headerLeft: {
+    gap: 2,
+  },
+  headerEyebrow: {
+    color: '#8b5cf6',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1.8,
+  },
+  headerLogo: {
+    color: palette.textPrimary,
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  syncIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: palette.surface,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  syncPulseDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: palette.success,
+  },
+  syncPulseDotActive: {
+    backgroundColor: '#8b5cf6',
+  },
+  syncPulseDotPending: {
+    backgroundColor: '#fbbf24',
+  },
+  syncIndicatorText: {
+    color: palette.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
   },
   content: {
     padding: spacing[6],
     gap: spacing[6],
   },
+  heroGlowLarge: {
+    position: 'absolute',
+    right: -40,
+    top: 20,
+    width: 260,
+    height: 260,
+    borderRadius: 999,
+    backgroundColor: '#8b5cf6',
+    opacity: 0.12,
+    zIndex: -1,
+  },
+  heroGlowSmall: {
+    position: 'absolute',
+    left: -30,
+    top: 200,
+    width: 160,
+    height: 160,
+    borderRadius: 999,
+    backgroundColor: '#ec4899',
+    opacity: 0.1,
+    zIndex: -1,
+  },
   clipboardBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#ffffff',
-    borderRadius: 26,
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 24,
     paddingHorizontal: spacing[5],
     paddingVertical: spacing[4],
     borderWidth: 1,
-    borderColor: '#e5e8eb',
+    borderColor: palette.borderStrong,
     gap: spacing[3],
     flexWrap: 'wrap',
     shadowColor: '#000000',
-    shadowOpacity: 0.03,
-    shadowRadius: 15,
-    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
   },
   clipboardBannerLeft: {
     flex: 1,
@@ -885,10 +1536,10 @@ const styles = StyleSheet.create({
     minWidth: 260,
   },
   clipboardBannerDot: {
-    width: 10,
-    height: 10,
+    width: 8,
+    height: 8,
     borderRadius: 999,
-    backgroundColor: '#3182f6',
+    backgroundColor: palette.accentStrong,
   },
   clipboardBannerTextColumn: {
     flex: 1,
@@ -911,7 +1562,9 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: spacing[3],
     paddingVertical: 8,
-    backgroundColor: '#f2f4f6',
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
   },
   clipboardBannerCloseBtnText: {
     color: palette.textSecondary,
@@ -922,7 +1575,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: spacing[4],
     paddingVertical: 8,
-    backgroundColor: '#3182f6',
+    backgroundColor: palette.accent,
   },
   clipboardBannerSaveBtnText: {
     color: '#ffffff',
@@ -931,11 +1584,11 @@ const styles = StyleSheet.create({
   },
   rawInputScrollView: {
     maxHeight: 120,
-    backgroundColor: '#f2f4f6',
+    backgroundColor: palette.backgroundStrong,
     borderRadius: 16,
     padding: spacing[3],
     borderWidth: 1,
-    borderColor: '#e5e8eb',
+    borderColor: palette.border,
   },
   detailRawInputText: {
     color: palette.textSecondary,
@@ -949,18 +1602,18 @@ const styles = StyleSheet.create({
   },
   noteInput: {
     flex: 1,
-    backgroundColor: '#f2f4f6',
+    backgroundColor: palette.surface,
     borderRadius: 16,
     paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
+    paddingVertical: 6,
     color: palette.textPrimary,
     fontSize: 13,
-    minHeight: 44,
+    minHeight: 38,
     borderWidth: 1,
-    borderColor: '#e5e8eb',
+    borderColor: palette.border,
   },
   noteSaveButton: {
-    backgroundColor: '#3182f6',
+    backgroundColor: palette.accent,
     borderRadius: 16,
     paddingHorizontal: spacing[4],
     justifyContent: 'center',
@@ -978,96 +1631,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
-    backgroundColor: 'rgba(49, 130, 246, 0.04)',
+    backgroundColor: 'rgba(139, 92, 246, 0.08)',
     borderRadius: 16,
     paddingHorizontal: spacing[3],
     paddingVertical: 10,
     borderWidth: 1,
-    borderColor: 'rgba(49, 130, 246, 0.08)',
+    borderColor: 'rgba(139, 92, 246, 0.15)',
   },
   urlClickableNum: {
-    color: palette.accent,
+    color: '#a78bfa',
     fontSize: 12,
     fontWeight: '800',
   },
   urlClickableText: {
     flex: 1,
-    color: '#3182ce',
+    color: '#c084fc',
     fontSize: 13,
     fontWeight: '700',
-  },
-  hero: {
-    position: 'relative',
-    overflow: 'hidden',
-    backgroundColor: '#ffffff',
-    borderRadius: 28,
-    padding: spacing[7],
-    gap: spacing[6],
-    borderWidth: 1,
-    borderColor: '#e5e8eb',
-    shadowColor: '#000000',
-    shadowOpacity: 0.02,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 8 },
-  },
-  heroGlowLarge: {
-    position: 'absolute',
-    right: -50,
-    top: -30,
-    width: 250,
-    height: 250,
-    borderRadius: 999,
-    backgroundColor: '#8b5cf6',
-    opacity: 0,
-  },
-  heroGlowSmall: {
-    position: 'absolute',
-    left: -40,
-    bottom: -40,
-    width: 160,
-    height: 160,
-    borderRadius: 999,
-    backgroundColor: '#ec4899',
-    opacity: 0,
-  },
-  heroHeader: {
-    gap: spacing[3],
-  },
-  eyebrow: {
-    color: '#3182f6',
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: palette.textPrimary,
-    fontSize: 34,
-    lineHeight: 42,
-    fontWeight: '800',
-    maxWidth: 540,
-  },
-  description: {
-    color: palette.textSecondary,
-    fontSize: 14,
-    lineHeight: 22,
-    maxWidth: 560,
-  },
-  metricsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing[3],
   },
   toast: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
-    backgroundColor: '#e8f8f0',
+    backgroundColor: palette.successSoft,
     borderRadius: 18,
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.1)',
+    borderColor: 'rgba(16, 185, 129, 0.2)',
   },
   toastDot: {
     width: 8,
@@ -1083,12 +1674,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   syncInfoBanner: {
-    backgroundColor: 'rgba(251, 191, 36, 0.05)',
+    backgroundColor: 'rgba(251, 191, 36, 0.08)',
     borderRadius: 18,
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.1)',
+    borderColor: 'rgba(251, 191, 36, 0.2)',
   },
   syncInfoText: {
     color: '#fbbf24',
@@ -1096,34 +1687,9 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontWeight: '700',
   },
-  metricCard: {
-    flexGrow: 1,
-    minWidth: 160,
-    backgroundColor: '#f2f4f6',
-    borderRadius: 20,
-    padding: spacing[4],
-    gap: spacing[1],
-  },
-  metricLabel: {
-    color: palette.textMuted,
-    fontSize: 11,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  metricValue: {
-    color: palette.textPrimary,
-    fontSize: 24,
-    lineHeight: 28,
-    fontWeight: '800',
-  },
-  metricHelper: {
-    color: palette.textSecondary,
-    fontSize: 12,
-    lineHeight: 18,
-  },
   workspace: {
     gap: spacing[6],
+    width: '100%',
   },
   workspaceWide: {
     flexDirection: 'row',
@@ -1131,6 +1697,7 @@ const styles = StyleSheet.create({
   },
   leftColumn: {
     gap: spacing[6],
+    width: '100%',
   },
   leftColumnWide: {
     flex: 0.92,
@@ -1141,49 +1708,74 @@ const styles = StyleSheet.create({
   rightColumnWide: {
     flex: 1.08,
   },
-  composerCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 26,
-    padding: spacing[6],
-    gap: spacing[5],
+  floatingComposer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderRadius: 24,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
     shadowColor: '#000000',
-    shadowOpacity: 0.03,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 2,
-    borderWidth: 1,
-    borderColor: '#e5e8eb',
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 6,
+    gap: spacing[2],
   },
-  guidanceCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 26,
-    padding: spacing[6],
-    gap: spacing[4],
-    borderWidth: 1,
-    borderColor: '#e5e8eb',
+  floatingInput: {
+    flex: 1,
+    color: palette.textPrimary,
+    fontSize: 15,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+  },
+  floatingLoader: {
+    marginRight: 4,
+  },
+  floatingSaveBtn: {
+    backgroundColor: palette.accent,
+    borderRadius: 16,
+    paddingHorizontal: spacing[5],
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  floatingSaveBtnDisabled: {
+    opacity: 0.4,
+  },
+  floatingSaveBtnPressed: {
+    transform: [{ scale: 0.96 }],
+    opacity: 0.9,
+  },
+  floatingSaveBtnText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '900',
   },
   panel: {
-    backgroundColor: '#ffffff',
+    backgroundColor: palette.surface,
     borderRadius: 26,
     padding: spacing[6],
     gap: spacing[5],
     shadowColor: '#000000',
-    shadowOpacity: 0.03,
-    shadowRadius: 18,
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
     shadowOffset: { width: 0, height: 8 },
-    elevation: 2,
+    elevation: 3,
     borderWidth: 1,
-    borderColor: '#e5e8eb',
+    borderColor: palette.border,
   },
   panelHeader: {
     gap: spacing[2],
   },
   panelEyebrow: {
-    color: '#3182f6',
+    color: '#a78bfa',
     fontSize: 12,
     fontWeight: '800',
     textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 1.2,
   },
   panelTitle: {
     color: palette.textPrimary,
@@ -1201,118 +1793,20 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: spacing[3],
+    borderBottomWidth: 1,
+    borderColor: palette.border,
+    paddingBottom: spacing[3],
   },
   sectionTitle: {
     color: palette.textPrimary,
-    fontSize: 20,
-    fontWeight: '800',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: -0.3,
   },
   sectionMeta: {
     color: palette.textMuted,
     fontSize: 13,
-    fontWeight: '700',
-  },
-  tipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing[2],
-  },
-  chip: {
-    borderRadius: 999,
-    paddingHorizontal: spacing[3],
-    paddingVertical: 6,
-  },
-  chipAccent: {
-    backgroundColor: '#3182f6',
-  },
-  chipNeutral: {
-    backgroundColor: '#f2f4f6',
-  },
-  chipText: {
-    fontSize: 11,
     fontWeight: '800',
-  },
-  chipAccentText: {
-    color: '#ffffff',
-  },
-  chipNeutralText: {
-    color: palette.textSecondary,
-  },
-  inputShell: {
-    backgroundColor: '#f9fafb',
-    borderRadius: 22,
-    padding: spacing[4],
-    gap: spacing[3],
-  },
-  inputLabel: {
-    color: palette.textPrimary,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  input: {
-    minHeight: 52,
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    color: palette.textPrimary,
-    fontSize: 14,
-    borderWidth: 1,
-    borderColor: '#e5e8eb',
-  },
-  shareImportBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    backgroundColor: 'rgba(251, 191, 36, 0.05)',
-    borderRadius: 16,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[3],
-    borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.1)',
-  },
-  shareImportText: {
-    flex: 1,
-    color: '#fbbf24',
-    fontSize: 13,
-    lineHeight: 19,
-    fontWeight: '700',
-  },
-  quickLinkRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing[2],
-  },
-  quickLink: {
-    backgroundColor: '#f2f4f6',
-    borderRadius: 999,
-    paddingHorizontal: spacing[3],
-    paddingVertical: 8,
-  },
-  quickLinkText: {
-    color: palette.textSecondary,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: spacing[3],
-  },
-  shareHintCard: {
-    backgroundColor: '#f9fafb',
-    borderRadius: 18,
-    padding: spacing[4],
-    gap: spacing[2],
-  },
-  shareHintTitle: {
-    color: palette.textPrimary,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  shareHintText: {
-    color: palette.textSecondary,
-    fontSize: 13,
-    lineHeight: 20,
   },
   button: {
     borderRadius: 16,
@@ -1322,66 +1816,37 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  primaryButton: {
-    flex: 1,
-    backgroundColor: '#3182f6',
-  },
   secondaryButton: {
-    backgroundColor: '#f2f4f6',
-  },
-  disabledButton: {
-    opacity: 0.5,
-  },
-  primaryButtonText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800',
+    backgroundColor: palette.surfaceRaised,
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
   },
   secondaryButtonText: {
     color: palette.textSecondary,
     fontSize: 14,
     fontWeight: '800',
   },
-  checklist: {
-    gap: spacing[3],
-  },
-  checklistItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-  },
-  checkDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: '#3182f6',
-  },
-  checkText: {
-    flex: 1,
-    color: palette.textSecondary,
-    fontSize: 13,
-    lineHeight: 20,
-  },
   cardList: {
-    gap: spacing[3],
+    gap: 14,
   },
   card: {
     position: 'relative',
     overflow: 'hidden',
-    backgroundColor: '#ffffff',
-    borderRadius: 24,
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'transparent',
+    borderColor: palette.border,
+    minHeight: 115,
   },
   cardSelected: {
-    backgroundColor: '#ffffff',
+    backgroundColor: palette.surfaceStrong,
     shadowColor: '#000000',
-    shadowOpacity: 0.04,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 3,
+    shadowOpacity: 0.25,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 5,
     borderWidth: 1,
-    borderColor: '#e5e8eb',
+    borderColor: palette.accent,
   },
   cardHighlighted: {
     transform: [{ scale: 1.01 }],
@@ -1392,80 +1857,77 @@ const styles = StyleSheet.create({
     left: 0,
     top: 0,
     bottom: 0,
-    width: 6,
-    backgroundColor: '#3182f6',
-  },
-  cardAccentAlt: {
-    backgroundColor: '#3182f6',
+    width: 5,
   },
   cardContent: {
-    paddingVertical: spacing[4],
-    paddingHorizontal: spacing[5],
-    paddingLeft: spacing[6],
+    paddingVertical: 10,
+    paddingHorizontal: spacing[4],
+    paddingLeft: spacing[5],
   },
   cardRow: {
     flexDirection: 'row',
-    gap: spacing[4],
-    alignItems: 'stretch',
+    gap: spacing[3],
+    alignItems: 'center',
   },
   cardTextColumn: {
     flex: 1,
-    gap: spacing[2],
+    gap: 4,
   },
   cardMetaRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    gap: spacing[3],
+    gap: spacing[2],
   },
   cardSource: {
     flex: 1,
     color: palette.textMuted,
-    fontSize: 11,
-    fontWeight: '800',
+    fontSize: 9,
+    fontWeight: '900',
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.8,
   },
   cardTitle: {
     color: palette.textPrimary,
-    fontSize: 18,
-    lineHeight: 24,
-    fontWeight: '800',
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '900',
+    letterSpacing: -0.2,
   },
   cardSummary: {
     color: palette.textSecondary,
-    fontSize: 13,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 17,
   },
   cardTimestamp: {
     color: palette.textMuted,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
-    paddingTop: spacing[1],
+    paddingTop: 2,
   },
   cardThumbnail: {
-    width: 80,
-    height: 80,
-    borderRadius: 14,
-    backgroundColor: '#f2f4f6',
+    width: 60,
+    height: 60,
+    borderRadius: 10,
+    backgroundColor: palette.backgroundStrong,
   },
   cardThumbnailPlaceholder: {
-    width: 80,
-    height: 80,
-    borderRadius: 14,
+    width: 60,
+    height: 60,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f9fafb',
+    backgroundColor: palette.surface,
     borderWidth: 1,
-    borderColor: '#e5e8eb',
+    borderColor: palette.border,
   },
   cardThumbnailPlaceholderText: {
     color: palette.textMuted,
-    fontSize: 14,
+    fontSize: 11,
     fontWeight: '900',
   },
   pendingBadge: {
-    backgroundColor: 'rgba(251, 191, 36, 0.06)',
+    backgroundColor: 'rgba(251, 191, 36, 0.1)',
     borderRadius: 999,
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[1],
@@ -1475,83 +1937,70 @@ const styles = StyleSheet.create({
   },
   pendingBadgeText: {
     color: '#fbbf24',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
   },
   loadingCard: {
-    backgroundColor: '#ffffff',
+    backgroundColor: palette.surface,
     borderRadius: 26,
     padding: spacing[6],
     gap: spacing[3],
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e5e8eb',
+    borderColor: palette.border,
   },
   loadingText: {
     color: palette.textSecondary,
     fontSize: 14,
   },
-  initErrorCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 26,
-    padding: spacing[6],
-    gap: spacing[3],
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.1)',
-  },
-  initErrorTitle: {
-    color: palette.textPrimary,
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  initErrorDescription: {
-    color: palette.textSecondary,
-    fontSize: 14,
-    lineHeight: 22,
-  },
   emptyState: {
-    backgroundColor: '#f9fafb',
+    backgroundColor: palette.surface,
     borderRadius: 26,
-    padding: spacing[6],
+    padding: spacing[8],
     gap: spacing[3],
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: '#e5e8eb',
+    borderColor: palette.borderStrong,
+    alignItems: 'center',
   },
   emptyTitle: {
     color: palette.textPrimary,
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '900',
+    textAlign: 'center',
   },
   emptyDescription: {
     color: palette.textSecondary,
     fontSize: 13,
     lineHeight: 20,
+    textAlign: 'center',
+    maxWidth: 280,
   },
   detailCard: {
-    gap: spacing[4],
+    gap: spacing[3],
   },
   detailHero: {
-    backgroundColor: '#f9fafb',
-    borderRadius: 24,
-    padding: spacing[5],
-    gap: spacing[3],
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 20,
+    padding: spacing[4],
+    gap: spacing[2],
     borderWidth: 1,
-    borderColor: '#e5e8eb',
+    borderColor: palette.border,
   },
   detailHeroText: {
-    gap: spacing[2],
+    gap: spacing[1],
   },
   detailTitle: {
     color: palette.textPrimary,
-    fontSize: 22,
-    lineHeight: 28,
-    fontWeight: '800',
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '900',
+    letterSpacing: -0.3,
   },
   detailSource: {
     color: palette.textSecondary,
-    fontSize: 13,
-    lineHeight: 19,
+    fontSize: 12,
+    lineHeight: 18,
   },
   detailGrid: {
     flexDirection: 'row',
@@ -1562,18 +2011,18 @@ const styles = StyleSheet.create({
     gap: spacing[2],
   },
   thumbnailPreview: {
-    backgroundColor: '#f9fafb',
+    backgroundColor: palette.surface,
     borderRadius: 20,
     padding: spacing[4],
     gap: spacing[2],
     borderWidth: 1,
-    borderColor: '#e5e8eb',
+    borderColor: palette.border,
   },
   thumbnailImage: {
     width: '100%',
     aspectRatio: 16 / 9,
-    borderRadius: 14,
-    backgroundColor: '#f2f4f6',
+    borderRadius: 16,
+    backgroundColor: palette.backgroundStrong,
   },
   thumbnailTitle: {
     color: palette.textPrimary,
@@ -1602,10 +2051,10 @@ const styles = StyleSheet.create({
   },
   metaLabel: {
     color: palette.textMuted,
-    fontSize: 11,
-    fontWeight: '800',
+    fontSize: 10,
+    fontWeight: '900',
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.8,
   },
   metaValue: {
     color: palette.textPrimary,
@@ -1616,12 +2065,103 @@ const styles = StyleSheet.create({
   detailSection: {
     gap: spacing[2],
   },
-  detailLabel: {
-    color: palette.textMuted,
+  detailHeroActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+    marginTop: spacing[1],
+  },
+  openSourceBtn: {
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.35)',
+    borderRadius: 10,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openSourceBtnText: {
+    color: '#93c5fd',
     fontSize: 12,
     fontWeight: '800',
+  },
+  summaryCard: {
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 24,
+    padding: spacing[5],
+    gap: spacing[3],
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.25)',
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+  },
+  summaryTitle: {
+    color: '#c084fc',
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: -0.3,
+  },
+  summaryValue: {
+    color: palette.textPrimary,
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: '500',
+  },
+  reanalyzeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(139, 92, 246, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.25)',
+  },
+  reanalyzeBtnText: {
+    color: '#c084fc',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  collapsibleArea: {
+    marginTop: spacing[2],
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  collapsibleHeader: {
+    backgroundColor: palette.surface,
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[4],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  collapsibleHeaderText: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  collapsibleContent: {
+    backgroundColor: palette.surfaceRaised,
+    padding: spacing[4],
+    gap: spacing[4],
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+  },
+  detailLabel: {
+    color: palette.textMuted,
+    fontSize: 11,
+    fontWeight: '900',
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.8,
   },
   detailValue: {
     color: palette.textSecondary,
@@ -1631,20 +2171,23 @@ const styles = StyleSheet.create({
   detailEmpty: {
     backgroundColor: palette.surface,
     borderRadius: 24,
-    padding: spacing[6],
+    padding: spacing[8],
     gap: spacing[3],
     borderWidth: 1,
     borderColor: palette.border,
+    alignItems: 'center',
   },
   detailEmptyTitle: {
     color: palette.textPrimary,
-    fontSize: 18,
-    fontWeight: '800',
+    fontSize: 16,
+    fontWeight: '900',
   },
   detailEmptyText: {
     color: palette.textSecondary,
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: 'center',
+    maxWidth: 240,
   },
   errorBanner: {
     backgroundColor: palette.dangerSoft,
@@ -1652,12 +2195,437 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     borderWidth: 1,
-    borderColor: '#d9857a',
+    borderColor: 'rgba(239, 68, 68, 0.2)',
   },
   errorText: {
     color: palette.dangerText,
     fontSize: 14,
     lineHeight: 21,
     fontWeight: '700',
+  },
+
+  // ----------------------------------------
+  // 바텀 시트 스타일 정의 (Modal overlay)
+  // ----------------------------------------
+  bottomSheetBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    zIndex: 999,
+  },
+  backdropClickable: {
+    flex: 1,
+  },
+  bottomSheetContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '95%',
+    backgroundColor: palette.backgroundStrong,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+    shadowColor: '#000000',
+    shadowOpacity: 0.35,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: -10 },
+    elevation: 24,
+  },
+  bottomSheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderColor: palette.border,
+    position: 'relative',
+  },
+  bottomSheetHandle: {
+    width: 36,
+    height: 4,
+    backgroundColor: palette.textMuted,
+    borderRadius: 99,
+    opacity: 0.5,
+  },
+  bottomSheetCloseBtn: {
+    position: 'absolute',
+    right: 20,
+    top: 8,
+    width: 28,
+    height: 28,
+    backgroundColor: palette.surface,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  bottomSheetCloseBtnText: {
+    color: palette.textSecondary,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  bottomSheetContent: {
+    padding: spacing[6],
+    paddingBottom: spacing[10],
+  },
+
+  // ----------------------------------------
+  // 도메인 특화 구조화 정보 박스 스타일
+  // ----------------------------------------
+  domainSpecCard: {
+    backgroundColor: palette.surfaceStrong,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+    padding: spacing[5],
+    gap: spacing[4],
+  },
+  domainSpecHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    borderLeftWidth: 4,
+    paddingLeft: spacing[2],
+  },
+  domainSpecHeaderEmoji: {
+    fontSize: 22,
+  },
+  domainSpecTitle: {
+    color: palette.textPrimary,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  domainSpecSub: {
+    color: palette.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 1,
+  },
+  ingredientsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing[2],
+  },
+  ingredientBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: palette.surface,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  ingredientBadgeDot: {
+    color: palette.success,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  ingredientBadgeText: {
+    color: palette.textPrimary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  muscleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    borderBottomWidth: 1,
+    borderColor: palette.border,
+    paddingBottom: spacing[2],
+  },
+  muscleLabel: {
+    color: palette.textMuted,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  muscleBadgeRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  muscleBadge: {
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+    color: '#a78bfa',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  routineList: {
+    gap: spacing[2],
+  },
+  routineItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  routineIndex: {
+    width: 22,
+    height: 22,
+    borderRadius: 99,
+    backgroundColor: palette.surfaceRaised,
+    color: palette.accent,
+    textAlign: 'center',
+    lineHeight: 22,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  routineText: {
+    color: palette.textPrimary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  travelGrid: {
+    flexDirection: 'row',
+    gap: spacing[3],
+  },
+  travelGridBlock: {
+    flex: 1,
+    backgroundColor: palette.surface,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: palette.border,
+    gap: 4,
+  },
+  travelBlockLabel: {
+    color: palette.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  travelBlockVal: {
+    color: palette.textPrimary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  travelHighlightRow: {
+    gap: spacing[2],
+    borderTopWidth: 1,
+    borderColor: palette.border,
+    paddingTop: spacing[2],
+  },
+  travelHighlightLabel: {
+    color: palette.textMuted,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  travelHighlightsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing[2],
+  },
+  travelHighlightText: {
+    color: palette.textPrimary,
+    fontSize: 12,
+    fontWeight: '800',
+    backgroundColor: palette.surface,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  
+  // ----------------------------------------
+  // 지능형 검색 바 스타일
+  // ----------------------------------------
+  floatingSearchShell: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 20,
+    paddingHorizontal: spacing[4],
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: palette.border,
+    gap: spacing[2],
+  },
+  searchIcon: {
+    fontSize: 14,
+    opacity: 0.6,
+  },
+  floatingSearchInput: {
+    flex: 1,
+    color: palette.textPrimary,
+    fontSize: 13.5,
+    paddingVertical: 6,
+  },
+  searchClearBtn: {
+    width: 20,
+    height: 20,
+    backgroundColor: palette.surface,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchClearBtnText: {
+    color: palette.textSecondary,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  quickChipsContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  quickChip: {
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  quickChipActive: {
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+    borderColor: '#8b5cf6',
+  },
+  quickChipText: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  quickChipTextActive: {
+    color: '#c084fc',
+    fontWeight: '900',
+  },
+
+  // ----------------------------------------
+  // 실시간 공통 프로그레스 바 스타일
+  // ----------------------------------------
+  progressBarContainer: {
+    backgroundColor: palette.surface,
+    borderRadius: 16,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.border,
+    marginVertical: 4,
+    gap: 6,
+  },
+  progressBarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  progressBarLabel: {
+    color: palette.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  progressBarValue: {
+    color: palette.textPrimary,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  progressBarBg: {
+    height: 6,
+    backgroundColor: palette.backgroundStrong,
+    borderRadius: 99,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 99,
+  },
+
+  // ----------------------------------------
+  // 체크 완료 시의 특화 스타일 변형들
+  // ----------------------------------------
+  ingredientBadgeChecked: {
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+    opacity: 0.65,
+  },
+  ingredientBadgeDotChecked: {
+    color: palette.success,
+  },
+  ingredientBadgeTextChecked: {
+    color: palette.textMuted,
+    textDecorationLine: 'line-through',
+  },
+  routineItemChecked: {
+    backgroundColor: 'rgba(16, 185, 129, 0.05)',
+    borderColor: 'rgba(16, 185, 129, 0.2)',
+    opacity: 0.6,
+  },
+  routineIndexChecked: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    color: palette.success,
+  },
+  routineTextChecked: {
+    color: palette.textMuted,
+    textDecorationLine: 'line-through',
+  },
+
+  // ----------------------------------------
+  // 여행 정보 전용 네온 배지 및 준비물 스타일
+  // ----------------------------------------
+  travelThemeBadgeRow: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  travelThemeBadge: {
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 10.5,
+    fontWeight: '900',
+    borderWidth: 1,
+  },
+  travelChecklistSection: {
+    borderTopWidth: 1,
+    borderColor: palette.border,
+    paddingTop: spacing[3],
+    gap: spacing[2],
+  },
+  travelChecklistGrid: {
+    gap: 8,
+    marginTop: 4,
+  },
+  travelChecklistItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  travelChecklistItemChecked: {
+    backgroundColor: 'rgba(16, 185, 129, 0.05)',
+    borderColor: 'rgba(16, 185, 129, 0.2)',
+    opacity: 0.6,
+  },
+  travelChecklistIcon: {
+    color: palette.textMuted,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  travelChecklistIconChecked: {
+    color: palette.success,
+  },
+  travelChecklistText: {
+    color: palette.textPrimary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  travelChecklistTextChecked: {
+    color: palette.textMuted,
+    textDecorationLine: 'line-through',
   },
 });

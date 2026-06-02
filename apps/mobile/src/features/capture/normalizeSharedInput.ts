@@ -85,6 +85,10 @@ export function classifySourceType(sourceUrl: string | null, rawText: string): s
     }
 
     if (hostname === 'notion.so' || hostname === 'notion.site' || hostname.includes('notion')) {
+      const lowerText = rawText.toLowerCase();
+      if (lowerText.includes('기저귀') || lowerText.includes('분유') || lowerText.includes('육아') || lowerText.includes('아동') || lowerText.includes('출산') || lowerText.includes('다자녀')) {
+        return 'parenting';
+      }
       return 'notion';
     }
 
@@ -109,8 +113,17 @@ export function classifySourceType(sourceUrl: string | null, rawText: string): s
       return 'google_form';
     }
 
+    const lowerText = rawText.toLowerCase();
+    if (lowerText.includes('기저귀') || lowerText.includes('분유') || lowerText.includes('육아') || lowerText.includes('아동') || lowerText.includes('출산') || lowerText.includes('다자녀')) {
+      return 'parenting';
+    }
+
     return 'web';
   } catch {
+    const lowerText = rawText.toLowerCase();
+    if (lowerText.includes('기저귀') || lowerText.includes('분유') || lowerText.includes('육아') || lowerText.includes('아동') || lowerText.includes('출산') || lowerText.includes('다자녀')) {
+      return 'parenting';
+    }
     return 'web';
   }
 }
