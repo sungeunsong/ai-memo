@@ -76,6 +76,15 @@ const CATEGORY_TABS = [
   { label: '기타 🏷️', value: 'other' },
 ];
 
+type CaptureNotice = {
+  itemId: string | null;
+  source: 'share' | 'clipboard' | 'manual';
+  title: string;
+  description: string;
+  preview: string;
+  stateLabel: string;
+};
+
 function extractDynamicChips(items: SavedItem[]): Array<{ label: string; value: string }> {
   const counts: Record<string, number> = {};
   let hasRecipe = false;
@@ -149,6 +158,7 @@ export function HomeScreen() {
   const [isPasting, setIsPasting] = useState(false);
   const [isImportingShare, setIsImportingShare] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [captureNotice, setCaptureNotice] = useState<CaptureNotice | null>(null);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   
   // 모바일 좁은 화면 전용 바텀 시트 상세 모달 제어용 상태
@@ -192,6 +202,7 @@ export function HomeScreen() {
   };
 
   const processedShareSignatureRef = useRef<string | null>(null);
+  const ignoredClipboardRef = useRef<string | null>(null);
   const { width } = useWindowDimensions();
   const isReady = useAppStore((state) => state.isReady);
   const isInitializing = useAppStore((state) => state.isInitializing);
@@ -237,6 +248,11 @@ export function HomeScreen() {
         return;
       }
 
+      if (ignoredClipboardRef.current === trimmed) {
+        setClipboardCandidate(null);
+        return;
+      }
+
       if (items.length > 0 && items[0].rawInput === trimmed) {
         setClipboardCandidate(null);
         return;
@@ -266,11 +282,40 @@ export function HomeScreen() {
     const result = await saveUrl(clipboardCandidate, 'clipboard');
     if (result.ok) {
       const nextSelectedItem = useAppStore.getState().selectedItemId;
-      setToastMessage('클립보드 내용을 성공적으로 수집했습니다.');
+      const savedItem = useAppStore.getState().items.find((item) => item.id === nextSelectedItem) ?? null;
+      setToastMessage('수집함에 저장됨');
+      setCaptureNotice(buildCaptureNotice(savedItem, clipboardCandidate, 'clipboard'));
       if (nextSelectedItem) {
         setHighlightedItemId(nextSelectedItem);
       }
       setClipboardCandidate(null);
+    }
+  }
+
+  function handleIgnoreClipboard() {
+    if (clipboardCandidate) {
+      ignoredClipboardRef.current = clipboardCandidate;
+    }
+    setClipboardCandidate(null);
+  }
+
+  function handlePreviewClipboard() {
+    if (!clipboardCandidate) {
+      return;
+    }
+    setUrlInput(clipboardCandidate);
+    setClipboardCandidate(null);
+    scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+  }
+
+  function handleOpenCaptureNotice() {
+    const itemId = captureNotice?.itemId;
+    if (!itemId) {
+      return;
+    }
+    selectItem(itemId);
+    if (!isWideLayout) {
+      setIsDetailVisible(true);
     }
   }
 
@@ -336,8 +381,10 @@ export function HomeScreen() {
 
       if (result.ok) {
         const nextSelectedItem = useAppStore.getState().selectedItemId;
+        const savedItem = useAppStore.getState().items.find((item) => item.id === nextSelectedItem) ?? null;
         setUrlInput('');
-        setToastMessage('공유된 지식이 수집함에 저장되었습니다.');
+        setToastMessage('수집함에 저장됨');
+        setCaptureNotice(buildCaptureNotice(savedItem, sharedInput, 'share'));
         if (nextSelectedItem) {
           setHighlightedItemId(nextSelectedItem);
         }
@@ -356,8 +403,10 @@ export function HomeScreen() {
 
     if (result.ok) {
       const nextSelectedItem = useAppStore.getState().selectedItemId;
+      const savedItem = useAppStore.getState().items.find((item) => item.id === nextSelectedItem) ?? null;
       setUrlInput('');
-      setToastMessage('수집함에 안전하게 저장되었습니다.');
+      setToastMessage('수집함에 저장됨');
+      setCaptureNotice(buildCaptureNotice(savedItem, urlInput, 'manual'));
       if (nextSelectedItem) {
         setHighlightedItemId(nextSelectedItem);
         if (!isWideLayout) {
@@ -453,7 +502,7 @@ export function HomeScreen() {
                 ? '동기화 중...' 
                 : syncQueuePendingCount 
                   ? `${syncQueuePendingCount}건 대기` 
-                  : '원격 동기화 완료'}
+                  : '저장 준비됨'}
             </Text>
           </View>
         </View>
@@ -486,7 +535,8 @@ export function HomeScreen() {
             <View style={styles.clipboardBannerLeft}>
               <View style={styles.clipboardBannerDot} />
               <View style={styles.clipboardBannerTextColumn}>
-                <Text style={styles.clipboardBannerTitle}>클립보드에 감지된 링크가 있습니다</Text>
+                <Text style={styles.clipboardBannerTitle}>복사한 내용 저장할까요?</Text>
+                <Text style={styles.clipboardBannerMeta}>{describeInputCandidate(clipboardCandidate)}</Text>
                 <Text style={styles.clipboardBannerDesc} numberOfLines={1}>
                   "{clipboardCandidate.replace(/\s+/g, ' ')}"
                 </Text>
@@ -494,13 +544,22 @@ export function HomeScreen() {
             </View>
             <View style={styles.clipboardBannerActions}>
               <Pressable
-                onPress={() => setClipboardCandidate(null)}
+                onPress={handleIgnoreClipboard}
                 style={({ pressed }) => [
                   styles.clipboardBannerCloseBtn,
                   { transform: [{ scale: pressed ? 0.95 : 1 }] }
                 ]}
               >
-                <Text style={styles.clipboardBannerCloseBtnText}>닫기</Text>
+                <Text style={styles.clipboardBannerCloseBtnText}>무시</Text>
+              </Pressable>
+              <Pressable
+                onPress={handlePreviewClipboard}
+                style={({ pressed }) => [
+                  styles.clipboardBannerPreviewBtn,
+                  { transform: [{ scale: pressed ? 0.95 : 1 }] }
+                ]}
+              >
+                <Text style={styles.clipboardBannerPreviewBtnText}>미리보기</Text>
               </Pressable>
               <Pressable
                 onPress={handleSaveClipboard}
@@ -509,8 +568,52 @@ export function HomeScreen() {
                   { transform: [{ scale: pressed ? 0.95 : 1 }] }
                 ]}
               >
-                <Text style={styles.clipboardBannerSaveBtnText}>수집하기</Text>
+                <Text style={styles.clipboardBannerSaveBtnText}>저장</Text>
               </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {captureNotice ? (
+          <View style={styles.captureNotice}>
+            <View style={styles.captureNoticeHeader}>
+              <View style={styles.captureNoticeTitleColumn}>
+                <Text style={styles.captureNoticeEyebrow}>
+                  {captureNotice.source === 'share'
+                    ? '공유로 저장'
+                    : captureNotice.source === 'clipboard'
+                      ? '클립보드 저장'
+                      : '직접 저장'}
+                </Text>
+                <Text style={styles.captureNoticeTitle}>{captureNotice.title}</Text>
+              </View>
+              <Pressable
+                onPress={() => setCaptureNotice(null)}
+                style={({ pressed }) => [
+                  styles.captureNoticeCloseBtn,
+                  { transform: [{ scale: pressed ? 0.92 : 1 }] }
+                ]}
+              >
+                <Text style={styles.captureNoticeCloseBtnText}>닫기</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.captureNoticeDescription}>{captureNotice.description}</Text>
+            <Text style={styles.captureNoticePreview} numberOfLines={2}>
+              {captureNotice.preview}
+            </Text>
+            <View style={styles.captureNoticeActions}>
+              <Pressable
+                disabled={!captureNotice.itemId}
+                onPress={handleOpenCaptureNotice}
+                style={({ pressed }) => [
+                  styles.captureNoticePrimaryBtn,
+                  !captureNotice.itemId && styles.captureNoticePrimaryBtnDisabled,
+                  { transform: [{ scale: pressed ? 0.96 : 1 }] }
+                ]}
+              >
+                <Text style={styles.captureNoticePrimaryBtnText}>열기</Text>
+              </Pressable>
+              <Text style={styles.captureNoticeState}>{captureNotice.stateLabel}</Text>
             </View>
           </View>
         ) : null}
@@ -540,7 +643,7 @@ export function HomeScreen() {
             ]}
           >
             <Text style={styles.floatingSaveBtnText}>
-              {isSaving ? '수집 중' : '수집'}
+              {isSaving ? '저장 중' : '저장'}
             </Text>
           </Pressable>
         </View>
@@ -756,11 +859,7 @@ function DetailContent({
           </Text>
         </View>
         <View style={styles.detailHeroActionsRow}>
-          <View style={[styles.pendingBadge, { backgroundColor: theme.badgeBg }]}>
-            <Text style={[styles.pendingBadgeText, { color: theme.badgeText }]}>
-              {getStatusLabel(selectedItem)}
-            </Text>
-          </View>
+          <StatusPills item={selectedItem} />
           {selectedItem.sourceUrl ? (
             <Pressable
               onPress={() => Linking.openURL(selectedItem.sourceUrl!).catch(() => {})}
@@ -774,6 +873,10 @@ function DetailContent({
           ) : null}
         </View>
       </View>
+
+      {shouldShowRawInputFirst(selectedItem) ? (
+        <RawInputSection item={selectedItem} />
+      ) : null}
 
       {/* 2. 퀵 한 줄 메모 (최상단 배치로 개선) */}
       <View style={styles.detailSection}>
@@ -1202,6 +1305,18 @@ function urlClickableTextStyle(sourceType: string) {
   return [styles.urlClickableText, { color: theme.badgeText }];
 }
 
+function RawInputSection({ item }: { item: SavedItem }) {
+  return (
+    <View style={styles.rawInputPanel}>
+      <View style={styles.rawInputHeader}>
+        <Text style={styles.detailLabel}>{item.type === 'text' ? '저장된 원문' : '공유 원문'}</Text>
+        <Text style={styles.rawInputMeta}>{describeSavedItemShape(item)}</Text>
+      </View>
+      <Text style={styles.rawInputPrimaryText}>{item.rawInput}</Text>
+    </View>
+  );
+}
+
 function ItemCard({ item }: { item: SavedItem }) {
   return (
     <View style={styles.cardContent}>
@@ -1209,9 +1324,12 @@ function ItemCard({ item }: { item: SavedItem }) {
         <View style={styles.cardTextColumn}>
           <View style={styles.cardMetaRow}>
             <Text style={styles.cardSource} numberOfLines={1}>{getItemSourceLabel(item)}</Text>
-            <StatusBadge label={getStatusLabel(item)} compact />
+            <StatusPills item={item} compact />
           </View>
           <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
+          <View style={styles.cardContextRow}>
+            <Text style={styles.cardTypePill}>{describeSavedItemShape(item)}</Text>
+          </View>
           <Text style={styles.cardSummary} numberOfLines={3}>{item.summary || '요약된 내용이 없습니다.'}</Text>
           <Text style={styles.cardTimestamp}>{formatReadableDate(item.createdAt)}</Text>
         </View>
@@ -1222,6 +1340,10 @@ function ItemCard({ item }: { item: SavedItem }) {
 }
 
 function ThumbnailThumb({ item }: { item: SavedItem }) {
+  if (item.type === 'text') {
+    return null;
+  }
+
   if (item.thumbnailUrl) {
     return (
       <Image
@@ -1252,10 +1374,38 @@ function EmptyState() {
   );
 }
 
-function StatusBadge({ label, compact = false }: { label: string; compact?: boolean }) {
+function StatusBadge({ label, tone = 'pending', compact = false }: { label: string; tone?: 'saved' | 'pending' | 'failed'; compact?: boolean }) {
   return (
-    <View style={[styles.pendingBadge, compact && styles.pendingBadgeCompact]}>
-      <Text style={styles.pendingBadgeText}>{label}</Text>
+    <View
+      style={[
+        styles.pendingBadge,
+        tone === 'saved' && styles.savedBadge,
+        tone === 'failed' && styles.failedBadge,
+        compact && styles.pendingBadgeCompact,
+      ]}
+    >
+      <Text
+        style={[
+          styles.pendingBadgeText,
+          tone === 'saved' && styles.savedBadgeText,
+          tone === 'failed' && styles.failedBadgeText,
+        ]}
+      >
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+function StatusPills({ item, compact = false }: { item: SavedItem; compact?: boolean }) {
+  return (
+    <View style={[styles.statusPillRow, compact && styles.statusPillRowCompact]}>
+      <StatusBadge label={getSaveStatusLabel(item)} tone="saved" compact={compact} />
+      <StatusBadge
+        label={getAiStatusLabel(item)}
+        tone={item.aiStatus === 'failed' ? 'failed' : item.aiStatus === 'completed' ? 'saved' : 'pending'}
+        compact={compact}
+      />
     </View>
   );
 }
@@ -1339,17 +1489,23 @@ function getSourceTheme(sourceType: string) {
 }
 
 function getStatusLabel(item: SavedItem) {
-  const syncLabel = getSyncStatusLabel(item.syncStatus);
+  return `${getSaveStatusLabel(item)} · ${getAiStatusLabel(item)}`;
+}
 
+function getSaveStatusLabel(_item: SavedItem) {
+  return '저장됨';
+}
+
+function getAiStatusLabel(item: SavedItem) {
   if (item.aiStatus === 'completed') {
-    return `${syncLabel} · 메타 완료`;
+    return '정리 완료';
   }
 
   if (item.aiStatus === 'failed') {
-    return `${syncLabel} · 기본 저장`;
+    return '정리 실패';
   }
 
-  return `${syncLabel} · 보강 중`;
+  return '요약 정리 중';
 }
 
 function getSyncStatusLabel(syncStatus: SavedItem['syncStatus']) {
@@ -1370,13 +1526,80 @@ function getSyncStatusLabel(syncStatus: SavedItem['syncStatus']) {
 
 function getItemSourceLabel(item: SavedItem) {
   if (!item.sourceUrl) {
-    return '직접 입력';
+    return item.savedFrom === 'clipboard' ? '클립보드 텍스트' : '텍스트 메모';
   }
 
   try {
     return new URL(item.sourceUrl).hostname.replace(/^www\./, '');
   } catch {
     return 'web link';
+  }
+}
+
+function shouldShowRawInputFirst(item: SavedItem) {
+  return item.type === 'text' || item.extractedUrls.length > 1 || item.rawInput.trim() !== item.content.trim();
+}
+
+function describeSavedItemShape(item: SavedItem) {
+  if (item.extractedUrls.length > 1) {
+    return `링크 ${item.extractedUrls.length}개 포함`;
+  }
+
+  if (item.type === 'text') {
+    return `텍스트 ${item.rawInput.trim().length}자`;
+  }
+
+  return '링크 1개';
+}
+
+function describeInputCandidate(input: string) {
+  const urls = extractUrlCount(input);
+  if (urls > 1) {
+    return `링크 ${urls}개 포함`;
+  }
+
+  if (urls === 1) {
+    return `${getInputHostname(input)} 링크`;
+  }
+
+  return `텍스트 ${input.trim().length}자`;
+}
+
+function buildCaptureNotice(
+  item: SavedItem | null,
+  rawInput: string,
+  source: CaptureNotice['source']
+): CaptureNotice {
+  return {
+    itemId: item?.id ?? null,
+    source,
+    title: item ? '수집함에 저장됨' : '저장 요청 완료',
+    description: item ? describeSavedItemShape(item) : describeInputCandidate(rawInput),
+    preview: rawInput.trim().replace(/\s+/g, ' '),
+    stateLabel: item ? getAiStatusLabel(item) : '요약 정리 중',
+  };
+}
+
+function extractUrlCount(input: string) {
+  const matches = input.match(
+    /\b(?:(?:https?:\/\/|www\.)[^\s<>"']+|(?:youtube\.com|m\.youtube\.com|youtu\.be|instagram\.com|www\.instagram\.com|notion\.so|notion\.site)\/[^\s<>"']+)/gi
+  ) ?? [];
+  return new Set(matches.map((match) => match.replace(/[)\],.!?]+$/, ''))).size;
+}
+
+function getInputHostname(input: string) {
+  const match = input.match(
+    /\b(?:(?:https?:\/\/|www\.)[^\s<>"']+|(?:youtube\.com|m\.youtube\.com|youtu\.be|instagram\.com|www\.instagram\.com|notion\.so|notion\.site)\/[^\s<>"']+)/i
+  );
+  if (!match) {
+    return '링크';
+  }
+
+  try {
+    const value = /^https?:\/\//i.test(match[0]) ? match[0] : `https://${match[0]}`;
+    return new URL(value).hostname.replace(/^www\./, '');
+  } catch {
+    return '링크';
   }
 }
 
@@ -1497,7 +1720,7 @@ const styles = StyleSheet.create({
     height: 260,
     borderRadius: 999,
     backgroundColor: '#8b5cf6',
-    opacity: 0.12,
+    opacity: 0.04,
     zIndex: -1,
   },
   heroGlowSmall: {
@@ -1508,7 +1731,7 @@ const styles = StyleSheet.create({
     height: 160,
     borderRadius: 999,
     backgroundColor: '#ec4899',
-    opacity: 0.1,
+    opacity: 0.03,
     zIndex: -1,
   },
   clipboardBanner: {
@@ -1550,6 +1773,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
+  clipboardBannerMeta: {
+    color: palette.success,
+    fontSize: 12,
+    fontWeight: '800',
+  },
   clipboardBannerDesc: {
     color: palette.textSecondary,
     fontSize: 13,
@@ -1571,6 +1799,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
+  clipboardBannerPreviewBtn: {
+    borderRadius: 14,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 8,
+    backgroundColor: 'rgba(59, 130, 246, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.28)',
+  },
+  clipboardBannerPreviewBtnText: {
+    color: '#93c5fd',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   clipboardBannerSaveBtn: {
     borderRadius: 14,
     paddingHorizontal: spacing[4],
@@ -1581,6 +1822,86 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '800',
+  },
+  captureNotice: {
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 18,
+    padding: spacing[4],
+    gap: spacing[3],
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.28)',
+  },
+  captureNoticeHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+  },
+  captureNoticeTitleColumn: {
+    flex: 1,
+    gap: 2,
+  },
+  captureNoticeEyebrow: {
+    color: palette.success,
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  captureNoticeTitle: {
+    color: palette.textPrimary,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  captureNoticeCloseBtn: {
+    borderRadius: 12,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 7,
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  captureNoticeCloseBtnText: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  captureNoticeDescription: {
+    color: palette.success,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  captureNoticePreview: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  captureNoticeActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+  },
+  captureNoticePrimaryBtn: {
+    borderRadius: 14,
+    paddingHorizontal: spacing[4],
+    paddingVertical: 9,
+    backgroundColor: palette.success,
+  },
+  captureNoticePrimaryBtnDisabled: {
+    opacity: 0.45,
+  },
+  captureNoticePrimaryBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  captureNoticeState: {
+    flex: 1,
+    color: palette.textMuted,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'right',
   },
   rawInputScrollView: {
     maxHeight: 120,
@@ -1594,6 +1915,30 @@ const styles = StyleSheet.create({
     color: palette.textSecondary,
     fontSize: 13,
     lineHeight: 20,
+  },
+  rawInputPanel: {
+    backgroundColor: palette.backgroundStrong,
+    borderRadius: 18,
+    padding: spacing[4],
+    gap: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+  },
+  rawInputHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing[3],
+  },
+  rawInputMeta: {
+    color: palette.success,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  rawInputPrimaryText: {
+    color: palette.textPrimary,
+    fontSize: 14,
+    lineHeight: 22,
   },
   noteInputRow: {
     flexDirection: 'row',
@@ -1876,7 +2221,7 @@ const styles = StyleSheet.create({
   cardMetaRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: spacing[2],
   },
   cardSource: {
@@ -1893,6 +2238,22 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontWeight: '900',
     letterSpacing: -0.2,
+  },
+  cardContextRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  cardTypePill: {
+    alignSelf: 'flex-start',
+    overflow: 'hidden',
+    borderRadius: 999,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    backgroundColor: palette.surface,
+    color: palette.textSecondary,
+    fontSize: 10,
+    fontWeight: '800',
   },
   cardSummary: {
     color: palette.textSecondary,
@@ -1931,6 +2292,16 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[1],
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.16)',
+  },
+  savedBadge: {
+    backgroundColor: palette.successSoft,
+    borderColor: 'rgba(16, 185, 129, 0.22)',
+  },
+  failedBadge: {
+    backgroundColor: palette.dangerSoft,
+    borderColor: 'rgba(239, 68, 68, 0.2)',
   },
   pendingBadgeCompact: {
     paddingHorizontal: spacing[2],
@@ -1939,6 +2310,23 @@ const styles = StyleSheet.create({
     color: '#fbbf24',
     fontSize: 10,
     fontWeight: '800',
+  },
+  savedBadgeText: {
+    color: palette.success,
+  },
+  failedBadgeText: {
+    color: palette.dangerText,
+  },
+  statusPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  statusPillRowCompact: {
+    justifyContent: 'flex-end',
+    flexShrink: 1,
+    maxWidth: 180,
   },
   loadingCard: {
     backgroundColor: palette.surface,
