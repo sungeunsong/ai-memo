@@ -8,6 +8,7 @@ import {
   queueUpsertItemSyncAsync,
   saveUrlItemWithSyncJobAsync,
   updateItemMetadataAsync,
+  deleteItemAsync,
 } from '@/db';
 import { fetchMetadataPatch } from '@/features/metadata/service';
 import { buildFallbackItem, normalizeUrl } from '@/features/items/fallback';
@@ -42,6 +43,7 @@ type AppStore = {
   selectItem: (itemId: string) => void;
   updateUserNote: (itemId: string, userNote: string) => Promise<void>;
   retryEnrichMetadata: (itemId: string) => Promise<void>;
+  deleteItem: (itemId: string) => Promise<void>;
   clearError: () => void;
 };
 
@@ -287,6 +289,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({
       errorMessage: null,
     });
+  },
+  async deleteItem(itemId) {
+    if (!get().isReady) return;
+    try {
+      await deleteItemAsync(itemId);
+      const nextItems = get().items.filter((item) => item.id !== itemId);
+      set({
+        items: nextItems,
+        selectedItemId: get().selectedItemId === itemId
+          ? (nextItems[0]?.id ?? null)
+          : get().selectedItemId,
+      });
+    } catch (error) {
+      console.error('[Store] 삭제 중 에러 발생:', error);
+    }
   },
 }));
 

@@ -126,6 +126,14 @@ export async function updateItemSyncStatusAsync(
   );
 }
 
+export async function deleteItemAsync(
+  db: SQLiteDatabase,
+  itemId: string
+) {
+  await db.runAsync(`DELETE FROM sync_jobs WHERE item_id = ?`, itemId);
+  await db.runAsync(`DELETE FROM items WHERE id = ?`, itemId);
+}
+
 function mapItemRow(row: ItemRow): SavedItem {
   let extractedUrls: string[] = [];
   if (row.extracted_urls) {

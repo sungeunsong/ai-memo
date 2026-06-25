@@ -1,0 +1,1143 @@
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Image,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+
+import { SavedItem } from '@/features/items/types';
+import { StatusPills } from '@/components/StatusBadges';
+import { useAppStore } from '@/store';
+import { getHostname } from '@/features/items/fallback';
+import {
+  formatReadableDate,
+  formatRelativeTime,
+  getSourceTheme,
+  getSyncStatusLabel,
+  tryParseStructuredContent,
+  truncateMiddle,
+  shouldShowRawInputFirst,
+  describeSavedItemShape,
+} from '@/utils/formatters';
+import { palette } from '@/theme/palette';
+import { spacing } from '@/theme/spacing';
+
+type Props = {
+  item: SavedItem;
+  checkedItems: Record<string, Record<string, boolean>>;
+  onToggleCheck: (itemId: string, key: string) => void;
+  onClose: () => void;
+  onDelete?: (itemId: string) => void;
+};
+
+export function DetailScreen({ item, checkedItems, onToggleCheck, onClose, onDelete }: Props) {
+  return (
+    <View style={styles.backdrop}>
+      <Pressable style={styles.backdropClickable} onPress={onClose} />
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <View style={styles.handle} />
+          <Pressable
+            onPress={onClose}
+            style={({ pressed }) => [
+              styles.closeBtn,
+              { transform: [{ scale: pressed ? 0.85 : 1 }] },
+            ]}
+          >
+            <Text style={styles.closeBtnText}>✕</Text>
+          </Pressable>
+        </View>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <DetailContent
+            selectedItem={item}
+            checkedItems={checkedItems}
+            onToggleCheck={onToggleCheck}
+            onDelete={onDelete}
+          />
+        </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+// ==========================================
+// 상세 내용 (인라인 상세뷰에서도 재사용)
+// ==========================================
+export function DetailContent({
+  selectedItem,
+  checkedItems,
+  onToggleCheck,
+  onDelete,
+}: {
+  selectedItem: SavedItem;
+  checkedItems: Record<string, Record<string, boolean>>;
+  onToggleCheck: (itemId: string, key: string) => void;
+  onDelete?: (itemId: string) => void;
+}) {
+  const theme = getSourceTheme(selectedItem.sourceType);
+  const [userNoteInput, setUserNoteInput] = useState('');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isMetaExpanded, setIsMetaExpanded] = useState(false);
+  const updateUserNote = useAppStore((state) => state.updateUserNote);
+  const retryEnrichMetadata = useAppStore((state) => state.retryEnrichMetadata);
+  const isSaving = useAppStore((state) => state.isSaving);
+
+  useEffect(() => {
+    setUserNoteInput(selectedItem.userNote ?? '');
+  }, [selectedItem.id, selectedItem.userNote]);
+
+  async function handleSaveUserNote() {
+    await updateUserNote(selectedItem.id, userNoteInput);
+    setToastMessage('메모가 저장되었습니다.');
+  }
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const t = setTimeout(() => setToastMessage(null), 1800);
+    return () => clearTimeout(t);
+  }, [toastMessage]);
+
+  const structured = tryParseStructuredContent(selectedItem.content);
+
+  return (
+    <View style={styles.detailCard}>
+      {toastMessage ? (
+        <View style={styles.toast}>
+          <View style={styles.toastDot} />
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </View>
+      ) : null}
+
+      {/* 1. 헤더 히어로 */}
+      <View style={[styles.detailHero, { borderColor: theme.border, backgroundColor: theme.bg }]}>
+        <View style={styles.detailHeroText}>
+          <Text style={styles.detailTitle}>{selectedItem.title}</Text>
+          <Text style={[styles.detailSource, { color: theme.badgeText, fontWeight: '700' }]}>
+            {theme.label} · {selectedItem.sourceUrl ? getHostname(selectedItem.sourceUrl) : '로컬'}
+          </Text>
+        </View>
+        <View style={styles.detailHeroActionsRow}>
+          <StatusPills item={selectedItem} />
+          {selectedItem.sourceUrl ? (
+            <Pressable
+              onPress={() => Linking.openURL(selectedItem.sourceUrl!).catch(() => {})}
+              style={({ pressed }) => [
+                styles.openSourceBtn,
+                { transform: [{ scale: pressed ? 0.95 : 1 }] },
+              ]}
+            >
+              <Text style={styles.openSourceBtnText}>원본 열기 🔗</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+
+      {shouldShowRawInputFirst(selectedItem) ? (
+        <RawInputSection item={selectedItem} />
+      ) : null}
+
+      {/* 2. 퀵 메모 */}
+      <View style={styles.detailSection}>
+        <Text style={styles.detailLabel}>퀵 한 줄 메모</Text>
+        <View style={styles.noteInputRow}>
+          <TextInput
+            style={styles.noteInput}
+            placeholder="보낸 사람이나 저장 맥락 메모"
+            placeholderTextColor={palette.textMuted}
+            value={userNoteInput}
+            onChangeText={setUserNoteInput}
+            multiline
+            blurOnSubmit={true}
+          />
+          <Pressable
+            onPress={handleSaveUserNote}
+            style={({ pressed }) => [
+              styles.noteSaveButton,
+              { transform: [{ scale: pressed ? 0.94 : 1 }] },
+            ]}
+          >
+            <Text style={styles.noteSaveButtonText}>저장</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* 3. AI 요약 */}
+      <View style={styles.summaryCard}>
+        <View style={styles.summaryHeader}>
+          <Text style={styles.summaryTitle}>✨ AI 요약</Text>
+          <Pressable
+            disabled={isSaving || selectedItem.aiStatus === 'pending'}
+            onPress={async () => {
+              await retryEnrichMetadata(selectedItem.id);
+              setToastMessage('AI 분석을 다시 요청했습니다.');
+            }}
+            style={({ pressed }) => [
+              styles.reanalyzeBtn,
+              (pressed || isSaving || selectedItem.aiStatus === 'pending') && { opacity: 0.5 },
+            ]}
+          >
+            {isSaving || selectedItem.aiStatus === 'pending' ? (
+              <ActivityIndicator size="small" color="#c084fc" />
+            ) : (
+              <Text style={styles.reanalyzeBtnText}>재분석 🧪</Text>
+            )}
+          </Pressable>
+        </View>
+        <Text style={styles.summaryValue}>
+          {structured?.detailedAnalysis || selectedItem.summary || 'AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.'}
+        </Text>
+      </View>
+
+      {/* 4. 도메인 특화 카드 */}
+      {structured && structured.category === 'recipe' && (
+        <RecipeCard
+          selectedItem={selectedItem}
+          structured={structured}
+          checkedItems={checkedItems}
+          onToggleCheck={onToggleCheck}
+        />
+      )}
+
+      {structured && structured.category === 'workout' && (
+        <WorkoutCard
+          selectedItem={selectedItem}
+          structured={structured}
+          checkedItems={checkedItems}
+          onToggleCheck={onToggleCheck}
+        />
+      )}
+
+      {structured && structured.category === 'travel' && (
+        <TravelCard
+          selectedItem={selectedItem}
+          structured={structured}
+          checkedItems={checkedItems}
+          onToggleCheck={onToggleCheck}
+        />
+      )}
+
+      {/* 5. 추출된 링크 */}
+      {selectedItem.extractedUrls && selectedItem.extractedUrls.length > 0 ? (
+        <View style={styles.detailSection}>
+          <Text style={styles.detailLabel}>추출된 링크 ({selectedItem.extractedUrls.length}개)</Text>
+          <View style={styles.extractedUrlsList}>
+            {selectedItem.extractedUrls.map((url, idx) => (
+              <Pressable
+                key={url + idx}
+                onPress={() => Linking.openURL(url).catch(() => {})}
+                style={({ pressed }) => [
+                  styles.urlClickableRow,
+                  { transform: [{ scale: pressed ? 0.96 : 1 }] },
+                ]}
+              >
+                <Text style={styles.urlClickableNum}>#{idx + 1}</Text>
+                <Text style={styles.urlClickableText} numberOfLines={1}>{url}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      {/* 6. 썸네일 */}
+      {selectedItem.type === 'url' && selectedItem.thumbnailUrl ? (
+        <View style={styles.thumbnailPanel}>
+          <Text style={styles.detailLabel}>썸네일</Text>
+          <View style={styles.thumbnailPreview}>
+            <Image
+              source={{ uri: selectedItem.thumbnailUrl }}
+              style={styles.thumbnailImage as any}
+              resizeMode="cover"
+            />
+          </View>
+        </View>
+      ) : null}
+
+      {/* 7. 기술 상세 (접이식) */}
+      <View style={styles.collapsibleArea}>
+        <Pressable
+          onPress={() => setIsMetaExpanded(!isMetaExpanded)}
+          style={({ pressed }) => [
+            styles.collapsibleHeader,
+            { opacity: pressed ? 0.7 : 1 },
+          ]}
+        >
+          <Text style={styles.collapsibleHeaderText}>
+            {isMetaExpanded ? '기술 메타 정보 접기 ▴' : '기술 메타 정보 보기 ▾'}
+          </Text>
+        </Pressable>
+        {isMetaExpanded ? (
+          <View style={styles.collapsibleContent}>
+            <View style={styles.detailGrid}>
+              <MetaBlock label="원본 링크" value={selectedItem.sourceUrl ? truncateMiddle(selectedItem.sourceUrl) : '없음'} />
+              <MetaBlock label="동기화" value={getSyncStatusLabel(selectedItem.syncStatus)} />
+              <MetaBlock label="생성 시각" value={formatReadableDate(selectedItem.createdAt)} />
+              <MetaBlock label="유형" value={selectedItem.type === 'url' ? '링크 저장' : '텍스트 메모'} />
+            </View>
+            <View style={styles.detailSection}>
+              <Text style={styles.detailLabel}>원문 전체</Text>
+              <ScrollView style={styles.rawInputScrollView} nestedScrollEnabled showsVerticalScrollIndicator={true}>
+                <Text style={styles.detailRawInputText}>{selectedItem.rawInput}</Text>
+              </ScrollView>
+            </View>
+          </View>
+        ) : null}
+      </View>
+
+      {/* 8. 삭제 버튼 */}
+      {onDelete ? (
+        <Pressable
+          onPress={() => onDelete(selectedItem.id)}
+          style={({ pressed }) => [
+            styles.deleteBtn,
+            { transform: [{ scale: pressed ? 0.95 : 1 }] },
+          ]}
+        >
+          <Text style={styles.deleteBtnText}>이 항목 삭제</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+// ==========================================
+// 도메인 특화 서브컴포넌트
+// ==========================================
+function RecipeCard({
+  selectedItem,
+  structured,
+  checkedItems,
+  onToggleCheck,
+}: {
+  selectedItem: SavedItem;
+  structured: any;
+  checkedItems: Record<string, Record<string, boolean>>;
+  onToggleCheck: (itemId: string, key: string) => void;
+}) {
+  const list = (structured.ingredients as string[]) || [];
+  const total = list.length;
+  const checked = list.filter((ing) => checkedItems[selectedItem.id]?.[ing]).length;
+  const ratio = total > 0 ? (checked / total) * 100 : 0;
+
+  return (
+    <View style={styles.domainSpecCard}>
+      <View style={[styles.domainSpecHeader, { borderLeftColor: '#ef4444' }]}>
+        <Text style={styles.domainSpecHeaderEmoji}>🍳</Text>
+        <View>
+          <Text style={styles.domainSpecTitle}>장보기 재료 목록</Text>
+          <Text style={styles.domainSpecSub}>난이도: {structured.difficulty} · 조리시간: {structured.cookTime}</Text>
+        </View>
+      </View>
+
+      <ProgressBar label="재료 준비율" total={total} checked={checked} ratio={ratio} color="#8b5cf6" />
+
+      <View style={styles.ingredientsGrid}>
+        {list.map((ing) => {
+          const isChecked = !!checkedItems[selectedItem.id]?.[ing];
+          return (
+            <Pressable
+              key={ing}
+              onPress={() => onToggleCheck(selectedItem.id, ing)}
+              style={({ pressed }) => [
+                styles.ingredientBadge,
+                isChecked && styles.ingredientBadgeChecked,
+                { transform: [{ scale: pressed ? 0.95 : 1 }] },
+              ]}
+            >
+              <Text style={[styles.ingredientBadgeDot, isChecked && styles.ingredientBadgeDotChecked]}>
+                {isChecked ? '✔' : '○'}
+              </Text>
+              <Text style={[styles.ingredientBadgeText, isChecked && styles.ingredientBadgeTextChecked]}>
+                {ing}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function WorkoutCard({
+  selectedItem,
+  structured,
+  checkedItems,
+  onToggleCheck,
+}: {
+  selectedItem: SavedItem;
+  structured: any;
+  checkedItems: Record<string, Record<string, boolean>>;
+  onToggleCheck: (itemId: string, key: string) => void;
+}) {
+  const list = (structured.routine as string[]) || [];
+  const total = list.length;
+  const checked = list.filter((r) => checkedItems[selectedItem.id]?.[r]).length;
+  const ratio = total > 0 ? (checked / total) * 100 : 0;
+
+  return (
+    <View style={styles.domainSpecCard}>
+      <View style={[styles.domainSpecHeader, { borderLeftColor: '#8b5cf6' }]}>
+        <Text style={styles.domainSpecHeaderEmoji}>💪</Text>
+        <View>
+          <Text style={styles.domainSpecTitle}>운동 루틴 & 타겟 부위</Text>
+          <Text style={styles.domainSpecSub}>필요도구: {(structured.equipments as string[]).join(', ')}</Text>
+        </View>
+      </View>
+
+      <View style={styles.muscleRow}>
+        <Text style={styles.muscleLabel}>타겟 부위</Text>
+        <View style={styles.muscleBadgeRow}>
+          {(structured.targetMuscles as string[]).map((m) => (
+            <Text key={m} style={styles.muscleBadge}>{m}</Text>
+          ))}
+        </View>
+      </View>
+
+      <ProgressBar label="루틴 완수도" total={total} checked={checked} ratio={ratio} color="#8b5cf6" />
+
+      <View style={styles.routineList}>
+        {list.map((r, idx) => {
+          const isChecked = !!checkedItems[selectedItem.id]?.[r];
+          return (
+            <Pressable
+              key={r}
+              onPress={() => onToggleCheck(selectedItem.id, r)}
+              style={({ pressed }) => [
+                styles.routineItem,
+                isChecked && styles.routineItemChecked,
+                { transform: [{ scale: pressed ? 0.97 : 1 }] },
+              ]}
+            >
+              <Text style={[styles.routineIndex, isChecked && styles.routineIndexChecked]}>
+                {isChecked ? '✔' : idx + 1}
+              </Text>
+              <Text style={[styles.routineText, isChecked && styles.routineTextChecked]}>
+                {r}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function TravelCard({
+  selectedItem,
+  structured,
+  checkedItems,
+  onToggleCheck,
+}: {
+  selectedItem: SavedItem;
+  structured: any;
+  checkedItems: Record<string, Record<string, boolean>>;
+  onToggleCheck: (itemId: string, key: string) => void;
+}) {
+  const checklistItems = (structured.checklist as string[]) || [];
+  const total = checklistItems.length;
+  const checked = checklistItems.filter((item) => checkedItems[selectedItem.id]?.[item]).length;
+  const ratio = total > 0 ? (checked / total) * 100 : 0;
+
+  return (
+    <View style={styles.domainSpecCard}>
+      <View style={[styles.domainSpecHeader, { borderLeftColor: '#3b82f6' }]}>
+        <Text style={styles.domainSpecHeaderEmoji}>✈</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.domainSpecTitle}>여행 코스 & 숙소 정보</Text>
+          <Text style={styles.domainSpecSub}>테마: {structured.travelTheme}</Text>
+        </View>
+        <View style={styles.travelThemeBadgeRow}>
+          {structured.travelTheme?.includes('국내') && (
+            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', borderColor: '#3b82f6' }]}>국내 🇰🇷</Text>
+          )}
+          {structured.travelTheme?.includes('해외') && (
+            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(236, 72, 153, 0.15)', color: '#fbcfe8', borderColor: '#ec4899' }]}>해외 ✈</Text>
+          )}
+          {structured.travelTheme?.includes('호캉스') && (
+            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(139, 92, 246, 0.15)', color: '#c084fc', borderColor: '#8b5cf6' }]}>호캉스 🏨</Text>
+          )}
+        </View>
+      </View>
+
+      <View style={styles.travelGrid}>
+        <View style={styles.travelGridBlock}>
+          <Text style={styles.travelBlockLabel}>📍 위치</Text>
+          <Text style={styles.travelBlockVal}>{structured.location}</Text>
+        </View>
+        <View style={styles.travelGridBlock}>
+          <Text style={styles.travelBlockLabel}>💵 예상 예산</Text>
+          <Text style={styles.travelBlockVal}>{structured.budget}</Text>
+        </View>
+      </View>
+
+      <View style={styles.travelHighlightRow}>
+        <Text style={styles.travelHighlightLabel}>핵심 스팟</Text>
+        <View style={styles.travelHighlightsContainer}>
+          {(structured.highlights as string[]).map((h) => (
+            <Text key={h} style={styles.travelHighlightText}>⭐ {h}</Text>
+          ))}
+        </View>
+      </View>
+
+      {total > 0 && (
+        <View style={styles.travelChecklistSection}>
+          <Text style={styles.travelHighlightLabel}>준비물 체크리스트</Text>
+          <ProgressBar label="준비 완료도" total={total} checked={checked} ratio={ratio} color="#3b82f6" />
+          <View style={styles.travelChecklistGrid}>
+            {checklistItems.map((item) => {
+              const isChecked = !!checkedItems[selectedItem.id]?.[item];
+              return (
+                <Pressable
+                  key={item}
+                  onPress={() => onToggleCheck(selectedItem.id, item)}
+                  style={({ pressed }) => [
+                    styles.travelChecklistItem,
+                    isChecked && styles.travelChecklistItemChecked,
+                    { transform: [{ scale: pressed ? 0.96 : 1 }] },
+                  ]}
+                >
+                  <Text style={[styles.travelChecklistIcon, isChecked && styles.travelChecklistIconChecked]}>
+                    {isChecked ? '✔' : '□'}
+                  </Text>
+                  <Text style={[styles.travelChecklistText, isChecked && styles.travelChecklistTextChecked]}>
+                    {item}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ==========================================
+// 공통 서브 컴포넌트
+// ==========================================
+function ProgressBar({ label, total, checked, ratio, color }: { label: string; total: number; checked: number; ratio: number; color: string }) {
+  return (
+    <View style={styles.progressBarContainer}>
+      <View style={styles.progressBarHeader}>
+        <Text style={styles.progressBarLabel}>{label}</Text>
+        <Text style={styles.progressBarValue}>{total}개 중 {checked}개 완료 ({Math.round(ratio)}%)</Text>
+      </View>
+      <View style={styles.progressBarBg}>
+        <View style={[styles.progressBarFill, { width: `${ratio}%`, backgroundColor: color }]} />
+      </View>
+    </View>
+  );
+}
+
+function RawInputSection({ item }: { item: SavedItem }) {
+  return (
+    <View style={styles.rawInputPanel}>
+      <View style={styles.rawInputHeader}>
+        <Text style={styles.detailLabel}>{item.type === 'text' ? '저장된 원문' : '공유 원문'}</Text>
+        <Text style={styles.rawInputMeta}>{describeSavedItemShape(item)}</Text>
+      </View>
+      <Text style={styles.rawInputPrimaryText}>{item.rawInput}</Text>
+    </View>
+  );
+}
+
+function MetaBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.metaBlock}>
+      <Text style={styles.metaLabel}>{label}</Text>
+      <Text style={styles.metaValue}>{value}</Text>
+    </View>
+  );
+}
+
+// ==========================================
+// 스타일
+// ==========================================
+const styles = StyleSheet.create({
+  // 오버레이
+  backdrop: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    zIndex: 999,
+  },
+  backdropClickable: { flex: 1 },
+  container: {
+    position: 'absolute',
+    bottom: 0, left: 0, right: 0,
+    height: '92%',
+    backgroundColor: palette.backgroundStrong,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+    shadowColor: '#000000',
+    shadowOpacity: 0.35,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: -10 },
+    elevation: 24,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderColor: palette.border,
+    position: 'relative',
+  },
+  handle: {
+    width: 36, height: 4,
+    backgroundColor: palette.textMuted,
+    borderRadius: 99,
+    opacity: 0.5,
+  },
+  closeBtn: {
+    position: 'absolute',
+    right: 20, top: 10,
+    width: 30, height: 30,
+    backgroundColor: palette.surface,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  closeBtnText: {
+    color: palette.textSecondary,
+    fontSize: 12, fontWeight: '800',
+  },
+  scrollContent: {
+    padding: spacing[5],
+    paddingBottom: spacing[10],
+  },
+  // 상세 카드
+  detailCard: { gap: spacing[3] },
+  detailHero: {
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 18,
+    padding: spacing[4],
+    gap: spacing[2],
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  detailHeroText: { gap: spacing[1] },
+  detailTitle: {
+    color: palette.textPrimary,
+    fontSize: 18, lineHeight: 24,
+    fontWeight: '900', letterSpacing: -0.3,
+  },
+  detailSource: {
+    color: palette.textSecondary,
+    fontSize: 12, lineHeight: 18,
+  },
+  detailHeroActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+    marginTop: spacing[1],
+  },
+  openSourceBtn: {
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.35)',
+    borderRadius: 10,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+  },
+  openSourceBtnText: {
+    color: '#93c5fd',
+    fontSize: 12, fontWeight: '800',
+  },
+  detailSection: { gap: spacing[2] },
+  detailLabel: {
+    color: palette.textMuted,
+    fontSize: 11, fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  noteInputRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    alignItems: 'stretch',
+  },
+  noteInput: {
+    flex: 1,
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 8,
+    color: palette.textPrimary,
+    fontSize: 13,
+    minHeight: 38,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  noteSaveButton: {
+    backgroundColor: palette.accent,
+    borderRadius: 14,
+    paddingHorizontal: spacing[4],
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noteSaveButtonText: {
+    color: '#ffffff',
+    fontSize: 13, fontWeight: '800',
+  },
+  summaryCard: {
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 20,
+    padding: spacing[4],
+    gap: spacing[3],
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.25)',
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+  },
+  summaryTitle: {
+    color: '#c084fc',
+    fontSize: 15, fontWeight: '900',
+    letterSpacing: -0.3,
+  },
+  summaryValue: {
+    color: palette.textPrimary,
+    fontSize: 14, lineHeight: 22,
+    fontWeight: '500',
+  },
+  reanalyzeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(139, 92, 246, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.25)',
+  },
+  reanalyzeBtnText: {
+    color: '#c084fc',
+    fontSize: 11, fontWeight: '800',
+  },
+  toast: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    backgroundColor: palette.successSoft,
+    borderRadius: 14,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.2)',
+  },
+  toastDot: {
+    width: 8, height: 8,
+    borderRadius: 999,
+    backgroundColor: palette.success,
+  },
+  toastText: {
+    flex: 1,
+    color: palette.success,
+    fontSize: 13, fontWeight: '700',
+  },
+  // 도메인 특화 카드
+  domainSpecCard: {
+    backgroundColor: palette.surfaceStrong,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+    padding: spacing[4],
+    gap: spacing[3],
+  },
+  domainSpecHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    borderLeftWidth: 4,
+    paddingLeft: spacing[2],
+  },
+  domainSpecHeaderEmoji: { fontSize: 20 },
+  domainSpecTitle: {
+    color: palette.textPrimary,
+    fontSize: 14, fontWeight: '900',
+  },
+  domainSpecSub: {
+    color: palette.textSecondary,
+    fontSize: 11, fontWeight: '700',
+    marginTop: 1,
+  },
+  ingredientsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing[2],
+  },
+  ingredientBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: palette.surface,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  ingredientBadgeChecked: {
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+    opacity: 0.65,
+  },
+  ingredientBadgeDot: {
+    color: palette.success,
+    fontSize: 10, fontWeight: '900',
+  },
+  ingredientBadgeDotChecked: { color: palette.success },
+  ingredientBadgeText: {
+    color: palette.textPrimary,
+    fontSize: 12, fontWeight: '800',
+  },
+  ingredientBadgeTextChecked: {
+    color: palette.textMuted,
+    textDecorationLine: 'line-through',
+  },
+  muscleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    borderBottomWidth: 1,
+    borderColor: palette.border,
+    paddingBottom: spacing[2],
+  },
+  muscleLabel: {
+    color: palette.textMuted,
+    fontSize: 11, fontWeight: '900',
+  },
+  muscleBadgeRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  muscleBadge: {
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+    color: '#a78bfa',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 11, fontWeight: '800',
+  },
+  routineList: { gap: spacing[2] },
+  routineItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    backgroundColor: palette.surface,
+    borderRadius: 12,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  routineItemChecked: {
+    backgroundColor: 'rgba(16, 185, 129, 0.05)',
+    borderColor: 'rgba(16, 185, 129, 0.2)',
+    opacity: 0.6,
+  },
+  routineIndex: {
+    width: 22, height: 22,
+    borderRadius: 99,
+    backgroundColor: palette.surfaceRaised,
+    color: palette.accent,
+    textAlign: 'center',
+    lineHeight: 22,
+    fontSize: 12, fontWeight: '900',
+  },
+  routineIndexChecked: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    color: palette.success,
+  },
+  routineText: {
+    color: palette.textPrimary,
+    fontSize: 13, fontWeight: '800',
+  },
+  routineTextChecked: {
+    color: palette.textMuted,
+    textDecorationLine: 'line-through',
+  },
+  // 프로그레스 바
+  progressBarContainer: {
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.border,
+    gap: 6,
+  },
+  progressBarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  progressBarLabel: {
+    color: palette.textMuted,
+    fontSize: 10, fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  progressBarValue: {
+    color: palette.textPrimary,
+    fontSize: 11, fontWeight: '800',
+  },
+  progressBarBg: {
+    height: 6,
+    backgroundColor: palette.backgroundStrong,
+    borderRadius: 99,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 99,
+  },
+  // 여행 카드
+  travelGrid: {
+    flexDirection: 'row',
+    gap: spacing[3],
+  },
+  travelGridBlock: {
+    flex: 1,
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: palette.border,
+    gap: 4,
+  },
+  travelBlockLabel: {
+    color: palette.textMuted,
+    fontSize: 10, fontWeight: '900',
+  },
+  travelBlockVal: {
+    color: palette.textPrimary,
+    fontSize: 13, fontWeight: '800',
+  },
+  travelHighlightRow: {
+    gap: spacing[2],
+    borderTopWidth: 1,
+    borderColor: palette.border,
+    paddingTop: spacing[2],
+  },
+  travelHighlightLabel: {
+    color: palette.textMuted,
+    fontSize: 11, fontWeight: '900',
+  },
+  travelHighlightsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing[2],
+  },
+  travelHighlightText: {
+    color: palette.textPrimary,
+    fontSize: 12, fontWeight: '800',
+    backgroundColor: palette.surface,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  travelThemeBadgeRow: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  travelThemeBadge: {
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 10.5, fontWeight: '900',
+    borderWidth: 1,
+  },
+  travelChecklistSection: {
+    borderTopWidth: 1,
+    borderColor: palette.border,
+    paddingTop: spacing[3],
+    gap: spacing[2],
+  },
+  travelChecklistGrid: { gap: 8, marginTop: 4 },
+  travelChecklistItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    backgroundColor: palette.surface,
+    borderRadius: 12,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  travelChecklistItemChecked: {
+    backgroundColor: 'rgba(16, 185, 129, 0.05)',
+    borderColor: 'rgba(16, 185, 129, 0.2)',
+    opacity: 0.6,
+  },
+  travelChecklistIcon: {
+    color: palette.textMuted,
+    fontSize: 14, fontWeight: '800',
+  },
+  travelChecklistIconChecked: { color: palette.success },
+  travelChecklistText: {
+    color: palette.textPrimary,
+    fontSize: 13, fontWeight: '800',
+  },
+  travelChecklistTextChecked: {
+    color: palette.textMuted,
+    textDecorationLine: 'line-through',
+  },
+  // 링크 목록
+  extractedUrlsList: { gap: spacing[2] },
+  urlClickableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: 'rgba(139, 92, 246, 0.08)',
+    borderRadius: 12,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.15)',
+  },
+  urlClickableNum: {
+    color: '#a78bfa',
+    fontSize: 12, fontWeight: '800',
+  },
+  urlClickableText: {
+    flex: 1,
+    color: '#c084fc',
+    fontSize: 12, fontWeight: '700',
+  },
+  // 썸네일
+  thumbnailPanel: { gap: spacing[2] },
+  thumbnailPreview: {
+    backgroundColor: palette.surface,
+    borderRadius: 16,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  thumbnailImage: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    borderRadius: 12,
+    backgroundColor: palette.backgroundStrong,
+  },
+  // 접이식 메타
+  collapsibleArea: {
+    marginTop: spacing[2],
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  collapsibleHeader: {
+    backgroundColor: palette.surface,
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[4],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  collapsibleHeaderText: {
+    color: palette.textSecondary,
+    fontSize: 12, fontWeight: '800',
+  },
+  collapsibleContent: {
+    backgroundColor: palette.surfaceRaised,
+    padding: spacing[4],
+    gap: spacing[4],
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+  },
+  detailGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing[3],
+  },
+  metaBlock: {
+    flexGrow: 1,
+    minWidth: 130,
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    padding: spacing[3],
+    gap: spacing[1],
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  metaLabel: {
+    color: palette.textMuted,
+    fontSize: 10, fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  metaValue: {
+    color: palette.textPrimary,
+    fontSize: 13, lineHeight: 18,
+    fontWeight: '700',
+  },
+  rawInputScrollView: {
+    maxHeight: 120,
+    backgroundColor: palette.backgroundStrong,
+    borderRadius: 14,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  detailRawInputText: {
+    color: palette.textSecondary,
+    fontSize: 13, lineHeight: 20,
+  },
+  rawInputPanel: {
+    backgroundColor: palette.backgroundStrong,
+    borderRadius: 16,
+    padding: spacing[4],
+    gap: spacing[3],
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+  },
+  rawInputHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing[3],
+  },
+  rawInputMeta: {
+    color: palette.success,
+    fontSize: 11, fontWeight: '900',
+  },
+  rawInputPrimaryText: {
+    color: palette.textPrimary,
+    fontSize: 14, lineHeight: 22,
+  },
+  // 삭제 버튼
+  deleteBtn: {
+    marginTop: spacing[4],
+    alignSelf: 'center',
+    backgroundColor: palette.dangerSoft,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.25)',
+    borderRadius: 14,
+    paddingHorizontal: spacing[6],
+    paddingVertical: spacing[3],
+  },
+  deleteBtnText: {
+    color: palette.dangerText,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+});

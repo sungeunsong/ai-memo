@@ -7,6 +7,7 @@ import {
   listItemsAsync,
   updateItemMetadataAsync as updateItemMetadataInRepositoryAsync,
   updateItemSyncStatusAsync as updateItemSyncStatusInRepositoryAsync,
+  deleteItemAsync as deleteItemInRepositoryAsync,
 } from '@/db/itemsRepository';
 import {
   getSyncQueueSummaryAsync as getSyncQueueSummaryInRepositoryAsync,
@@ -81,6 +82,16 @@ export async function saveUrlItemAsync(item: SaveUrlPayload) {
   const database = await getDatabaseAsync();
   await insertUrlItemAsync(database, item);
   return item;
+}
+
+export async function deleteItemAsync(itemId: string) {
+  if (Platform.OS === 'web') {
+    deleteWebItem(itemId);
+    return;
+  }
+
+  const database = await getDatabaseAsync();
+  await deleteItemInRepositoryAsync(database, itemId);
 }
 
 export async function saveUrlItemWithSyncJobAsync(item: SaveUrlPayload, job: CreateSyncJobPayload) {
@@ -283,6 +294,20 @@ function saveWebItem(item: SavedItem) {
 
   const nextItems = [item, ...getWebItems()];
   globalThis.localStorage.setItem(WEB_STORAGE_KEY, JSON.stringify(nextItems));
+}
+
+function deleteWebItem(itemId: string) {
+  if (typeof globalThis.localStorage === 'undefined') {
+    memoryItems = memoryItems.filter((item) => item.id !== itemId);
+    return;
+  }
+
+  const nextItems = getWebItems().filter((item) => item.id !== itemId);
+  globalThis.localStorage.setItem(WEB_STORAGE_KEY, JSON.stringify(nextItems));
+
+  // 관련 sync job도 제거
+  const nextJobs = getWebSyncJobs().filter((job) => job.itemId !== itemId);
+  globalThis.localStorage.setItem(WEB_SYNC_JOBS_STORAGE_KEY, JSON.stringify(nextJobs));
 }
 
 function saveWebSyncJob(job: CreateSyncJobPayload) {
