@@ -1,5 +1,6 @@
 import { SavedItem } from '@/features/items/types';
 import { getHostname } from '@/features/items/fallback';
+import { hangulMatch } from './search';
 
 // ==========================================
 // 날짜/시간 포맷 유틸리티
@@ -255,31 +256,36 @@ export function getItemCategory(item: SavedItem): string {
 
   const title = item.title.toLowerCase();
   const content = item.content.toLowerCase();
+  const userNote = (item.userNote || '').toLowerCase();
 
   if (
     title.includes('기저귀') || title.includes('분유') || title.includes('육아') || title.includes('아동') || title.includes('출산') || title.includes('다자녀') ||
-    content.includes('기저귀') || content.includes('분유') || content.includes('육아') || content.includes('아동') || content.includes('출산') || content.includes('다자녀')
+    content.includes('기저귀') || content.includes('분유') || content.includes('육아') || content.includes('아동') || content.includes('출산') || content.includes('다자녀') ||
+    userNote.includes('기저귀') || userNote.includes('분유') || userNote.includes('육아') || userNote.includes('아동') || userNote.includes('출산')
   ) {
     return 'parenting';
   }
 
   if (
     title.includes('여행') || title.includes('호캉스') || title.includes('항공권') ||
-    content.includes('여행') || content.includes('호캉스') || content.includes('항공권')
+    content.includes('여행') || content.includes('호캉스') || content.includes('항공권') ||
+    userNote.includes('여행') || userNote.includes('호캉스') || userNote.includes('항공권')
   ) {
     return 'travel';
   }
 
   if (
     title.includes('레시피') || title.includes('요리') || title.includes('조리법') ||
-    content.includes('레시피') || content.includes('요리') || content.includes('조리법')
+    content.includes('레시피') || content.includes('요리') || content.includes('조리법') ||
+    userNote.includes('레시피') || userNote.includes('요리') || userNote.includes('조리법')
   ) {
     return 'recipe';
   }
 
   if (
     title.includes('운동') || title.includes('루틴') || title.includes('홈트') || title.includes('헬스') ||
-    content.includes('운동') || content.includes('루틴') || content.includes('홈트') || content.includes('헬스')
+    content.includes('운동') || content.includes('루틴') || content.includes('홈트') || content.includes('헬스') ||
+    userNote.includes('운동') || userNote.includes('루틴') || userNote.includes('홈트') || userNote.includes('헬스')
   ) {
     return 'workout';
   }
@@ -303,32 +309,29 @@ const KEYWORD_EMOJIS: Record<string, string> = {
 
 export type FilterChip = { label: string; value: string };
 
-export function extractDynamicChips(items: SavedItem[]): FilterChip[] {
+export function extractDynamicChips(items: SavedItem[], activeCategory: string): FilterChip[] {
   const counts: Record<string, number> = {};
-  let hasRecipe = false;
-  let hasWorkout = false;
-  let hasTravel = false;
 
   items.forEach((item) => {
-    const structured = tryParseStructuredContent(item.content);
-    const category = structured?.category || item.sourceType;
+    const category = getItemCategory(item);
+    if (activeCategory && category !== activeCategory) {
+      return;
+    }
 
+    const structured = tryParseStructuredContent(item.content);
     if (category === 'recipe') {
-      hasRecipe = true;
       if (structured && structured.ingredients) {
         (structured.ingredients as string[]).forEach((ing) => {
           counts[ing] = (counts[ing] || 0) + 1;
         });
       }
     } else if (category === 'workout') {
-      hasWorkout = true;
       if (structured && structured.targetMuscles) {
         (structured.targetMuscles as string[]).forEach((muscle) => {
           counts[muscle] = (counts[muscle] || 0) + 1;
         });
       }
     } else if (category === 'travel') {
-      hasTravel = true;
       if (structured) {
         if (structured.travelTheme) {
           structured.travelTheme.split('/').map((t: string) => t.trim()).forEach((theme: string) => {
@@ -344,11 +347,7 @@ export function extractDynamicChips(items: SavedItem[]): FilterChip[] {
     }
   });
 
-  const chips: FilterChip[] = [{ label: '전체 🔍', value: '' }];
-  if (hasRecipe) chips.push({ label: '레시피 🍳', value: '__cat:recipe' });
-  if (hasWorkout) chips.push({ label: '운동루틴 💪', value: '__cat:workout' });
-  if (hasTravel) chips.push({ label: '여행정보 ✈', value: '__cat:travel' });
-
+  const chips: FilterChip[] = [];
   const sortedKeywords = Object.entries(counts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
@@ -372,49 +371,53 @@ export function extractDynamicChips(items: SavedItem[]): FilterChip[] {
 export function filterItems(
   items: SavedItem[],
   searchQuery: string,
-  activeChipValue: string
+  activeCategory: string,
+  activeKeyword: string
 ): SavedItem[] {
   return items.filter((item) => {
-    // 1. 칩 필터: 카테고리 칩인 경우
-    if (activeChipValue.startsWith('__cat:')) {
-      const cat = activeChipValue.replace('__cat:', '');
-      if (getItemCategory(item) !== cat) return false;
-    } 
-    // 칩 필터: 키워드 칩인 경우 (재료, 부위 등)
-    else if (activeChipValue) {
+    // 1. 카테고리 필터링 (스마트 폴더)
+    if (activeCategory) {
+      if (getItemCategory(item) !== activeCategory) {
+        return false;
+      }
+    }
+
+    // 2. 키워드 필터링 (재료, 부위 등)
+    if (activeKeyword) {
       const structured = tryParseStructuredContent(item.content);
       if (!structured) return false;
 
       let found = false;
-      if (structured.category === 'recipe' && structured.ingredients) {
+      const category = getItemCategory(item);
+      if (category === 'recipe' && structured.ingredients) {
         found = (structured.ingredients as string[]).some((ing) =>
-          ing.toLowerCase().includes(activeChipValue.toLowerCase())
+          ing.toLowerCase().includes(activeKeyword.toLowerCase())
         );
       }
-      if (structured.category === 'workout' && structured.targetMuscles) {
+      if (category === 'workout' && structured.targetMuscles) {
         found = found || (structured.targetMuscles as string[]).some((m) =>
-          m.toLowerCase().includes(activeChipValue.toLowerCase())
+          m.toLowerCase().includes(activeKeyword.toLowerCase())
         );
       }
-      if (structured.category === 'travel') {
+      if (category === 'travel') {
         if (structured.highlights) {
           found = found || (structured.highlights as string[]).some((h) =>
-            h.toLowerCase().includes(activeChipValue.toLowerCase())
+            h.toLowerCase().includes(activeKeyword.toLowerCase())
           );
         }
         if (structured.travelTheme) {
-          found = found || structured.travelTheme.toLowerCase().includes(activeChipValue.toLowerCase());
+          found = found || structured.travelTheme.toLowerCase().includes(activeKeyword.toLowerCase());
         }
       }
       if (!found) return false;
     }
 
-    // 2. 검색어 필터
+    // 3. 검색어 필터
     if (!searchQuery.trim()) return true;
-    const query = searchQuery.toLowerCase().trim();
+    const query = searchQuery.trim();
 
     // 제목, 메모 검색
-    if (item.title.toLowerCase().includes(query) || (item.userNote && item.userNote.toLowerCase().includes(query))) {
+    if (hangulMatch(item.title, query) || (item.userNote && hangulMatch(item.userNote, query))) {
       return true;
     }
 
@@ -422,24 +425,25 @@ export function filterItems(
     const structured = tryParseStructuredContent(item.content);
     const category = structured?.category || item.sourceType;
     if (category) {
-      if ((query === '요리' || query === '레시피') && category === 'recipe') return true;
-      if ((query === '운동' || query === '헬스' || query === '홈트') && category === 'workout') return true;
-      if ((query === '여행' || query === '호캉스') && category === 'travel') return true;
+      const lowerQuery = query.toLowerCase();
+      if ((lowerQuery === '요리' || lowerQuery === '레시피') && category === 'recipe') return true;
+      if ((lowerQuery === '운동' || lowerQuery === '헬스' || lowerQuery === '홈트') && category === 'workout') return true;
+      if ((lowerQuery === '여행' || lowerQuery === '호캉스') && category === 'travel') return true;
     }
 
     // 구조화 데이터 내부 검색
     if (structured) {
       if (structured.category === 'recipe' && structured.ingredients) {
-        if ((structured.ingredients as string[]).some((ing) => ing.toLowerCase().includes(query))) return true;
+        if ((structured.ingredients as string[]).some((ing) => hangulMatch(ing, query))) return true;
       }
       if (structured.category === 'workout' && structured.targetMuscles) {
-        if ((structured.targetMuscles as string[]).some((m) => m.toLowerCase().includes(query))) return true;
+        if ((structured.targetMuscles as string[]).some((m) => hangulMatch(m, query))) return true;
       }
       if (structured.category === 'travel') {
-        if (structured.location && structured.location.toLowerCase().includes(query)) return true;
-        if (structured.travelTheme && structured.travelTheme.toLowerCase().includes(query)) return true;
-        if (structured.highlights && (structured.highlights as string[]).some((h) => h.toLowerCase().includes(query))) return true;
-        if (structured.checklist && (structured.checklist as string[]).some((c) => c.toLowerCase().includes(query))) return true;
+        if (structured.location && hangulMatch(structured.location, query)) return true;
+        if (structured.travelTheme && hangulMatch(structured.travelTheme, query)) return true;
+        if (structured.highlights && (structured.highlights as string[]).some((h) => hangulMatch(h, query))) return true;
+        if (structured.checklist && (structured.checklist as string[]).some((c) => hangulMatch(c, query))) return true;
       }
     }
 

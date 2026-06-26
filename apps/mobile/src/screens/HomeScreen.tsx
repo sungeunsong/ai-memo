@@ -64,8 +64,14 @@ export function HomeScreen() {
 
   // Local state
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeChipValue, setActiveChipValue] = useState('');
+  const [activeCategory, setActiveCategory] = useState('');
+  const [activeKeyword, setActiveKeyword] = useState('');
   const [isCaptureVisible, setIsCaptureVisible] = useState(false);
+
+  const handleCategoryChange = useCallback((cat: string) => {
+    setActiveCategory(cat);
+    setActiveKeyword('');
+  }, []);
   const [isDetailVisible, setIsDetailVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [captureNotice, setCaptureNotice] = useState<CaptureNotice | null>(null);
@@ -111,8 +117,8 @@ export function HomeScreen() {
 
   // 필터링
   const filteredItems = useMemo(
-    () => filterItems(items, searchQuery, activeChipValue),
-    [items, searchQuery, activeChipValue]
+    () => filterItems(items, searchQuery, activeCategory, activeKeyword),
+    [items, searchQuery, activeCategory, activeKeyword]
   );
 
   // ==========================================
@@ -259,6 +265,15 @@ export function HomeScreen() {
   }
 
   function handleDeleteItem(itemId: string) {
+    if (Platform.OS === 'web') {
+      const confirmed = window.confirm('이 항목을 정말 삭제하시겠습니까?');
+      if (confirmed) {
+        void deleteItem(itemId);
+        setIsDetailVisible(false);
+      }
+      return;
+    }
+
     Alert.alert(
       '삭제 확인',
       '이 항목을 정말 삭제하시겠습니까?',
@@ -427,8 +442,10 @@ export function HomeScreen() {
               items={items}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
-              activeChipValue={activeChipValue}
-              onChipChange={setActiveChipValue}
+              activeCategory={activeCategory}
+              onCategoryChange={handleCategoryChange}
+              activeKeyword={activeKeyword}
+              onKeywordChange={setActiveKeyword}
             />
           </View>
 

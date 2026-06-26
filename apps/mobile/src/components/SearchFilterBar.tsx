@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState, useCallback } from 'react';
+import { useMemo, useRef, useCallback } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { SavedItem } from '@/features/items/types';
-import { extractDynamicChips, FilterChip } from '@/utils/formatters';
+import { extractDynamicChips } from '@/utils/formatters';
 import { palette } from '@/theme/palette';
 import { spacing } from '@/theme/spacing';
 
@@ -10,24 +10,36 @@ type Props = {
   items: SavedItem[];
   searchQuery: string;
   onSearchChange: (query: string) => void;
-  activeChipValue: string;
-  onChipChange: (value: string) => void;
+  activeCategory: string;
+  onCategoryChange: (category: string) => void;
+  activeKeyword: string;
+  onKeywordChange: (keyword: string) => void;
 };
+
+const FOLDERS = [
+  { label: '전체 🔍', value: '' },
+  { label: '레시피 🍳', value: 'recipe' },
+  { label: '운동 💪', value: 'workout' },
+  { label: '여행 ✈️', value: 'travel' },
+];
 
 export function SearchFilterBar({
   items,
   searchQuery,
   onSearchChange,
-  activeChipValue,
-  onChipChange,
+  activeCategory,
+  onCategoryChange,
+  activeKeyword,
+  onKeywordChange,
 }: Props) {
-  const chips = useMemo(() => extractDynamicChips(items), [items]);
-
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 현재 카테고리에 맞는 동적 키워드 칩 추출
+  const chips = useMemo(
+    () => extractDynamicChips(items, activeCategory),
+    [items, activeCategory]
+  );
 
   const handleSearchInput = useCallback(
     (text: string) => {
-      // 즉시 표시용 업데이트
       onSearchChange(text);
     },
     [onSearchChange]
@@ -35,7 +47,7 @@ export function SearchFilterBar({
 
   return (
     <View style={styles.container}>
-      {/* 검색 입력 */}
+      {/* 1. 검색 입력 */}
       <View style={styles.searchRow}>
         <Text style={styles.searchIcon}>🔍</Text>
         <TextInput
@@ -54,32 +66,57 @@ export function SearchFilterBar({
         ) : null}
       </View>
 
-      {/* 다이나믹 필터 칩 */}
-      {chips.length > 1 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipsContainer}
-        >
-          {chips.map((chip) => {
-            const isActive = activeChipValue === chip.value;
-            return (
-              <Pressable
-                key={chip.value}
-                onPress={() => onChipChange(chip.value)}
-                style={({ pressed }) => [
-                  styles.chip,
-                  isActive && styles.chipActive,
-                  { transform: [{ scale: pressed ? 0.94 : 1 }] },
-                ]}
-              >
-                <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
-                  {chip.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+      {/* 2. 스마트 폴더 탭 UI */}
+      <View style={styles.tabsRow}>
+        {FOLDERS.map((folder) => {
+          const isActive = activeCategory === folder.value;
+          return (
+            <Pressable
+              key={folder.value}
+              onPress={() => onCategoryChange(folder.value)}
+              style={({ pressed }) => [
+                styles.tab,
+                isActive && styles.tabActive,
+                { transform: [{ scale: pressed ? 0.96 : 1 }] },
+              ]}
+            >
+              <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
+                {folder.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {/* 3. 동적 키워드 칩 추천 */}
+      {chips.length > 0 ? (
+        <View style={styles.keywordPanel}>
+          <Text style={styles.keywordPanelLabel}>추천 키워드</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsContainer}
+          >
+            {chips.map((chip) => {
+              const isActive = activeKeyword === chip.value;
+              return (
+                <Pressable
+                  key={chip.value}
+                  onPress={() => onKeywordChange(isActive ? '' : chip.value)}
+                  style={({ pressed }) => [
+                    styles.chip,
+                    isActive && styles.chipActive,
+                    { transform: [{ scale: pressed ? 0.94 : 1 }] },
+                  ]}
+                >
+                  <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
+                    {chip.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
       ) : null}
     </View>
   );
@@ -87,7 +124,7 @@ export function SearchFilterBar({
 
 const styles = StyleSheet.create({
   container: {
-    gap: spacing[2],
+    gap: spacing[3],
   },
   searchRow: {
     flexDirection: 'row',
@@ -123,6 +160,46 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '900',
   },
+  // 스마트 폴더 탭 스타일
+  tabsRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    justifyContent: 'space-between',
+  },
+  tab: {
+    flex: 1,
+    backgroundColor: palette.surface,
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  tabActive: {
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+    borderColor: '#8b5cf6',
+  },
+  tabText: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  tabTextActive: {
+    color: '#c084fc',
+  },
+  // 키워드 추천 영역
+  keywordPanel: {
+    gap: spacing[1] + 2,
+  },
+  keywordPanelLabel: {
+    color: palette.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    paddingLeft: 2,
+  },
   chipsContainer: {
     flexDirection: 'row',
     gap: 6,
@@ -130,10 +207,10 @@ const styles = StyleSheet.create({
     paddingRight: spacing[4],
   },
   chip: {
-    backgroundColor: palette.surface,
-    borderRadius: 12,
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 10,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 5,
     borderWidth: 1,
     borderColor: palette.border,
   },
@@ -148,6 +225,5 @@ const styles = StyleSheet.create({
   },
   chipTextActive: {
     color: '#c084fc',
-    fontWeight: '900',
   },
 });

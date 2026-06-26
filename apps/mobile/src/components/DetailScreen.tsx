@@ -10,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 
 import { SavedItem } from '@/features/items/types';
 import { StatusPills } from '@/components/StatusBadges';
@@ -25,6 +26,8 @@ import {
   shouldShowRawInputFirst,
   describeSavedItemShape,
 } from '@/utils/formatters';
+import { parseActionItems, ActionItem } from '@/utils/actionParser';
+import { ReaderModeModal } from '@/components/ReaderModeModal';
 import { palette } from '@/theme/palette';
 import { spacing } from '@/theme/spacing';
 
@@ -87,6 +90,7 @@ export function DetailContent({
   const [userNoteInput, setUserNoteInput] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isMetaExpanded, setIsMetaExpanded] = useState(false);
+  const [isReaderVisible, setIsReaderVisible] = useState(false);
   const updateUserNote = useAppStore((state) => state.updateUserNote);
   const retryEnrichMetadata = useAppStore((state) => state.retryEnrichMetadata);
   const isSaving = useAppStore((state) => state.isSaving);
@@ -107,6 +111,26 @@ export function DetailContent({
   }, [toastMessage]);
 
   const structured = tryParseStructuredContent(selectedItem.content);
+  const actions = parseActionItems(selectedItem.rawInput, selectedItem.userNote ?? undefined, structured);
+
+  async function handleActionPress(action: ActionItem) {
+    if (action.type === 'phone') {
+      Linking.openURL(`tel:${action.value}`).catch(() => {
+        setToastMessage('전화 걸기를 실행할 수 없습니다.');
+      });
+    } else if (action.type === 'bank' || action.type === 'ingredients') {
+      await Clipboard.setStringAsync(action.value);
+      setToastMessage(`${action.type === 'bank' ? '계좌번호가' : '재료 목록이'} 복사되었습니다.`);
+    } else if (action.type === 'address') {
+      const encodedAddr = encodeURIComponent(action.value);
+      const url = `https://map.naver.com/v5/search/${encodedAddr}`;
+      Linking.openURL(url).catch(() => {
+        Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodedAddr}`).catch(() => {
+          setToastMessage('지도 앱을 열 수 없습니다.');
+        });
+      });
+    }
+  }
 
   return (
     <View style={styles.detailCard}>
@@ -141,8 +165,51 @@ export function DetailContent({
         </View>
       </View>
 
+      {/* 1.5. 🚀 퀵 액션 */}
+      {actions.length > 0 ? (
+        <View style={styles.actionPanel}>
+          <Text style={styles.actionPanelLabel}>🚀 퀵 액션</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.actionScrollContent}
+          >
+            {actions.map((act, idx) => (
+              <Pressable
+                key={`${act.type}_${idx}`}
+                onPress={() => handleActionPress(act)}
+                style={({ pressed }) => [
+                  styles.actionChip,
+                  { transform: [{ scale: pressed ? 0.95 : 1 }] },
+                ]}
+              >
+                <Text style={styles.actionChipIcon}>{act.icon}</Text>
+                <Text style={styles.actionChipText}>{act.label}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
       {shouldShowRawInputFirst(selectedItem) ? (
         <RawInputSection item={selectedItem} />
+      ) : null}
+
+      {/* 1.7. 📖 리더 모드 버튼 */}
+      {structured?.description &&
+      selectedItem.sourceType !== 'instagram_reel' &&
+      selectedItem.sourceType !== 'instagram_post' &&
+      selectedItem.sourceType !== 'instagram' ? (
+        <Pressable
+          onPress={() => setIsReaderVisible(true)}
+          style={({ pressed }) => [
+            styles.readerModeBtn,
+            { transform: [{ scale: pressed ? 0.96 : 1 }] },
+          ]}
+        >
+          <Text style={styles.readerModeBtnIcon}>📖</Text>
+          <Text style={styles.readerModeBtnText}>리더 모드로 본문 읽기</Text>
+        </Pressable>
       ) : null}
 
       {/* 2. 퀵 메모 */}
@@ -171,31 +238,35 @@ export function DetailContent({
       </View>
 
       {/* 3. AI 요약 */}
-      <View style={styles.summaryCard}>
-        <View style={styles.summaryHeader}>
-          <Text style={styles.summaryTitle}>✨ AI 요약</Text>
-          <Pressable
-            disabled={isSaving || selectedItem.aiStatus === 'pending'}
-            onPress={async () => {
-              await retryEnrichMetadata(selectedItem.id);
-              setToastMessage('AI 분석을 다시 요청했습니다.');
-            }}
-            style={({ pressed }) => [
-              styles.reanalyzeBtn,
-              (pressed || isSaving || selectedItem.aiStatus === 'pending') && { opacity: 0.5 },
-            ]}
-          >
-            {isSaving || selectedItem.aiStatus === 'pending' ? (
-              <ActivityIndicator size="small" color="#c084fc" />
-            ) : (
-              <Text style={styles.reanalyzeBtnText}>재분석 🧪</Text>
-            )}
-          </Pressable>
+      {selectedItem.sourceType !== 'instagram_reel' &&
+      selectedItem.sourceType !== 'instagram_post' &&
+      selectedItem.sourceType !== 'instagram' ? (
+        <View style={styles.summaryCard}>
+          <View style={styles.summaryHeader}>
+            <Text style={styles.summaryTitle}>✨ AI 요약</Text>
+            <Pressable
+              disabled={isSaving || selectedItem.aiStatus === 'pending'}
+              onPress={async () => {
+                await retryEnrichMetadata(selectedItem.id);
+                setToastMessage('AI 분석을 다시 요청했습니다.');
+              }}
+              style={({ pressed }) => [
+                styles.reanalyzeBtn,
+                (pressed || isSaving || selectedItem.aiStatus === 'pending') && { opacity: 0.5 },
+              ]}
+            >
+              {isSaving || selectedItem.aiStatus === 'pending' ? (
+                <ActivityIndicator size="small" color="#c084fc" />
+              ) : (
+                <Text style={styles.reanalyzeBtnText}>재분석 🧪</Text>
+              )}
+            </Pressable>
+          </View>
+          <Text style={styles.summaryValue}>
+            {structured?.detailedAnalysis || selectedItem.summary || 'AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.'}
+          </Text>
         </View>
-        <Text style={styles.summaryValue}>
-          {structured?.detailedAnalysis || selectedItem.summary || 'AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.'}
-        </Text>
-      </View>
+      ) : null}
 
       {/* 4. 도메인 특화 카드 */}
       {structured && structured.category === 'recipe' && (
@@ -304,6 +375,13 @@ export function DetailContent({
           <Text style={styles.deleteBtnText}>이 항목 삭제</Text>
         </Pressable>
       ) : null}
+
+      <ReaderModeModal
+        visible={isReaderVisible}
+        onClose={() => setIsReaderVisible(false)}
+        title={selectedItem.title}
+        markdown={structured?.description || ''}
+      />
     </View>
   );
 }
@@ -1138,6 +1216,63 @@ const styles = StyleSheet.create({
   deleteBtnText: {
     color: palette.dangerText,
     fontSize: 13,
+    fontWeight: '800',
+  },
+  // 🚀 퀵 액션 스타일
+  actionPanel: {
+    marginTop: spacing[3],
+    marginBottom: spacing[2],
+    gap: spacing[2],
+  },
+  actionPanelLabel: {
+    color: palette.textMuted,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  actionScrollContent: {
+    gap: spacing[2],
+    paddingVertical: spacing[1],
+  },
+  actionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1] + 2,
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 12,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 8,
+  },
+  actionChipIcon: {
+    fontSize: 14,
+  },
+  actionChipText: {
+    color: palette.textPrimary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  // 📖 리더 모드 버튼 스타일
+  readerModeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.3)',
+    borderRadius: 14,
+    paddingVertical: spacing[3] + 2,
+    marginVertical: spacing[2],
+  },
+  readerModeBtnIcon: {
+    fontSize: 16,
+  },
+  readerModeBtnText: {
+    color: '#c084fc',
+    fontSize: 14,
     fontWeight: '800',
   },
 });
