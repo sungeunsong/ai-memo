@@ -28,6 +28,15 @@ import { spacing } from '@/theme/spacing';
 
 import { ItemCard } from '@/components/ItemCard';
 import { SearchFilterBar } from '@/components/SearchFilterBar';
+import { EmptyResultGuide } from '@/components/EmptyResultGuide';
+import { PantryModal } from '@/components/PantryModal';
+import {
+  availableFacets,
+  buildFacetIndex,
+  selectByFacets,
+  suggestRelaxations,
+} from '@/features/facets/query';
+import { parseQueryToFacets } from '@/features/facets/parseQuery';
 import { CaptureModal, CaptureFloatingButton } from '@/components/CaptureModal';
 import { DetailScreen, DetailContent } from '@/components/DetailScreen';
 import {
@@ -65,13 +74,25 @@ export function HomeScreen() {
   // Local state
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('');
-  const [activeKeyword, setActiveKeyword] = useState('');
+  /** 서로 AND로 묶이는 조합 조건. 예) ['region:강원도', 'amenity:수영장'] */
+  const [selectedFacets, setSelectedFacets] = useState<string[]>([]);
   const [isCaptureVisible, setIsCaptureVisible] = useState(false);
+  const [isPantryVisible, setIsPantryVisible] = useState(false);
+  const [pantryOwned, setPantryOwned] = useState<string[]>([]);
 
   const handleCategoryChange = useCallback((cat: string) => {
     setActiveCategory(cat);
-    setActiveKeyword('');
+    // 카테고리가 바뀌면 이전 조건은 대부분 의미가 없어집니다.
+    setSelectedFacets([]);
   }, []);
+
+  const handleToggleFacet = useCallback((key: string) => {
+    setSelectedFacets((prev) =>
+      prev.includes(key) ? prev.filter((entry) => entry !== key) : [...prev, key]
+    );
+  }, []);
+
+  const handleClearFacets = useCallback(() => setSelectedFacets([]), []);
   const [isDetailVisible, setIsDetailVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [captureNotice, setCaptureNotice] = useState<CaptureNotice | null>(null);
@@ -115,10 +136,71 @@ export function HomeScreen() {
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0] ?? null;
   const runtimeErrorMessage = errorMessage ?? shareIntentError ?? null;
 
-  // 필터링
-  const filteredItems = useMemo(
-    () => filterItems(items, searchQuery, activeCategory, activeKeyword),
-    [items, searchQuery, activeCategory, activeKeyword]
+  // ==========================================
+  // 필터링 파이프라인
+  // 텍스트/카테고리로 먼저 좁히고, 그 결과 위에 조합 조건을 AND로 얹습니다.
+  // facet 건수와 완화 제안도 같은 기준 집합에서 계산해야 화면과 숫자가 어긋나지 않습니다.
+  // ==========================================
+  const facetIndex = useMemo(() => buildFacetIndex(items), [items]);
+
+  const baseItems = useMemo(
+    () => filterItems(items, searchQuery, activeCategory),
+    [items, searchQuery, activeCategory]
+  );
+
+  const baseIds = useMemo(
+    () => new Set(baseItems.map((item) => item.id)),
+    [baseItems]
+  );
+
+  const filteredItems = useMemo(() => {
+    if (selectedFacets.length === 0) return baseItems;
+    const allowed = selectByFacets(facetIndex, selectedFacets, baseIds);
+    return baseItems.filter((item) => allowed.has(item.id));
+  }, [baseItems, baseIds, facetIndex, selectedFacets]);
+
+  const facetOptions = useMemo(
+    () => availableFacets(facetIndex, selectedFacets, baseIds),
+    [facetIndex, selectedFacets, baseIds]
+  );
+
+  const relaxations = useMemo(
+    () => suggestRelaxations(facetIndex, selectedFacets, baseIds),
+    [facetIndex, selectedFacets, baseIds]
+  );
+
+  /**
+   * 결과를 죽인 원인이 조건이 아니라 검색어일 수도 있습니다.
+   * 검색어만 뺐을 때의 건수를 미리 계산해 0건 화면에서 함께 제안합니다.
+   */
+  const withoutSearchCount = useMemo(() => {
+    if (!searchQuery.trim()) return 0;
+    const withoutSearch = filterItems(items, '', activeCategory);
+    const ids = new Set(withoutSearch.map((item) => item.id));
+    return selectByFacets(facetIndex, selectedFacets, ids).size;
+  }, [items, activeCategory, searchQuery, facetIndex, selectedFacets]);
+
+  /**
+   * 입력한 낱말이 알려진 조건과 정확히 일치하면 칩으로 승격시킵니다.
+   * 사용자는 "강원도 수영장"이라고 치기만 하면 조합 검색을 쓰게 됩니다.
+   */
+  const handleSearchChange = useCallback(
+    (text: string) => {
+      const parsed = parseQueryToFacets(facetIndex, text);
+      if (parsed.facetKeys.length > 0) {
+        setSelectedFacets((prev) => {
+          const next = [...prev];
+          for (const key of parsed.facetKeys) {
+            if (!next.includes(key)) next.push(key);
+          }
+          return next;
+        });
+        setSearchQuery(parsed.rest);
+        return;
+      }
+      setSearchQuery(text);
+    },
+    [facetIndex]
   );
 
   // ==========================================
@@ -439,19 +521,31 @@ export function HomeScreen() {
           {/* 통합 검색 + 필터 칩 바 */}
           <View style={styles.filterArea}>
             <SearchFilterBar
-              items={items}
               searchQuery={searchQuery}
-              onSearchChange={setSearchQuery}
+              onSearchChange={handleSearchChange}
               activeCategory={activeCategory}
               onCategoryChange={handleCategoryChange}
-              activeKeyword={activeKeyword}
-              onKeywordChange={setActiveKeyword}
+              selectedFacets={selectedFacets}
+              onToggleFacet={handleToggleFacet}
+              onClearFacets={handleClearFacets}
+              facetOptions={facetOptions}
             />
           </View>
 
           <View style={styles.listHeader}>
             <Text style={styles.listTitle}>수집함</Text>
-            <Text style={styles.listCount}>{filteredItems.length}건</Text>
+            <View style={styles.listHeaderRight}>
+              <Pressable
+                onPress={() => setIsPantryVisible(true)}
+                style={({ pressed }) => [
+                  styles.pantryBtn,
+                  { transform: [{ scale: pressed ? 0.95 : 1 }] },
+                ]}
+              >
+                <Text style={styles.pantryBtnText}>🧺 냉장고 털기</Text>
+              </Pressable>
+              <Text style={styles.listCount}>{filteredItems.length}건</Text>
+            </View>
           </View>
 
           {isInitializing ? (
@@ -460,16 +554,19 @@ export function HomeScreen() {
               <Text style={styles.loadingText}>로딩 중...</Text>
             </View>
           ) : filteredItems.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyTitle}>
-                {items.length === 0 ? '수집함이 비어 있습니다' : '검색 결과가 없습니다'}
-              </Text>
-              <Text style={styles.emptyDesc}>
-                {items.length === 0
-                  ? '오른쪽 하단 + 버튼을 눌러 링크나 텍스트를 저장해보세요.'
-                  : '다른 키워드로 검색하거나 필터를 변경해보세요.'}
-              </Text>
-            </View>
+            <EmptyResultGuide
+              isCollectionEmpty={items.length === 0}
+              hasConditions={selectedFacets.length > 0}
+              relaxations={relaxations}
+              searchQuery={searchQuery}
+              withoutSearchCount={withoutSearchCount}
+              onDropFacet={handleToggleFacet}
+              onClearSearch={() => setSearchQuery('')}
+              onClearAll={() => {
+                handleClearFacets();
+                setSearchQuery('');
+              }}
+            />
           ) : (
             <FlatList
               data={filteredItems}
@@ -524,6 +621,19 @@ export function HomeScreen() {
         onSave={handleSaveFromCapture}
         isSaving={isSaving}
         initialValue={captureInitialValue}
+      />
+
+      {/* 냉장고 털기 (보유 재료 -> 만들 수 있는 것) */}
+      <PantryModal
+        visible={isPantryVisible}
+        items={items}
+        owned={pantryOwned}
+        onChangeOwned={setPantryOwned}
+        onClose={() => setIsPantryVisible(false)}
+        onSelectItem={(itemId) => {
+          setIsPantryVisible(false);
+          handleSelectItem(itemId);
+        }}
       />
 
       {/* 모바일 상세 오버레이 */}
@@ -813,6 +923,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     paddingTop: spacing[3],
     paddingBottom: spacing[1],
+  },
+  listHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  pantryBtn: {
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  pantryBtnText: {
+    color: palette.textSecondary,
+    fontSize: 10.5,
+    fontWeight: '900',
   },
   listHeader: {
     flexDirection: 'row',

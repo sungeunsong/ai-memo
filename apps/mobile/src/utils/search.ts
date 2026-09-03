@@ -65,8 +65,19 @@ export function isChoseongOnly(query: string): boolean {
  * 한글 초성 검색 및 자소 단위 퍼지 검색을 지원하는 매칭 함수입니다.
  * @param target 검색 대상 텍스트
  * @param query 검색어
+ * @param options.fuzzy 자소 순서 매칭(4단계) 사용 여부. 기본값 true.
+ *
+ *   이 규칙은 제목이나 재료명처럼 짧은 값에서는 오타를 잘 잡아주지만,
+ *   본문처럼 긴 글에 적용하면 글자가 흩어져 있어도 순서만 맞으면 걸립니다.
+ *   ('인피니티풀이 있는 오션뷰 숙소'가 '풀빌라'에 매칭되는 식)
+ *   그래서 긴 텍스트를 검색할 때는 꺼서 씁니다.
  */
-export function hangulMatch(target: string, query: string): boolean {
+export function hangulMatch(
+  target: string,
+  query: string,
+  options: { fuzzy?: boolean } = {}
+): boolean {
+  const { fuzzy = true } = options;
   const cleanTarget = target.toLowerCase().trim();
   const cleanQuery = query.toLowerCase().trim();
 
@@ -88,6 +99,10 @@ export function hangulMatch(target: string, query: string): boolean {
   if (disassembledTarget.includes(disassembledQuery)) return true;
 
   // 4. 자소 단위 순서 매칭 (퍼지 검색: 'ㄹ시피' -> '레시피' / 'ㄹㅅㅣㅍㅣ' -> 'ㄹㅔㅅㅣㅍㅣ')
+  if (!fuzzy) {
+    return false;
+  }
+
   let queryIdx = 0;
   for (let i = 0; i < disassembledTarget.length; i++) {
     if (disassembledTarget[i] === disassembledQuery[queryIdx]) {

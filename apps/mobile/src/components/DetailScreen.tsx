@@ -111,6 +111,10 @@ export function DetailContent({
   }, [toastMessage]);
 
   const structured = tryParseStructuredContent(selectedItem.content);
+
+  // 본문은 contentText 컬럼으로 분리됐습니다.
+  // structured.description은 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
+  const readerMarkdown: string = selectedItem.contentText || structured?.description || '';
   const actions = parseActionItems(selectedItem.rawInput, selectedItem.userNote ?? undefined, structured);
 
   async function handleActionPress(action: ActionItem) {
@@ -196,7 +200,7 @@ export function DetailContent({
       ) : null}
 
       {/* 1.7. 📖 리더 모드 버튼 */}
-      {structured?.description &&
+      {readerMarkdown &&
       selectedItem.sourceType !== 'instagram_reel' &&
       selectedItem.sourceType !== 'instagram_post' &&
       selectedItem.sourceType !== 'instagram' ? (
@@ -263,7 +267,12 @@ export function DetailContent({
             </Pressable>
           </View>
           <Text style={styles.summaryValue}>
-            {structured?.detailedAnalysis || selectedItem.summary || 'AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.'}
+            {/* 정리본이 상세 화면의 본문입니다.
+                structured.detailedAnalysis는 digest 컬럼 분리 이전에 저장된 아이템을 위한 호환 경로입니다. */}
+            {selectedItem.digest ||
+              structured?.detailedAnalysis ||
+              selectedItem.summary ||
+              'AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.'}
           </Text>
         </View>
       ) : null}
@@ -380,7 +389,7 @@ export function DetailContent({
         visible={isReaderVisible}
         onClose={() => setIsReaderVisible(false)}
         title={selectedItem.title}
-        markdown={structured?.description || ''}
+        markdown={readerMarkdown}
       />
     </View>
   );

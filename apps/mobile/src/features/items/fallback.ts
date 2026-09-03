@@ -49,6 +49,10 @@ export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): SaveU
     title,
     summary,
     content,
+    // 저장 시점에는 아직 본문을 긁지 않았고 정리본도 없습니다.
+    // 원문(rawInput)만 확보해두면 나머지는 나중에 언제든 다시 만들 수 있습니다.
+    contentText: null,
+    digest: null,
     thumbnailUrl: null,
     aiStatus: 'pending',
     syncStatus: 'local_only',

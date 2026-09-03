@@ -15,7 +15,16 @@ export type SavedItem = {
   rawInput: string;
   title: string;
   summary: string;
+  /** 구조화 데이터(JSON 문자열). 카테고리·재료·지역 등 facet의 원천 */
   content: string;
+  /**
+   * 링크에서 긁어온 본문 원문.
+   * 화면에는 보이지 않고 검색과 재추출을 위해 보관하는 캐시입니다.
+   * 링크가 죽어도 검색과 키워드 재생성이 가능하도록 남겨둡니다.
+   */
+  contentText: string | null;
+  /** AI가 읽기 좋게 재구성한 정리본. 상세 화면의 본문 역할 */
+  digest: string | null;
   thumbnailUrl: string | null;
   aiStatus: AIStatus;
   syncStatus: SyncStatus;
@@ -34,7 +43,16 @@ export type SaveUrlPayload = {
   rawInput: string;
   title: string;
   summary: string;
+  /** 구조화 데이터(JSON 문자열). 카테고리·재료·지역 등 facet의 원천 */
   content: string;
+  /**
+   * 링크에서 긁어온 본문 원문.
+   * 화면에는 보이지 않고 검색과 재추출을 위해 보관하는 캐시입니다.
+   * 링크가 죽어도 검색과 키워드 재생성이 가능하도록 남겨둡니다.
+   */
+  contentText: string | null;
+  /** AI가 읽기 좋게 재구성한 정리본. 상세 화면의 본문 역할 */
+  digest: string | null;
   thumbnailUrl: string | null;
   aiStatus: AIStatus;
   syncStatus: SyncStatus;
@@ -51,6 +69,8 @@ export type ItemMetadataPatch = {
   title?: string;
   summary?: string;
   content?: string;
+  contentText?: string | null;
+  digest?: string | null;
   thumbnailUrl?: string | null;
   aiStatus?: AIStatus;
   userNote?: string | null;

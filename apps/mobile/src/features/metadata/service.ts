@@ -42,7 +42,12 @@ type MetadataResult = {
   sourceUrl: string;
   title: string;
   summary: string;
+  /** 구조화 데이터(JSON). facet 추출의 원천 */
   content: string;
+  /** 긁어온 본문 원문. 화면에는 안 쓰고 검색·재추출용으로 보관 */
+  contentText: string | null;
+  /** 읽기 좋게 재구성한 정리본. 상세 화면의 본문 */
+  digest: string | null;
   thumbnailUrl: string | null;
   sourceType: string;
 };
@@ -67,30 +72,24 @@ export async function fetchMetadataPatch(sourceUrl: string): Promise<ItemMetadat
       title: metadata.title,
       summary: metadata.summary,
       content: metadata.content,
+      contentText: metadata.contentText,
+      digest: metadata.digest,
       thumbnailUrl: metadata.thumbnailUrl,
       sourceType: metadata.sourceType,
       aiStatus: 'completed',
       updatedAt,
     };
   } catch (error) {
-    // [Premium Hybrid AI Mock Engine]
-    // 웹 브라우저 환경 및 API 실패 에러 시에도 "도메인별 구조화 요약 파서"의 
-    // 기막힌 사용성을 유저가 직접 '감자' 검색 등으로 감탄하며 확인할 수 있도록
-    // 도메인(레시피, 운동, 여행)별 구조화 JSON 데이터를 content 필드에 정교하게 담아 탑재합니다.
-    let mockUrl = sourceUrl;
-    try {
-      mockUrl = normalizeSourceUrl(sourceUrl);
-    } catch {}
-    const mock = getRichMockMetadata(mockUrl);
+    // 메타데이터 수집 실패는 에러가 아닙니다. (AI Functional Spec §7)
+    //
+    // 중요: 여기서 title/summary/content를 채워 반환하면 안 됩니다.
+    // 이 patch는 기존 아이템에 그대로 덮어써지므로, 재시도가 네트워크 문제로 실패했을 때
+    // 사용자가 이미 갖고 있던 본문과 요약을 지워버리게 됩니다.
+    // 실패했을 때 할 일은 "상태만 기록하고 기존 데이터는 그대로 두는 것"뿐입니다.
+    console.warn('[MetadataService] 메타데이터 수집 실패. 기존 데이터를 유지합니다.', error);
 
     return {
-      sourceUrl: sourceUrl,
-      title: mock.title,
-      summary: mock.summary,
-      content: mock.content, // 구조화된 JSON 스트링 탑재
-      thumbnailUrl: mock.thumbnailUrl,
-      sourceType: mock.sourceType,
-      aiStatus: 'completed',
+      aiStatus: 'failed',
       updatedAt,
     };
   }
@@ -158,6 +157,9 @@ async function fetchYouTubeMetadata(sourceUrl: string): Promise<MetadataResult> 
     title,
     summary,
     content: structuredContent,
+    // 유튜브는 oEmbed 메타데이터만 얻으므로 별도로 보관할 본문이 없습니다.
+    contentText: null,
+    digest: null,
     thumbnailUrl,
     sourceType: 'youtube',
   };
@@ -231,15 +233,18 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
           summary = generateAISummary(title, rawContent, sourceType);
           parsedStructure = {
             ...parseStructuredFromContent(rawContent, sourceType),
-            detailedAnalysis: generateAIDetailedAnalysis(title, rawContent, sourceType),
+            detailedAnalysis: buildExcerptDigest(rawContent),
           };
         }
 
-        // 로컬 DB 및 AI 요약 레이어가 읽을 수 있게 정교한 JSON 구조로 변환
+        // content에는 구조화 데이터만 담습니다.
+        // 본문은 contentText로, 정리본은 digest로 각각 분리해 보관합니다.
+        // 원본과 파생물을 같은 칸에 섞어두면 AI를 다시 돌릴 때 본문까지 덮어쓰게 됩니다.
+        // summary와 detailedAnalysis는 각자 전용 컬럼이 있으므로 구조화 데이터에서 제외합니다.
+        const { detailedAnalysis, summary: _summary, ...structuredFields } = parsedStructure ?? {};
         const structuredContent = JSON.stringify({
           category: parsedStructure?.category || sourceType,
-          description: rawContent, // 실제 렌더링된 마크다운 전체 본문을 저장하여 재발견 검색이 가능하도록 함!
-          ...parsedStructure,
+          ...structuredFields,
         });
 
         console.log(`[MetadataService] Jina 파싱 성공. 제목: "${title}", 썸네일 획득 여부: ${Boolean(thumbnailUrl)}`);
@@ -249,6 +254,10 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
           title,
           summary,
           content: structuredContent,
+          contentText: rawContent || null,
+          digest: typeof detailedAnalysis === 'string' && detailedAnalysis.trim()
+            ? detailedAnalysis
+            : null,
           thumbnailUrl,
           sourceType,
         };
@@ -266,7 +275,6 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
 
   const structuredContent = JSON.stringify({
     category: sourceType,
-    description: htmlMetadata.summary,
   });
 
   return {
@@ -274,6 +282,9 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
     title: htmlMetadata.title,
     summary: htmlMetadata.summary,
     content: structuredContent,
+    // og 태그만 읽은 경우라 본문이랄 게 없습니다. 요약 이상은 보관하지 않습니다.
+    contentText: null,
+    digest: null,
     thumbnailUrl: htmlMetadata.thumbnailUrl,
     sourceType,
   };
@@ -476,52 +487,61 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function generateAIDetailedAnalysis(title: string, rawContent: string, sourceType: string): string {
+/**
+ * API 키가 없거나 Gemini 호출이 실패했을 때 쓰는 정리본 폴백.
+ *
+ * 원칙: 원문에 없는 내용은 한 글자도 만들어내지 않습니다.
+ * 이전 구현은 카테고리별 템플릿으로 "양념 소스 배합(간장, 마늘, 설탕 등 비율)" 같은
+ * 조리 단계를 지어냈는데, 원문과 무관한 문장이라 요약이 아니라 창작이었습니다.
+ * 레시피에서 지어낸 한 줄은 실제로 요리를 망칠 수 있으므로, 발췌만 합니다.
+ */
+function buildExcerptDigest(rawContent: string): string | null {
   if (!rawContent || rawContent.trim().length === 0) {
-    return `"${title}" 링크 지식입니다. 상세 요약할 원문 본문이 비어 있습니다.`;
+    return null;
   }
 
-  const paragraphs = rawContent
-    .split('\n')
-    .map(p => p.trim())
-    .filter(p => p.length > 20 && !p.includes('http') && !p.includes('Notion'));
+  const lines = rawContent.split('\n').map((line) => line.trim());
 
-  if (sourceType === 'recipe') {
-    return `🍳 [요리법 요약 보고서]
-• 레시피 개요: "${title}"를 준비하고 완성하기 위한 가이드라인입니다.
-• 주요 조리 과정: 
-  - 원문 본문에 맞춰 기본 재료 세척 및 크기에 맞춰 손질을 먼저 선행합니다.
-  - 양념 소스 배합(간장, 마늘, 설탕 등 비율) 후 골고루 재워둡니다.
-  - 적정 조리 온도와 가스불 세기 조절을 통해 재료가 눌어붙지 않게 맛깔나게 조리해 완성합니다.`;
+  // 마크다운 제목은 원문이 스스로 밝힌 구조라 목차로 쓰기 좋습니다.
+  const headings = lines
+    .filter((line) => /^#{1,4}\s+/.test(line))
+    .map((line) => line.replace(/^#+\s+/, '').trim())
+    .filter((heading) => heading.length > 1)
+    .slice(0, 8);
+
+  // 링크·표·인용 기호가 섞인 줄은 발췌해도 읽기 어려워 제외합니다.
+  const paragraphs = lines
+    .filter(
+      (line) =>
+        line.length >= 30 &&
+        !/^#{1,4}\s+/.test(line) &&
+        !line.includes('http') &&
+        !/^[-*|>[\]]/.test(line)
+    )
+    .slice(0, 4);
+
+  if (headings.length === 0 && paragraphs.length === 0) {
+    return null;
   }
 
-  if (sourceType === 'workout') {
-    return `💪 [운동 루틴 상세 분석]
-• 트레이닝 목표: "${title}"를 기반으로 근육 타겟 자극을 달성합니다.
-• 주요 트레이닝 팁:
-  - 각 루틴 동작 시 반동을 최소화하여 목표 부위에 고립 자극을 전달합니다.
-  - 세트 사이 적절한 수분 섭취와 45~60초의 규칙적인 휴식을 유지합니다.
-  - 수축 시 호흡을 뱉고 이완 시 들이마시는 정확한 호흡 템포를 지킵니다.`;
+  const parts: string[] = ['📌 원문 발췌'];
+  parts.push('_AI 정리 없이 원문에서 그대로 추린 내용입니다._');
+
+  if (headings.length > 0) {
+    parts.push('\n**원문 구성**');
+    parts.push(headings.map((heading) => `- ${heading}`).join('\n'));
   }
 
-  if (sourceType === 'travel') {
-    return `✈️ [여행 코스 & 호캉스 플래닝]
-• 투어 개요: "${title}" 숙소/위치를 거점으로 하는 힐링 휴양 투어 루트입니다.
-• 주요 여정 정보:
-  - 대표 시그니처 오션뷰 스팟 및 인근 카페, 소문난 로컬 맛집 정보를 수집했습니다.
-  - 체크인 시간에 늦지 않게 이동 동선을 계산하고, 이동 시 기차나 차량 주차 가능 여부를 먼저 점검합니다.
-  - 스파나 인피니티풀 등 부대시설 이용 요령과 쿠폰 혜택 적용을 사전에 검토하세요.`;
+  if (paragraphs.length > 0) {
+    parts.push('\n**주요 내용**');
+    parts.push(
+      paragraphs
+        .map((paragraph) => `- ${paragraph.slice(0, 200)}${paragraph.length > 200 ? '…' : ''}`)
+        .join('\n')
+    );
   }
 
-  if (paragraphs.length >= 3) {
-    const header = `📌 [핵심 주제 분석 및 요약 정리]`;
-    const sec1 = `• 주요 쟁점 및 내용:\n  ${paragraphs[0].slice(0, 150)}${paragraphs[0].length > 150 ? '...' : ''}`;
-    const sec2 = `• 세부 사항 요약:\n  ${paragraphs[1].slice(0, 150)}${paragraphs[1].length > 150 ? '...' : ''}`;
-    const sec3 = `• 시사점 및 결론:\n  ${paragraphs[2].slice(0, 150)}${paragraphs[2].length > 150 ? '...' : ''}`;
-    return `${header}\n\n${sec1}\n\n${sec2}\n\n${sec3}`;
-  }
-
-  return `📌 [지식 요약 정보]\n원문에서 추출한 핵심 내용입니다:\n\n${rawContent.slice(0, 400).replace(/\s+/g, ' ').trim()}...`;
+  return parts.join('\n');
 }
 
 async function callGeminiApi(title: string, rawContent: string): Promise<any | null> {
@@ -791,96 +811,4 @@ function parseStructuredFromContent(rawContent: string, sourceType: string): any
   }
 
   return null;
-}
-
-// ==========================================
-// 도메인별 럭셔리 구조화 JSON 데이터 보강 엔진
-// ==========================================
-function getRichMockMetadata(sourceUrl: string): { 
-  title: string; 
-  summary: string; 
-  content: string; 
-  thumbnailUrl: string | null;
-  sourceType: string;
-} {
-  const hostname = getHostname(sourceUrl);
-
-  // 1. 요리 레시피 시나리오 (유튜브 요리 링크 등)
-  // 예제: "youtube.com/watch?v=recipe" 또는 유튜브 링크 후보들
-  if (isYouTubeHost(hostname) && (sourceUrl.includes('recipe') || sourceUrl.includes('watch'))) {
-    const videoId = getYouTubeVideoId(sourceUrl);
-    const contentPayload = JSON.stringify({
-      category: 'recipe',
-      cookTime: '20분',
-      difficulty: '쉬움',
-      ingredients: ['감자', '양파', '베이컨', '모짜렐라 치즈', '체다 치즈', '생크림', '버터', '소금', '후추'],
-    });
-
-    return {
-      title: "오븐 없이 뚝딱! 초간단 감자 치즈 그라탕 황금 레시피",
-      summary: "프라이팬과 전자레인지만으로 고소함과 단단한 풍미를 선사하는 감자 치즈 그라탕 레시피입니다. 3줄 핵심 요약: 1) 얇게 썬 감자를 버터에 노릇하게 볶아 고소함을 올림. 2) 우유와 생크림 소스로 크리미한 질감 구현. 3) 두 가지 치즈(모짜렐라/체다)를 올려 부드럽고 짭조름하게 조화.",
-      content: contentPayload,
-      thumbnailUrl: videoId 
-        ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
-        : "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
-      sourceType: 'recipe',
-    };
-  }
-
-  // 2. 홈 트레이닝/운동 시나리오 (인스타 피드 등)
-  if (isInstagramHost(hostname) && (sourceUrl.includes('workout') || sourceUrl.includes('reel') || sourceUrl.includes('instagram.com'))) {
-    const contentPayload = JSON.stringify({
-      category: 'workout',
-      targetMuscles: ['하체', '허벅지', '둔근(엉덩이)'],
-      equipments: ['맨몸', '가벼운 덤벨'],
-      routine: [
-        '맨몸 스쿼트 : 20회 x 4세트',
-        '덤벨 런지 : 좌우 각 15회 x 3세트',
-        '힙 브릿지 Hold : 40초 x 3세트',
-        '사이드 레그 레이즈 : 25회 x 3세트'
-      ],
-    });
-
-    return {
-      title: "집에서 하는 15분 하체 파괴 근성장 홈트 루틴",
-      summary: "바쁜 시간 속에 덤벨과 맨몸만으로 대퇴사두근과 둔근 자극을 극대화시키는 고강도 루틴입니다. AI 요약 결과: 1) 세트 간 휴식 시간을 45초로 제한해 유산소 효과 병행. 2) 무릎 통증 예방을 위한 올바른 런지 골반 정렬 가이드. 3) 둔근 집중 수축 힙 런지 스킬 탑재.",
-      content: contentPayload,
-      thumbnailUrl: "https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=800",
-      sourceType: 'workout',
-    };
-  }
-
-  // 3. 여행 정보 호캉스 시나리오 (노션 문서 등)
-  if (hostname.includes('notion') && (sourceUrl.includes('travel') || sourceUrl.includes('notion.so'))) {
-    const contentPayload = JSON.stringify({
-      category: 'travel',
-      travelTheme: '국내 / 호캉스 / 힐링 온천',
-      location: '강원도 강릉시 강문해변길',
-      budget: '1박 15만 ~ 25만원대',
-      highlights: ['오션뷰 인피니티풀', '강문해변 솔밭 숲길', '펫 프렌들리 전용 전경'],
-      checklist: ['호텔 숙소 예약 확인', '온천/스파 이용권 예매', '인피니티 풀 수영복 챙기기', '강릉 KTX 기차표 발권', '세면도구 및 여벌 옷']
-    });
-
-    return {
-      title: "강릉 세인트존스 호텔 호캉스 인생샷 공략 기획서",
-      summary: "강릉 오션뷰의 정수를 만끽할 수 있는 세인트존스 호캉스 루트입니다. AI 요약: 1) 파인타워 사계절 온수 풀 인생샷 골든아워 공략. 2) 펫 프렌들리 호텔의 이점을 활용한 애견 동반 스페셜 라운지 이용법. 3) 강문해변 1분 도보 힐링 코스 설계.",
-      content: contentPayload,
-      thumbnailUrl: "https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?w=800",
-      sourceType: 'travel',
-    };
-  }
-
-  // 기본 Fallback Web 테크 지식 시나리오
-  const genericPayload = JSON.stringify({
-    category: 'web',
-    description: `${hostname} 웹 문서에서 요약된 데이터입니다.`
-  });
-
-  return {
-    title: `${hostname} 테크 인사이트 지식`,
-    summary: `${hostname} 웹페이지에서 백그라운드 AI 지능형 파서가 유용한 정보를 긁어 모았습니다. 이 아티클은 로컬-퍼스트 오프라인 동기화 최적화와 SQLite/Zustand 결합 효율에 대해 서술합니다.`,
-    content: genericPayload,
-    thumbnailUrl: "https://images.unsplash.com/photo-1488590528505-98d2b5aba04b?w=800",
-    sourceType: 'web',
-  };
 }

@@ -245,6 +245,9 @@ export function getSourceTheme(sourceType: string): SourceTheme {
 // 카테고리 분류 로직
 // ==========================================
 
+/** 카테고리 자동 분류 시 훑을 본문 길이 상한 */
+const CATEGORY_SCAN_LIMIT = 2000;
+
 export function getItemCategory(item: SavedItem): string {
   const structured = tryParseStructuredContent(item.content);
   const category = structured?.category || item.sourceType;
@@ -255,7 +258,13 @@ export function getItemCategory(item: SavedItem): string {
   if (category === 'workout') return 'workout';
 
   const title = item.title.toLowerCase();
-  const content = item.content.toLowerCase();
+  // 본문은 contentText로 분리됐습니다. item.content에는 구조화 데이터만 남아 있어
+  // 여기서 본문 키워드를 찾으려면 두 곳을 모두 봐야 합니다.
+  // (contentText가 없던 시절 아이템은 content 안에 본문이 들어 있습니다)
+  // getItemCategory는 검색어를 칠 때마다 아이템 수만큼 호출됩니다.
+  // 본문 전체를 매번 소문자로 복사하면 비용이 커지므로 앞부분만 봅니다.
+  // 분류 근거가 되는 단어는 대개 글머리에 나옵니다.
+  const content = `${(item.contentText ?? '').slice(0, CATEGORY_SCAN_LIMIT)} ${item.content.slice(0, CATEGORY_SCAN_LIMIT)}`.toLowerCase();
   const userNote = (item.userNote || '').toLowerCase();
 
   if (
@@ -294,85 +303,37 @@ export function getItemCategory(item: SavedItem): string {
 }
 
 // ==========================================
-// 다이나믹 필터 칩 추출
-// ==========================================
-
-const KEYWORD_EMOJIS: Record<string, string> = {
-  '감자': '🥔', '양파': '🧅', '베이컨': '🥓', '모짜렐라 치즈': '🧀',
-  '체다 치즈': '🧀', '생크림': '🥛', '버터': '🧈', '소금': '🧂',
-  '후추': '🧂', '치즈': '🧀', '계란': '🥚', '마늘': '🧄',
-  '하체': '🔥', '허벅지': '🦵', '둔근': '🍑', '둔근(엉덩이)': '🍑',
-  '상체': '💪', '가슴': '🏋️‍♂️', '등': '💪', '복근': '🍫', '코어': '🧘',
-  '국내': '🇰🇷', '해외': '✈️', '호캉스': '🏨', '힐링 온천': '♨️',
-  '강원도': '🌊', '강릉': '🌊', '제주': '🌴', '오션뷰': '🌊', '온천': '♨️',
-};
-
-export type FilterChip = { label: string; value: string };
-
-export function extractDynamicChips(items: SavedItem[], activeCategory: string): FilterChip[] {
-  const counts: Record<string, number> = {};
-
-  items.forEach((item) => {
-    const category = getItemCategory(item);
-    if (activeCategory && category !== activeCategory) {
-      return;
-    }
-
-    const structured = tryParseStructuredContent(item.content);
-    if (category === 'recipe') {
-      if (structured && structured.ingredients) {
-        (structured.ingredients as string[]).forEach((ing) => {
-          counts[ing] = (counts[ing] || 0) + 1;
-        });
-      }
-    } else if (category === 'workout') {
-      if (structured && structured.targetMuscles) {
-        (structured.targetMuscles as string[]).forEach((muscle) => {
-          counts[muscle] = (counts[muscle] || 0) + 1;
-        });
-      }
-    } else if (category === 'travel') {
-      if (structured) {
-        if (structured.travelTheme) {
-          structured.travelTheme.split('/').map((t: string) => t.trim()).forEach((theme: string) => {
-            counts[theme] = (counts[theme] || 0) + 1;
-          });
-        }
-        if (structured.highlights) {
-          (structured.highlights as string[]).forEach((h) => {
-            counts[h] = (counts[h] || 0) + 1;
-          });
-        }
-      }
-    }
-  });
-
-  const chips: FilterChip[] = [];
-  const sortedKeywords = Object.entries(counts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([key]) => key);
-
-  sortedKeywords.forEach((keyword) => {
-    if (keyword === '국내' || keyword === '해외' || keyword === '호캉스') {
-      return;
-    }
-    const emoji = KEYWORD_EMOJIS[keyword] || '🏷';
-    chips.push({ label: `#${keyword} ${emoji}`, value: keyword });
-  });
-
-  return chips;
-}
-
-// ==========================================
 // 아이템 필터링 로직
 // ==========================================
 
+/**
+ * DM 원문이나 렌더링된 본문처럼 길이를 예측할 수 없는 텍스트를 검색합니다.
+ *
+ * hangulMatch는 대상 전체를 자모 단위로 분해하므로, 수만 자 본문에 매 타이핑마다 적용하면
+ * 입력이 눈에 띄게 밀립니다. 그래서 길이를 기준으로 전략을 나눕니다.
+ * - 짧은 텍스트(대부분의 DM 원문): 초성/퍼지 매칭까지 적용
+ * - 긴 텍스트(웹 본문 전체): 단순 포함 검사만 적용
+ */
+const FUZZY_MATCH_LENGTH_LIMIT = 300;
+
+function matchBodyText(text: string | null | undefined, query: string): boolean {
+  if (!text) return false;
+  if (text.length <= FUZZY_MATCH_LENGTH_LIMIT) {
+    // 자소 순서 매칭은 끕니다. 긴 글에서는 글자가 흩어져 있어도 순서만 맞으면 걸려
+    // 관련 없는 아이템이 결과에 섞입니다. 본문 검색에는 포함 검사와 초성까지면 충분합니다.
+    return hangulMatch(text, query, { fuzzy: false });
+  }
+  return text.toLowerCase().includes(query.toLowerCase());
+}
+
+/**
+ * 텍스트 검색과 카테고리로 1차 필터링합니다.
+ * 재료/지역 같은 조합 조건은 features/facets가 이 결과 위에 AND로 얹습니다.
+ */
 export function filterItems(
   items: SavedItem[],
   searchQuery: string,
-  activeCategory: string,
-  activeKeyword: string
+  activeCategory: string
 ): SavedItem[] {
   return items.filter((item) => {
     // 1. 카테고리 필터링 (스마트 폴더)
@@ -382,37 +343,7 @@ export function filterItems(
       }
     }
 
-    // 2. 키워드 필터링 (재료, 부위 등)
-    if (activeKeyword) {
-      const structured = tryParseStructuredContent(item.content);
-      if (!structured) return false;
-
-      let found = false;
-      const category = getItemCategory(item);
-      if (category === 'recipe' && structured.ingredients) {
-        found = (structured.ingredients as string[]).some((ing) =>
-          ing.toLowerCase().includes(activeKeyword.toLowerCase())
-        );
-      }
-      if (category === 'workout' && structured.targetMuscles) {
-        found = found || (structured.targetMuscles as string[]).some((m) =>
-          m.toLowerCase().includes(activeKeyword.toLowerCase())
-        );
-      }
-      if (category === 'travel') {
-        if (structured.highlights) {
-          found = found || (structured.highlights as string[]).some((h) =>
-            h.toLowerCase().includes(activeKeyword.toLowerCase())
-          );
-        }
-        if (structured.travelTheme) {
-          found = found || structured.travelTheme.toLowerCase().includes(activeKeyword.toLowerCase());
-        }
-      }
-      if (!found) return false;
-    }
-
-    // 3. 검색어 필터
+    // 2. 검색어 필터
     if (!searchQuery.trim()) return true;
     const query = searchQuery.trim();
 
@@ -446,6 +377,20 @@ export function filterItems(
         if (structured.checklist && (structured.checklist as string[]).some((c) => hangulMatch(c, query))) return true;
       }
     }
+
+    // 요약 검색
+    if (item.summary && hangulMatch(item.summary, query)) return true;
+
+    // 원문/정리본/본문/URL 폴백 검색
+    // AI 분류나 구조화 추출이 실패한 아이템도 반드시 다시 찾을 수 있어야 하므로,
+    // 저장 당시의 원문과 긁어온 본문 전체를 마지막 그물망으로 사용합니다.
+    if (matchBodyText(item.rawInput, query)) return true;
+    if (matchBodyText(item.digest, query)) return true;
+    if (matchBodyText(item.contentText, query)) return true;
+    // 본문/정리본을 별도 컬럼으로 분리하기 전에 저장된 아이템 호환
+    if (structured && typeof structured.description === 'string' && matchBodyText(structured.description, query)) return true;
+    if (structured && typeof structured.detailedAnalysis === 'string' && matchBodyText(structured.detailedAnalysis, query)) return true;
+    if (matchBodyText(item.sourceUrl, query)) return true;
 
     return false;
   });

@@ -10,6 +10,8 @@ type ItemRow = {
   title: string;
   summary: string;
   content: string;
+  content_text: string | null;
+  digest: string | null;
   thumbnail_url: string | null;
   ai_status: 'pending' | 'completed' | 'failed';
   sync_status: 'local_only' | 'queued' | 'synced' | 'failed';
@@ -24,10 +26,10 @@ type ItemRow = {
 export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayload) {
   await db.runAsync(
     `INSERT INTO items (
-      id, type, source_url, raw_input, title, summary, content, thumbnail_url,
-      ai_status, sync_status, user_note, extracted_urls, source_type, saved_from,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, type, source_url, raw_input, title, summary, content, content_text, digest,
+      thumbnail_url, ai_status, sync_status, user_note, extracted_urls, source_type,
+      saved_from, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     item.id,
     item.type,
     item.sourceUrl,
@@ -35,6 +37,8 @@ export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayloa
     item.title,
     item.summary,
     item.content,
+    item.contentText,
+    item.digest,
     item.thumbnailUrl,
     item.aiStatus,
     item.syncStatus,
@@ -57,6 +61,8 @@ export async function listItemsAsync(db: SQLiteDatabase) {
       title,
       summary,
       content,
+      content_text,
+      digest,
       thumbnail_url,
       ai_status,
       sync_status,
@@ -85,6 +91,8 @@ export async function updateItemMetadataAsync(
       title = COALESCE(?, title),
       summary = COALESCE(?, summary),
       content = COALESCE(?, content),
+      content_text = COALESCE(?, content_text),
+      digest = COALESCE(?, digest),
       thumbnail_url = COALESCE(?, thumbnail_url),
       ai_status = COALESCE(?, ai_status),
       user_note = COALESCE(?, user_note),
@@ -97,6 +105,8 @@ export async function updateItemMetadataAsync(
     patch.title ?? null,
     patch.summary ?? null,
     patch.content ?? null,
+    patch.contentText ?? null,
+    patch.digest ?? null,
     patch.thumbnailUrl ?? null,
     patch.aiStatus ?? null,
     patch.userNote ?? null,
@@ -152,6 +162,8 @@ function mapItemRow(row: ItemRow): SavedItem {
     title: row.title,
     summary: row.summary,
     content: row.content,
+    contentText: row.content_text,
+    digest: row.digest,
     thumbnailUrl: row.thumbnail_url,
     aiStatus: row.ai_status,
     syncStatus: row.sync_status,

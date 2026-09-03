@@ -1,19 +1,25 @@
-import { useMemo, useRef, useCallback } from 'react';
+import { useCallback } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { SavedItem } from '@/features/items/types';
-import { extractDynamicChips } from '@/utils/formatters';
+import { FacetOption } from '@/features/facets/query';
+import { KIND_LABELS, facetLabel } from '@/features/facets/labels';
 import { palette } from '@/theme/palette';
 import { spacing } from '@/theme/spacing';
 
 type Props = {
-  items: SavedItem[];
   searchQuery: string;
   onSearchChange: (query: string) => void;
   activeCategory: string;
   onCategoryChange: (category: string) => void;
-  activeKeyword: string;
-  onKeywordChange: (keyword: string) => void;
+  /** 선택된 facet 키. 서로 AND로 묶입니다. */
+  selectedFacets: string[];
+  onToggleFacet: (key: string) => void;
+  onClearFacets: () => void;
+  /**
+   * 지금 고를 수 있는 facet과 각각을 눌렀을 때의 결과 건수.
+   * 0건이 되는 것은 애초에 여기 담기지 않습니다.
+   */
+  facetOptions: FacetOption[];
 };
 
 const FOLDERS = [
@@ -21,29 +27,33 @@ const FOLDERS = [
   { label: '레시피 🍳', value: 'recipe' },
   { label: '운동 💪', value: 'workout' },
   { label: '여행 ✈️', value: 'travel' },
+  { label: '육아 🍼', value: 'parenting' },
 ];
 
+/** 추천 칩이 너무 많으면 고르는 것 자체가 일이 됩니다. */
+const MAX_SUGGESTED_CHIPS = 12;
+
 export function SearchFilterBar({
-  items,
   searchQuery,
   onSearchChange,
   activeCategory,
   onCategoryChange,
-  activeKeyword,
-  onKeywordChange,
+  selectedFacets,
+  onToggleFacet,
+  onClearFacets,
+  facetOptions,
 }: Props) {
-  // 현재 카테고리에 맞는 동적 키워드 칩 추출
-  const chips = useMemo(
-    () => extractDynamicChips(items, activeCategory),
-    [items, activeCategory]
-  );
-
   const handleSearchInput = useCallback(
     (text: string) => {
       onSearchChange(text);
     },
     [onSearchChange]
   );
+
+  const selected = facetOptions.filter((option) => option.selected);
+  const suggestions = facetOptions
+    .filter((option) => !option.selected)
+    .slice(0, MAX_SUGGESTED_CHIPS);
 
   return (
     <View style={styles.container}>
@@ -54,7 +64,7 @@ export function SearchFilterBar({
           autoCapitalize="none"
           autoCorrect={false}
           onChangeText={handleSearchInput}
-          placeholder="재료, 운동부위, 제목 등 검색..."
+          placeholder="재료, 지역, 부위로 검색 (예: 강원도 수영장)"
           placeholderTextColor={palette.textMuted}
           style={styles.searchInput}
           value={searchQuery}
@@ -66,8 +76,12 @@ export function SearchFilterBar({
         ) : null}
       </View>
 
-      {/* 2. 스마트 폴더 탭 UI */}
-      <View style={styles.tabsRow}>
+      {/* 2. 스마트 폴더 탭 */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.tabsRow}
+      >
         {FOLDERS.map((folder) => {
           const isActive = activeCategory === folder.value;
           return (
@@ -86,35 +100,68 @@ export function SearchFilterBar({
             </Pressable>
           );
         })}
-      </View>
+      </ScrollView>
 
-      {/* 3. 동적 키워드 칩 추천 */}
-      {chips.length > 0 ? (
-        <View style={styles.keywordPanel}>
-          <Text style={styles.keywordPanelLabel}>추천 키워드</Text>
+      {/* 3. 선택된 조건 — 조합의 현재 상태를 항상 눈에 보이게 둡니다. */}
+      {selected.length > 0 ? (
+        <View style={styles.selectedPanel}>
+          <View style={styles.selectedHeader}>
+            <Text style={styles.panelLabel}>조건 {selected.length}개</Text>
+            <Pressable onPress={onClearFacets} hitSlop={8}>
+              <Text style={styles.clearAllText}>모두 해제</Text>
+            </Pressable>
+          </View>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.chipsContainer}
           >
-            {chips.map((chip) => {
-              const isActive = activeKeyword === chip.value;
-              return (
-                <Pressable
-                  key={chip.value}
-                  onPress={() => onKeywordChange(isActive ? '' : chip.value)}
-                  style={({ pressed }) => [
-                    styles.chip,
-                    isActive && styles.chipActive,
-                    { transform: [{ scale: pressed ? 0.94 : 1 }] },
-                  ]}
-                >
-                  <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
-                    {chip.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
+            {selected.map((option) => (
+              <Pressable
+                key={option.key}
+                onPress={() => onToggleFacet(option.key)}
+                style={({ pressed }) => [
+                  styles.chip,
+                  styles.chipActive,
+                  { transform: [{ scale: pressed ? 0.94 : 1 }] },
+                ]}
+              >
+                <Text style={[styles.chipText, styles.chipTextActive]}>
+                  {facetLabel(option.kind, option.value)} ✕
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {/* 4. 추천 조건 — 건수를 함께 보여줘 "누르면 몇 건 남는지"를 미리 알 수 있게 합니다. */}
+      {suggestions.length > 0 ? (
+        <View style={styles.selectedPanel}>
+          <Text style={styles.panelLabel}>
+            {selected.length > 0 ? '조건 더하기' : '추천 조건'}
+          </Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsContainer}
+          >
+            {suggestions.map((option) => (
+              <Pressable
+                key={option.key}
+                onPress={() => onToggleFacet(option.key)}
+                style={({ pressed }) => [
+                  styles.chip,
+                  { transform: [{ scale: pressed ? 0.94 : 1 }] },
+                ]}
+              >
+                <Text style={styles.chipText}>
+                  {facetLabel(option.kind, option.value)}
+                  <Text style={styles.chipCount}> {option.count}</Text>
+                </Text>
+                <Text style={styles.chipKind}>{KIND_LABELS[option.kind]}</Text>
+              </Pressable>
+            ))}
           </ScrollView>
         </View>
       ) : null}
@@ -148,29 +195,24 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   clearBtn: {
-    width: 22,
-    height: 22,
-    backgroundColor: palette.surface,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
   },
   clearBtnText: {
-    color: palette.textSecondary,
-    fontSize: 9,
+    color: palette.textMuted,
+    fontSize: 12,
     fontWeight: '900',
   },
-  // 스마트 폴더 탭 스타일
   tabsRow: {
     flexDirection: 'row',
     gap: spacing[2],
-    justifyContent: 'space-between',
+    paddingRight: spacing[2],
   },
   tab: {
-    flex: 1,
     backgroundColor: palette.surface,
     borderRadius: 12,
     paddingVertical: 10,
+    paddingHorizontal: spacing[3] + 2,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -178,7 +220,7 @@ const styles = StyleSheet.create({
   },
   tabActive: {
     backgroundColor: 'rgba(139, 92, 246, 0.15)',
-    borderColor: '#8b5cf6',
+    borderColor: palette.accent,
   },
   tabText: {
     color: palette.textSecondary,
@@ -188,17 +230,26 @@ const styles = StyleSheet.create({
   tabTextActive: {
     color: '#c084fc',
   },
-  // 키워드 추천 영역
-  keywordPanel: {
+  selectedPanel: {
     gap: spacing[1] + 2,
   },
-  keywordPanelLabel: {
+  selectedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingRight: 2,
+  },
+  panelLabel: {
     color: palette.textMuted,
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 0.8,
-    textTransform: 'uppercase',
     paddingLeft: 2,
+  },
+  clearAllText: {
+    color: palette.textSecondary,
+    fontSize: 10,
+    fontWeight: '800',
   },
   chipsContainer: {
     flexDirection: 'row',
@@ -213,10 +264,11 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderWidth: 1,
     borderColor: palette.border,
+    alignItems: 'center',
   },
   chipActive: {
     backgroundColor: 'rgba(139, 92, 246, 0.15)',
-    borderColor: '#8b5cf6',
+    borderColor: palette.accent,
   },
   chipText: {
     color: palette.textSecondary,
@@ -225,5 +277,17 @@ const styles = StyleSheet.create({
   },
   chipTextActive: {
     color: '#c084fc',
+  },
+  chipCount: {
+    color: palette.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  chipKind: {
+    color: palette.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+    marginTop: 1,
   },
 });

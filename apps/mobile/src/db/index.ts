@@ -50,7 +50,10 @@ export async function initializeDatabase() {
     'ALTER TABLE items ADD COLUMN user_note TEXT;',
     'ALTER TABLE items ADD COLUMN extracted_urls TEXT;',
     'ALTER TABLE items ADD COLUMN source_type TEXT DEFAULT "web";',
-    'ALTER TABLE items ADD COLUMN saved_from TEXT DEFAULT "manual";'
+    'ALTER TABLE items ADD COLUMN saved_from TEXT DEFAULT "manual";',
+    // 원문/본문/파생물 분리 (2026-09)
+    'ALTER TABLE items ADD COLUMN content_text TEXT;',
+    'ALTER TABLE items ADD COLUMN digest TEXT;'
   ];
 
   for (const query of migrations) {
@@ -356,6 +359,8 @@ function updateWebItem(itemId: string, patch: ItemMetadataPatch) {
           ...(patch.title ? { title: patch.title } : null),
           ...(patch.summary ? { summary: patch.summary } : null),
           ...(patch.content ? { content: patch.content } : null),
+          ...(patch.contentText ? { contentText: patch.contentText } : null),
+          ...(patch.digest ? { digest: patch.digest } : null),
           ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
           ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
           ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),

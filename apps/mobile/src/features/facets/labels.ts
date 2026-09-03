@@ -1,0 +1,46 @@
+/** facet을 화면에 표시할 때 쓰는 라벨과 아이콘. */
+
+import { FacetKind } from './extract';
+
+const VALUE_EMOJIS: Record<string, string> = {
+  // 재료
+  '감자': '🥔', '양파': '🧅', '베이컨': '🥓', '치즈': '🧀', '유제품': '🥛',
+  '생크림': '🥛', '우유': '🥛', '버터': '🧈', '달걀': '🥚', '마늘': '🧄',
+  '파': '🌿', '소금': '🧂', '후추': '🧂', '설탕': '🍚', '간장': '🍶',
+  '돼지고기': '🥓', '소고기': '🥩', '닭고기': '🍗', '기름': '🫗',
+  // 운동
+  '하체': '🦵', '허벅지': '🦵', '둔근': '🍑', '종아리': '🦵',
+  '상체': '💪', '가슴': '🏋️', '등': '💪', '어깨': '🙆', '팔': '💪',
+  '코어': '🧘', '복근': '🍫', '맨몸': '🤸', '덤벨': '🏋️', '밴드': '🎗️',
+  // 여행
+  '국내': '🇰🇷', '해외': '✈️', '강원도': '⛰️', '제주': '🌴', '경기도': '🏙️',
+  '수영장': '🏊', '온천': '♨️', '바다': '🌊', '캠핑': '🏕️', '글램핑': '⛺',
+  '호캉스': '🏨', '조식': '🥐', '반려동물': '🐶', '키즈': '🧸',
+  '단풍': '🍁', '벚꽃': '🌸', '설경': '❄️', '계곡': '🏞️', '사우나': '🧖',
+};
+
+const KIND_FALLBACK_EMOJIS: Record<FacetKind, string> = {
+  ingredient: '🥗',
+  muscle: '💪',
+  equipment: '🎽',
+  region: '📍',
+  amenity: '✨',
+  theme: '🏷️',
+};
+
+export const KIND_LABELS: Record<FacetKind, string> = {
+  ingredient: '재료',
+  muscle: '부위',
+  equipment: '도구',
+  region: '지역',
+  amenity: '시설',
+  theme: '테마',
+};
+
+export function facetEmoji(kind: FacetKind, value: string): string {
+  return VALUE_EMOJIS[value] ?? KIND_FALLBACK_EMOJIS[kind];
+}
+
+export function facetLabel(kind: FacetKind, value: string): string {
+  return `${value} ${facetEmoji(kind, value)}`;
+}
