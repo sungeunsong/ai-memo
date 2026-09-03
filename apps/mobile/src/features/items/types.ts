@@ -27,6 +27,8 @@ export type SavedItem = {
   digest: string | null;
   thumbnailUrl: string | null;
   aiStatus: AIStatus;
+  /** AI 보강이 실패한 이유. 화면에 그대로 보여줘 원인을 알 수 있게 합니다. */
+  aiError: string | null;
   syncStatus: SyncStatus;
   userNote: string | null;
   extractedUrls: string[];
@@ -55,6 +57,8 @@ export type SaveUrlPayload = {
   digest: string | null;
   thumbnailUrl: string | null;
   aiStatus: AIStatus;
+  /** AI 보강이 실패한 이유. 화면에 그대로 보여줘 원인을 알 수 있게 합니다. */
+  aiError: string | null;
   syncStatus: SyncStatus;
   userNote: string | null;
   extractedUrls: string[];
@@ -71,6 +75,7 @@ export type ItemMetadataPatch = {
   content?: string;
   contentText?: string | null;
   digest?: string | null;
+  aiError?: string | null;
   thumbnailUrl?: string | null;
   aiStatus?: AIStatus;
   userNote?: string | null;

@@ -12,6 +12,7 @@ type ItemRow = {
   content: string;
   content_text: string | null;
   digest: string | null;
+  ai_error: string | null;
   thumbnail_url: string | null;
   ai_status: 'pending' | 'completed' | 'failed';
   sync_status: 'local_only' | 'queued' | 'synced' | 'failed';
@@ -26,10 +27,10 @@ type ItemRow = {
 export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayload) {
   await db.runAsync(
     `INSERT INTO items (
-      id, type, source_url, raw_input, title, summary, content, content_text, digest,
+      id, type, source_url, raw_input, title, summary, content, content_text, digest, ai_error,
       thumbnail_url, ai_status, sync_status, user_note, extracted_urls, source_type,
       saved_from, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     item.id,
     item.type,
     item.sourceUrl,
@@ -39,6 +40,7 @@ export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayloa
     item.content,
     item.contentText,
     item.digest,
+    item.aiError,
     item.thumbnailUrl,
     item.aiStatus,
     item.syncStatus,
@@ -63,6 +65,7 @@ export async function listItemsAsync(db: SQLiteDatabase) {
       content,
       content_text,
       digest,
+      ai_error,
       thumbnail_url,
       ai_status,
       sync_status,
@@ -93,6 +96,7 @@ export async function updateItemMetadataAsync(
       content = COALESCE(?, content),
       content_text = COALESCE(?, content_text),
       digest = COALESCE(?, digest),
+      ai_error = ?,
       thumbnail_url = COALESCE(?, thumbnail_url),
       ai_status = COALESCE(?, ai_status),
       user_note = COALESCE(?, user_note),
@@ -107,6 +111,7 @@ export async function updateItemMetadataAsync(
     patch.content ?? null,
     patch.contentText ?? null,
     patch.digest ?? null,
+    patch.aiError ?? null,
     patch.thumbnailUrl ?? null,
     patch.aiStatus ?? null,
     patch.userNote ?? null,
@@ -164,6 +169,7 @@ function mapItemRow(row: ItemRow): SavedItem {
     content: row.content,
     contentText: row.content_text,
     digest: row.digest,
+    aiError: row.ai_error,
     thumbnailUrl: row.thumbnail_url,
     aiStatus: row.ai_status,
     syncStatus: row.sync_status,

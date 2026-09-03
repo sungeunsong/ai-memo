@@ -288,6 +288,16 @@ export function DetailContent({
               selectedItem.summary ||
               'AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.'}
           </Text>
+
+          {/* 실패했으면 이유를 그대로 보여줍니다.
+              폰에서 도는 앱이라 콘솔을 열기 어렵고, 사용자 입장에서도
+              "요약이 왜 없지"에 답이 있어야 재분석을 눌러볼 수 있습니다. */}
+          {selectedItem.aiStatus === 'failed' && selectedItem.aiError ? (
+            <View style={styles.aiErrorBox}>
+              <Text style={styles.aiErrorLabel}>AI 요약 실패</Text>
+              <Text style={styles.aiErrorText}>{selectedItem.aiError}</Text>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -663,6 +673,26 @@ function MetaBlock({ label, value }: { label: string; value: string }) {
 // 스타일
 // ==========================================
 const styles = StyleSheet.create({
+  aiErrorBox: {
+    marginTop: spacing[3],
+    backgroundColor: palette.dangerSoft,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    padding: spacing[3],
+    gap: 3,
+  },
+  aiErrorLabel: {
+    color: palette.dangerText,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  aiErrorText: {
+    color: palette.textSecondary,
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
   // 오버레이
   backdrop: {
     position: 'absolute',

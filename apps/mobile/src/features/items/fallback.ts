@@ -53,6 +53,7 @@ export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): SaveU
     // 원문(rawInput)만 확보해두면 나머지는 나중에 언제든 다시 만들 수 있습니다.
     contentText: null,
     digest: null,
+    aiError: null,
     thumbnailUrl: null,
     aiStatus: 'pending',
     syncStatus: 'local_only',

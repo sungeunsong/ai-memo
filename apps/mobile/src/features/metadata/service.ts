@@ -48,6 +48,8 @@ type MetadataResult = {
   contentText: string | null;
   /** 읽기 좋게 재구성한 정리본. 상세 화면의 본문 */
   digest: string | null;
+  /** AI 보강 실패 사유 */
+  aiError: string | null;
   thumbnailUrl: string | null;
   sourceType: string;
 };
@@ -74,6 +76,7 @@ export async function fetchMetadataPatch(sourceUrl: string): Promise<ItemMetadat
       content: metadata.content,
       contentText: metadata.contentText,
       digest: metadata.digest,
+      aiError: metadata.aiError,
       thumbnailUrl: metadata.thumbnailUrl,
       sourceType: metadata.sourceType,
       aiStatus: 'completed',
@@ -114,9 +117,9 @@ export async function fetchTextMetadataPatch(rawText: string): Promise<ItemMetad
     return { aiStatus: 'failed', updatedAt };
   }
 
-  const aiResponse = await callGeminiApi('', trimmed);
+  const result = await callGeminiApi('', trimmed);
 
-  if (!aiResponse) {
+  if (!result.ok) {
     // API 키가 없거나 호출에 실패한 경우. 원문에서 발췌한 정리본만이라도 붙입니다.
     //
     // 발췌가 성공해도 상태는 'failed'입니다. AI 요약은 실제로 실패했고,
@@ -126,10 +129,12 @@ export async function fetchTextMetadataPatch(rawText: string): Promise<ItemMetad
     return {
       ...(digest ? { digest } : null),
       aiStatus: 'failed',
+      aiError: result.reason,
       updatedAt,
     };
   }
 
+  const aiResponse = result.data;
   const {
     title: aiTitle,
     summary: aiSummary,
@@ -151,6 +156,7 @@ export async function fetchTextMetadataPatch(rawText: string): Promise<ItemMetad
         ? detailedAnalysis
         : buildExcerptDigest(trimmed),
     aiStatus: 'completed',
+    aiError: null,
     updatedAt,
   };
 }
@@ -219,6 +225,7 @@ async function fetchYouTubeMetadata(sourceUrl: string): Promise<MetadataResult> 
     // 유튜브는 oEmbed 메타데이터만 얻으므로 별도로 보관할 본문이 없습니다.
     contentText: null,
     digest: null,
+    aiError: null,
     thumbnailUrl,
     sourceType: 'youtube',
   };
@@ -279,14 +286,16 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
 
         let summary = '';
         let parsedStructure: any = null;
+        let aiError: string | null = null;
 
         // 1. 진짜 AI 요약 API (Gemini 2.5 Flash LLM) 호출 시도
-        const aiResponse = await callGeminiApi(title, rawContent);
-        if (aiResponse) {
+        const aiResult = await callGeminiApi(title, rawContent);
+        if (aiResult.ok) {
           console.log('[MetadataService] Gemini API를 활용한 실제 AI 요약 및 구조화 파싱에 성공했습니다.');
-          summary = aiResponse.summary;
-          parsedStructure = aiResponse;
+          summary = aiResult.data.summary;
+          parsedStructure = aiResult.data;
         } else {
+          aiError = aiResult.reason;
           // 2. API Key 환경변수가 없거나 에러 발생 시, 로컬 지능형 요약기 및 파서로 폴백
           console.log('[MetadataService] 로컬 지능형 요약기 및 본문 파서를 구동합니다.');
           summary = generateAISummary(title, rawContent, sourceType);
@@ -313,6 +322,7 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
           title,
           summary,
           content: structuredContent,
+          aiError,
           contentText: rawContent || null,
           digest: typeof detailedAnalysis === 'string' && detailedAnalysis.trim()
             ? detailedAnalysis
@@ -344,6 +354,7 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
     // og 태그만 읽은 경우라 본문이랄 게 없습니다. 요약 이상은 보관하지 않습니다.
     contentText: null,
     digest: null,
+    aiError: null,
     thumbnailUrl: htmlMetadata.thumbnailUrl,
     sourceType,
   };
@@ -603,11 +614,22 @@ function buildExcerptDigest(rawContent: string): string | null {
   return parts.join('\n');
 }
 
-async function callGeminiApi(title: string, rawContent: string): Promise<any | null> {
+/**
+ * AI 호출 결과. 실패했을 때 "왜"를 함께 돌려줍니다.
+ *
+ * 이전에는 실패를 전부 null로 뭉개서, 화면에는 요약이 비어 있는데
+ * 원인이 키 누락인지 네트워크인지 응답 형식인지 알 방법이 없었습니다.
+ * 폰에서 돌아가는 앱이라 콘솔을 열기도 어려워 더 그렇습니다.
+ */
+export type GeminiResult =
+  | { ok: true; data: any }
+  | { ok: false; reason: string };
+
+async function callGeminiApi(title: string, rawContent: string): Promise<GeminiResult> {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) {
     console.log('[GeminiAPI] EXPO_PUBLIC_GEMINI_API_KEY 환경변수가 설정되지 않아 로컬 요약기로 폴백합니다.');
-    return null;
+    return { ok: false, reason: 'API 키 없음 (EXPO_PUBLIC_GEMINI_API_KEY 미주입)' };
   }
 
   const prompt = `너는 입력된 원문 지식에서 핵심적인 정보만을 고도로 구조화된 형태로 요약 및 추출하는 AI 에이전트이다.
@@ -671,7 +693,8 @@ ${rawContent.slice(0, 8000)}
             continue;
           }
         }
-        throw new Error(`Gemini API HTTP 에러: ${response.status}`);
+        const errorBody = await response.text().catch(() => '');
+        throw new Error(`HTTP ${response.status} ${errorBody.slice(0, 120)}`);
       }
 
       const resJson = await response.json();
@@ -690,17 +713,20 @@ ${rawContent.slice(0, 8000)}
 
         // 3. 개행 정제 및 JSON 파싱
         try {
-          return JSON.parse(cleaned);
+          return { ok: true, data: JSON.parse(cleaned) };
         } catch (parseErr) {
           console.log(`[GeminiAPI] JSON 파싱 1차 실패 (시도 ${attempt}/${maxAttempts}). 개행 복구 시도.`, parseErr);
           // 쌍따옴표로 감싸진 필드 내부의 실제 줄바꿈 문자를 이스케이프(\n) 문자로 강제 치환
           const repaired = cleaned.replace(/"([^"]*)"/g, (match: string, p1: string) => {
             return '"' + p1.replace(/\n/g, '\\n').replace(/\r/g, '\\r') + '"';
           });
-          return JSON.parse(repaired);
+          return { ok: true, data: JSON.parse(repaired) };
         }
       }
-      return null;
+
+      // 응답은 왔는데 본문 텍스트가 없는 경우 (안전 필터, MAX_TOKENS 절단 등)
+      const finishReason = resJson?.candidates?.[0]?.finishReason ?? '알 수 없음';
+      return { ok: false, reason: `응답에 텍스트 없음 (finishReason: ${finishReason})` };
     } catch (err) {
       if (attempt < maxAttempts) {
         console.log(`[GeminiAPI] API 호출 중 에러 발생. ${delay}ms 후 재시도합니다. (시도 ${attempt}/${maxAttempts}):`, err instanceof Error ? err.message : err);
@@ -709,11 +735,12 @@ ${rawContent.slice(0, 8000)}
         continue;
       }
       // 3회 모두 최종 실패 시에만 디버깅용 console.warn 출력 (로컬 폴백 처리 유도)
-      console.warn('[GeminiAPI] 최종 API 호출 또는 JSON 파싱 중 오류 발생 (로컬 엔진 폴백):', err instanceof Error ? err.message : err);
-      return null;
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn('[GeminiAPI] 최종 실패 (로컬 엔진 폴백):', message);
+      return { ok: false, reason: message };
     }
   }
-  return null;
+  return { ok: false, reason: '재시도 횟수를 모두 소진했습니다.' };
 }
 
 function generateAISummary(title: string, rawContent: string, sourceType: string): string {

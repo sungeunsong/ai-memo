@@ -354,6 +354,7 @@ async function enrichSavedItemMetadata(
         content: itemToQueue.content,
         contentText: itemToQueue.contentText,
         digest: itemToQueue.digest,
+        aiError: itemToQueue.aiError,
         thumbnailUrl: itemToQueue.thumbnailUrl,
         aiStatus: itemToQueue.aiStatus,
         syncStatus: 'queued',
@@ -381,6 +382,7 @@ async function enrichSavedItemMetadata(
     console.error(`[SyncWorker] 메타데이터 보강 실패, 기본 저장 유지:`, error);
     const patch: ItemMetadataPatch = {
       aiStatus: 'failed',
+      aiError: error instanceof Error ? error.message : String(error),
       updatedAt: new Date().toISOString(),
     };
     await updateItemMetadataAsync(itemId, patch).catch(() => {});
@@ -407,6 +409,8 @@ function applyMetadataPatch(item: SavedItem, itemId: string, patch: ItemMetadata
     ...(patch.content ? { content: patch.content } : null),
     ...(patch.contentText ? { contentText: patch.contentText } : null),
     ...(patch.digest ? { digest: patch.digest } : null),
+    // 실패 이유는 성공 시 null로 지워져야 하므로 undefined 여부로 판단합니다.
+    ...(patch.aiError !== undefined ? { aiError: patch.aiError } : null),
     ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
     ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
     ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),
@@ -432,6 +436,7 @@ function buildItemSyncJob(item: SavedItem) {
       content: item.content,
       contentText: item.contentText,
       digest: item.digest,
+      aiError: item.aiError,
       thumbnailUrl: item.thumbnailUrl,
       aiStatus: item.aiStatus,
       syncStatus: item.syncStatus,
