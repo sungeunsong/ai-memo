@@ -67,6 +67,49 @@ export async function initializeDatabase() {
   return database;
 }
 
+const WEB_SETTINGS_KEY_PREFIX = 'ai-memo.setting.';
+const memorySettings = new Map<string, string>();
+
+/**
+ * 앱 설정용 단순 key-value 저장소.
+ * 냉장고 재료처럼 아이템에 속하지 않는 사용자 상태를 담습니다.
+ */
+export async function getSettingAsync(key: string): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    if (typeof globalThis.localStorage === 'undefined') {
+      return memorySettings.get(key) ?? null;
+    }
+    return globalThis.localStorage.getItem(WEB_SETTINGS_KEY_PREFIX + key);
+  }
+
+  const database = await getDatabaseAsync();
+  const row = await database.getFirstAsync<{ value: string }>(
+    'SELECT value FROM app_settings WHERE key = ?',
+    key
+  );
+  return row?.value ?? null;
+}
+
+export async function setSettingAsync(key: string, value: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    if (typeof globalThis.localStorage === 'undefined') {
+      memorySettings.set(key, value);
+      return;
+    }
+    globalThis.localStorage.setItem(WEB_SETTINGS_KEY_PREFIX + key, value);
+    return;
+  }
+
+  const database = await getDatabaseAsync();
+  await database.runAsync(
+    `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    key,
+    value,
+    new Date().toISOString()
+  );
+}
+
 export async function getSavedItemsAsync() {
   if (Platform.OS === 'web') {
     return getWebItems();

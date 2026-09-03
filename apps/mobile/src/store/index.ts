@@ -10,7 +10,7 @@ import {
   updateItemMetadataAsync,
   deleteItemAsync,
 } from '@/db';
-import { fetchMetadataPatch } from '@/features/metadata/service';
+import { fetchMetadataPatch, fetchTextMetadataPatch } from '@/features/metadata/service';
 import { buildFallbackItem, normalizeUrl } from '@/features/items/fallback';
 import {
   ItemMetadataPatch,
@@ -140,7 +140,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }));
 
       if (fallbackItem.type === 'url' && fallbackItem.sourceUrl) {
-        void enrichSavedItemMetadata(fallbackItem.id, fallbackItem.sourceUrl, set, get);
+        const sourceUrl = fallbackItem.sourceUrl;
+        void enrichSavedItemMetadata(fallbackItem.id, () => fetchMetadataPatch(sourceUrl), set, get);
+      } else {
+        // 링크 없이 저장된 텍스트(인스타 DM 원문 등)도 요약·정리본·키워드를 뽑습니다.
+        void enrichSavedItemMetadata(
+          fallbackItem.id,
+          () => fetchTextMetadataPatch(fallbackItem.rawInput),
+          set,
+          get
+        );
       }
       void runSyncWorker(set, get);
 
@@ -251,17 +260,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
           }));
         }
 
-        await enrichSavedItemMetadata(itemId, activeUrl || item.sourceUrl!, set, get);
+        const targetUrl = activeUrl || item.sourceUrl!;
+        await enrichSavedItemMetadata(itemId, () => fetchMetadataPatch(targetUrl), set, get);
       } else {
-        // 일반 텍스트의 경우, enrich 단계는 생략하고 완료 처리하거나 기본 처리 가능
-        const patch: ItemMetadataPatch = {
-          aiStatus: 'completed',
-          updatedAt: new Date().toISOString(),
-        };
-        await updateItemMetadataAsync(itemId, patch);
-        set((state) => ({
-          items: state.items.map((i) => applyMetadataPatch(i, itemId, patch)),
-        }));
+        // 링크가 없는 텍스트도 재분석 대상입니다.
+        await enrichSavedItemMetadata(
+          itemId,
+          () => fetchTextMetadataPatch(item.rawInput),
+          set,
+          get
+        );
       }
 
       set({ isSaving: false });
@@ -307,9 +315,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 }));
 
+/**
+ * 아이템 하나를 AI로 보강합니다.
+ * 링크든 텍스트든 이후 처리(저장·스토어 반영·동기화 큐잉·실패 처리)가 동일해서
+ * patch를 만드는 방법만 주입받습니다.
+ */
 async function enrichSavedItemMetadata(
   itemId: string,
-  sourceUrl: string,
+  fetchPatch: () => Promise<ItemMetadataPatch>,
   set: (
     partial:
       | Partial<AppStore>
@@ -318,9 +331,9 @@ async function enrichSavedItemMetadata(
   ) => void,
   get: () => AppStore
 ) {
-  console.log(`[SyncWorker] 메타데이터 보강을 시작합니다. URL: ${sourceUrl}`);
+  console.log(`[SyncWorker] 메타데이터 보강을 시작합니다. item: ${itemId}`);
   try {
-    const patch = await fetchMetadataPatch(sourceUrl);
+    const patch = await fetchPatch();
     await updateItemMetadataAsync(itemId, patch);
 
     const nextItems = get().items.map((item) => applyMetadataPatch(item, itemId, patch));

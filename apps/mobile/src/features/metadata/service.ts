@@ -96,6 +96,61 @@ export async function fetchMetadataPatch(sourceUrl: string): Promise<ItemMetadat
 }
 
 
+/**
+ * 링크 없이 저장된 텍스트(주로 인스타 DM 원문)를 보강합니다.
+ *
+ * 지금까지 텍스트 아이템은 AI를 전혀 거치지 않아 제목이 '메모: 앞 20자...'로 남고
+ * 재료나 지역도 추출되지 않았습니다. DM이 주 유입 경로인데 정작 DM 내용이
+ * 냉장고 털기나 조합 검색에 잡히지 않았다는 뜻입니다.
+ *
+ * 링크와 달리 원문이 곧 본문이므로 contentText는 채우지 않습니다.
+ * 원문은 이미 rawInput에 온전히 남아 있습니다.
+ */
+export async function fetchTextMetadataPatch(rawText: string): Promise<ItemMetadataPatch> {
+  const updatedAt = new Date().toISOString();
+
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return { aiStatus: 'failed', updatedAt };
+  }
+
+  const aiResponse = await callGeminiApi('', trimmed);
+
+  if (!aiResponse) {
+    // API 키가 없거나 호출에 실패한 경우. 원문에서 발췌한 정리본만이라도 붙입니다.
+    const digest = buildExcerptDigest(trimmed);
+    return {
+      ...(digest ? { digest } : null),
+      aiStatus: digest ? 'completed' : 'failed',
+      updatedAt,
+    };
+  }
+
+  const {
+    title: aiTitle,
+    summary: aiSummary,
+    detailedAnalysis,
+    ...structuredFields
+  } = aiResponse;
+
+  const structuredContent = JSON.stringify({
+    category: aiResponse.category || 'text',
+    ...structuredFields,
+  });
+
+  return {
+    ...(typeof aiTitle === 'string' && aiTitle.trim() ? { title: aiTitle.trim() } : null),
+    ...(typeof aiSummary === 'string' && aiSummary.trim() ? { summary: aiSummary.trim() } : null),
+    content: structuredContent,
+    digest:
+      typeof detailedAnalysis === 'string' && detailedAnalysis.trim()
+        ? detailedAnalysis
+        : buildExcerptDigest(trimmed),
+    aiStatus: 'completed',
+    updatedAt,
+  };
+}
+
 function normalizeSourceUrl(input: string) {
   const url = new URL(input);
 
@@ -556,9 +611,10 @@ async function callGeminiApi(title: string, rawContent: string): Promise<any | n
 
 출력할 JSON 스키마:
 {
+  "title": "12~32자 내외의 핵심 요약형 제목 (과장/클릭베이트 금지)",
   "summary": "홈용 3줄 요약 (가독성 좋게 1), 2), 3) 번호 매김)",
   "detailedAnalysis": "상세 뷰용 전체 요약 정리본 (원문 본문의 중요한 핵심 논지, 세부 정보들을 소제목과 글머리 기호(불릿)를 활용해 일목요연하고 깊이 있게 정리한 상세 설명 텍스트, 한국어로 정성스럽게 작성할 것)",
-  "category": "recipe | workout | travel | web 중 하나로 분류",
+  "category": "recipe | workout | travel | parenting | web 중 하나로 분류",
   "cookTime": "조리 시간 (예: '20분')",
   "difficulty": "조리 난이도 ('쉬움', '보통', '어려움' 중 하나)",
   "ingredients": ["재료1", "재료2", "재료3"],

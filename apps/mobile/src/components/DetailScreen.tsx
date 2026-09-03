@@ -27,6 +27,8 @@ import {
   describeSavedItemShape,
 } from '@/utils/formatters';
 import { parseActionItems, ActionItem } from '@/utils/actionParser';
+import * as WebBrowser from 'expo-web-browser';
+
 import { ReaderModeModal } from '@/components/ReaderModeModal';
 import { palette } from '@/theme/palette';
 import { spacing } from '@/theme/spacing';
@@ -115,6 +117,18 @@ export function DetailContent({
   // 본문은 contentText 컬럼으로 분리됐습니다.
   // structured.description은 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
   const readerMarkdown: string = selectedItem.contentText || structured?.description || '';
+
+  /**
+   * 원본은 인앱 브라우저(Android Chrome Custom Tab)로 엽니다.
+   * Linking.openURL은 브라우저 앱을 별도 태스크로 띄워서 돌아오려면 앱 전환을 해야 합니다.
+   * 저장해둔 것을 훑어보는 흐름에서는 뒤로가기 한 번에 목록으로 복귀하는 편이 훨씬 낫습니다.
+   * 실패하면 기존 방식으로 폴백합니다.
+   */
+  function openOriginal(url: string) {
+    WebBrowser.openBrowserAsync(url).catch(() => {
+      Linking.openURL(url).catch(() => {});
+    });
+  }
   const actions = parseActionItems(selectedItem.rawInput, selectedItem.userNote ?? undefined, structured);
 
   async function handleActionPress(action: ActionItem) {
@@ -157,7 +171,7 @@ export function DetailContent({
           <StatusPills item={selectedItem} />
           {selectedItem.sourceUrl ? (
             <Pressable
-              onPress={() => Linking.openURL(selectedItem.sourceUrl!).catch(() => {})}
+              onPress={() => openOriginal(selectedItem.sourceUrl!)}
               style={({ pressed }) => [
                 styles.openSourceBtn,
                 { transform: [{ scale: pressed ? 0.95 : 1 }] },
@@ -313,7 +327,7 @@ export function DetailContent({
             {selectedItem.extractedUrls.map((url, idx) => (
               <Pressable
                 key={url + idx}
-                onPress={() => Linking.openURL(url).catch(() => {})}
+                onPress={() => openOriginal(url)}
                 style={({ pressed }) => [
                   styles.urlClickableRow,
                   { transform: [{ scale: pressed ? 0.96 : 1 }] },

@@ -23,6 +23,7 @@ import {
   hasUnsupportedSharedFiles,
 } from '@/features/capture/shareIntent';
 import { useAppStore } from '@/store';
+import { getSettingAsync, setSettingAsync } from '@/db';
 import { palette } from '@/theme/palette';
 import { spacing } from '@/theme/spacing';
 
@@ -47,6 +48,8 @@ import {
   getSourceTheme,
   formatRelativeTime,
 } from '@/utils/formatters';
+
+const PANTRY_SETTING_KEY = 'pantry.owned';
 
 export function HomeScreen() {
   const { width } = useWindowDimensions();
@@ -79,6 +82,33 @@ export function HomeScreen() {
   const [isCaptureVisible, setIsCaptureVisible] = useState(false);
   const [isPantryVisible, setIsPantryVisible] = useState(false);
   const [pantryOwned, setPantryOwned] = useState<string[]>([]);
+
+  // 냉장고 재료는 매번 다시 입력하게 하면 기능 자체를 안 쓰게 되므로 저장해둡니다.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const saved = await getSettingAsync(PANTRY_SETTING_KEY);
+        if (!saved || cancelled) return;
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setPantryOwned(parsed.filter((entry): entry is string => typeof entry === 'string'));
+        }
+      } catch (error) {
+        console.log('[Pantry] 저장된 재료를 불러오지 못했습니다.', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleChangePantry = useCallback((next: string[]) => {
+    setPantryOwned(next);
+    void setSettingAsync(PANTRY_SETTING_KEY, JSON.stringify(next)).catch((error) => {
+      console.log('[Pantry] 재료 저장에 실패했습니다.', error);
+    });
+  }, []);
 
   const handleCategoryChange = useCallback((cat: string) => {
     setActiveCategory(cat);
@@ -628,7 +658,7 @@ export function HomeScreen() {
         visible={isPantryVisible}
         items={items}
         owned={pantryOwned}
-        onChangeOwned={setPantryOwned}
+        onChangeOwned={handleChangePantry}
         onClose={() => setIsPantryVisible(false)}
         onSelectItem={(itemId) => {
           setIsPantryVisible(false);

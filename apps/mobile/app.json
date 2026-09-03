@@ -38,7 +38,8 @@
             "text/*"
           ]
         }
-      ]
+      ],
+      "expo-web-browser"
     ]
   }
 }
