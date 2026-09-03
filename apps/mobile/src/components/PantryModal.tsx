@@ -44,8 +44,12 @@ export function PantryModal({
   const matches = useMemo(() => matchPantry(items, owned), [items, owned]);
   const wins = useMemo(() => summarizeShoppingWins(matches), [matches]);
 
+  // 완성도로 구간을 나눕니다. 목록에서 빼는 대신 순서로 알려줍니다.
   const ready = matches.filter((match) => match.missing.length === 0);
-  const almost = matches.filter((match) => match.missing.length > 0);
+  const almost = matches.filter(
+    (match) => match.missing.length > 0 && match.missing.length <= 2
+  );
+  const needMore = matches.filter((match) => match.missing.length > 2);
 
   function addFromDraft() {
     // 쉼표든 공백이든 편한 대로 입력할 수 있게 둘 다 구분자로 받습니다.
@@ -156,6 +160,25 @@ export function PantryModal({
               <>
                 <Text style={styles.sectionLabel}>조금만 더 ({almost.length})</Text>
                 {almost.map((match) => (
+                  <Pressable
+                    key={match.item.id}
+                    onPress={() => onSelectItem(match.item.id)}
+                    style={styles.resultCard}
+                  >
+                    <Text style={styles.resultTitle}>{match.item.title}</Text>
+                    <Text style={styles.resultMeta}>
+                      {match.owned.length}/{match.required.length} 보유 · 부족:{' '}
+                      {match.missing.join(', ')}
+                    </Text>
+                  </Pressable>
+                ))}
+              </>
+            ) : null}
+
+            {needMore.length > 0 ? (
+              <>
+                <Text style={styles.sectionLabel}>재료를 더 사야 해요 ({needMore.length})</Text>
+                {needMore.map((match) => (
                   <Pressable
                     key={match.item.id}
                     onPress={() => onSelectItem(match.item.id)}
