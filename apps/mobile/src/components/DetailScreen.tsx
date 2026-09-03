@@ -302,7 +302,7 @@ export function DetailContent({
       ) : null}
 
       {/* 4. 도메인 특화 카드 */}
-      {structured && structured.category === 'recipe' && (
+      {structured && (structured.category === 'recipe' || structured.ingredients?.length > 0) && (
         <RecipeCard
           selectedItem={selectedItem}
           structured={structured}
@@ -311,7 +311,10 @@ export function DetailContent({
         />
       )}
 
-      {structured && structured.category === 'workout' && (
+      {structured &&
+        (structured.category === 'workout' ||
+          structured.targetMuscles?.length > 0 ||
+          structured.routine?.length > 0) && (
         <WorkoutCard
           selectedItem={selectedItem}
           structured={structured}
@@ -320,7 +323,11 @@ export function DetailContent({
         />
       )}
 
-      {structured && structured.category === 'travel' && (
+      {structured &&
+        (structured.category === 'travel' ||
+          structured.location ||
+          structured.travelTheme ||
+          structured.highlights?.length > 0) && (
         <TravelCard
           selectedItem={selectedItem}
           structured={structured}
@@ -444,7 +451,9 @@ function RecipeCard({
         <Text style={styles.domainSpecHeaderEmoji}>🍳</Text>
         <View>
           <Text style={styles.domainSpecTitle}>장보기 재료 목록</Text>
-          <Text style={styles.domainSpecSub}>난이도: {structured.difficulty} · 조리시간: {structured.cookTime}</Text>
+          <Text style={styles.domainSpecSub}>
+            난이도: {structured.difficulty || '-'} · 조리시간: {structured.cookTime || '-'}
+          </Text>
         </View>
       </View>
 
@@ -489,6 +498,8 @@ function WorkoutCard({
   onToggleCheck: (itemId: string, key: string) => void;
 }) {
   const list = (structured.routine as string[]) || [];
+  const equipments = (structured.equipments as string[]) || [];
+  const targetMuscles = (structured.targetMuscles as string[]) || [];
   const total = list.length;
   const checked = list.filter((r) => checkedItems[selectedItem.id]?.[r]).length;
   const ratio = total > 0 ? (checked / total) * 100 : 0;
@@ -499,14 +510,16 @@ function WorkoutCard({
         <Text style={styles.domainSpecHeaderEmoji}>💪</Text>
         <View>
           <Text style={styles.domainSpecTitle}>운동 루틴 & 타겟 부위</Text>
-          <Text style={styles.domainSpecSub}>필요도구: {(structured.equipments as string[]).join(', ')}</Text>
+          <Text style={styles.domainSpecSub}>
+            필요도구: {equipments.length > 0 ? equipments.join(', ') : '정보 없음'}
+          </Text>
         </View>
       </View>
 
       <View style={styles.muscleRow}>
         <Text style={styles.muscleLabel}>타겟 부위</Text>
         <View style={styles.muscleBadgeRow}>
-          {(structured.targetMuscles as string[]).map((m) => (
+          {targetMuscles.map((m) => (
             <Text key={m} style={styles.muscleBadge}>{m}</Text>
           ))}
         </View>
@@ -553,6 +566,7 @@ function TravelCard({
   onToggleCheck: (itemId: string, key: string) => void;
 }) {
   const checklistItems = (structured.checklist as string[]) || [];
+  const highlights = (structured.highlights as string[]) || [];
   const total = checklistItems.length;
   const checked = checklistItems.filter((item) => checkedItems[selectedItem.id]?.[item]).length;
   const ratio = total > 0 ? (checked / total) * 100 : 0;
@@ -563,7 +577,7 @@ function TravelCard({
         <Text style={styles.domainSpecHeaderEmoji}>✈</Text>
         <View style={{ flex: 1 }}>
           <Text style={styles.domainSpecTitle}>여행 코스 & 숙소 정보</Text>
-          <Text style={styles.domainSpecSub}>테마: {structured.travelTheme}</Text>
+          <Text style={styles.domainSpecSub}>테마: {structured.travelTheme || '정보 없음'}</Text>
         </View>
         <View style={styles.travelThemeBadgeRow}>
           {structured.travelTheme?.includes('국내') && (
@@ -581,18 +595,18 @@ function TravelCard({
       <View style={styles.travelGrid}>
         <View style={styles.travelGridBlock}>
           <Text style={styles.travelBlockLabel}>📍 위치</Text>
-          <Text style={styles.travelBlockVal}>{structured.location}</Text>
+          <Text style={styles.travelBlockVal}>{structured.location || '정보 없음'}</Text>
         </View>
         <View style={styles.travelGridBlock}>
           <Text style={styles.travelBlockLabel}>💵 예상 예산</Text>
-          <Text style={styles.travelBlockVal}>{structured.budget}</Text>
+          <Text style={styles.travelBlockVal}>{structured.budget || '정보 없음'}</Text>
         </View>
       </View>
 
       <View style={styles.travelHighlightRow}>
         <Text style={styles.travelHighlightLabel}>핵심 스팟</Text>
         <View style={styles.travelHighlightsContainer}>
-          {(structured.highlights as string[]).map((h) => (
+          {highlights.map((h) => (
             <Text key={h} style={styles.travelHighlightText}>⭐ {h}</Text>
           ))}
         </View>
