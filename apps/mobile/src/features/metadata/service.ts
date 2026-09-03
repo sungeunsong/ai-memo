@@ -625,6 +625,81 @@ export type GeminiResult =
   | { ok: true; data: any }
   | { ok: false; reason: string };
 
+/**
+ * 응답 텍스트에서 "첫 번째 완전한 JSON 객체"만 잘라냅니다.
+ *
+ * 이전 구현은 첫 '{'부터 마지막 '}'까지를 통째로 잘랐는데, 모델이 객체를 두 개
+ * 뱉거나 뒤에 설명을 덧붙이면 두 덩어리가 함께 잡혀 파싱이 깨졌습니다.
+ * ("Unexpected non-whitespace character after JSON")
+ * 중괄호 깊이를 세되 문자열 리터럴과 이스케이프는 건너뜁니다.
+ */
+function extractFirstJsonObject(text: string): string | null {
+  const cleaned = text.replace(/```json/gi, '').replace(/```/gi, '');
+  const start = cleaned.indexOf('{');
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < cleaned.length; i++) {
+    const char = cleaned[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === '{') depth++;
+    else if (char === '}') {
+      depth--;
+      if (depth === 0) {
+        return cleaned.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 구조화 출력 스키마. 모델이 형식을 지키도록 API 차원에서 강제해
+ * 파싱 실패 자체가 생기지 않게 합니다.
+ */
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    summary: { type: 'string' },
+    detailedAnalysis: { type: 'string' },
+    category: {
+      type: 'string',
+      enum: ['recipe', 'workout', 'travel', 'parenting', 'web'],
+    },
+    cookTime: { type: 'string' },
+    difficulty: { type: 'string' },
+    ingredients: { type: 'array', items: { type: 'string' } },
+    targetMuscles: { type: 'array', items: { type: 'string' } },
+    equipments: { type: 'array', items: { type: 'string' } },
+    routine: { type: 'array', items: { type: 'string' } },
+    travelTheme: { type: 'string' },
+    location: { type: 'string' },
+    budget: { type: 'string' },
+    highlights: { type: 'array', items: { type: 'string' } },
+    checklist: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['title', 'summary', 'detailedAnalysis', 'category'],
+};
+
 async function callGeminiApi(title: string, rawContent: string): Promise<GeminiResult> {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) {
@@ -678,13 +753,31 @@ ${rawContent.slice(0, 8000)}
             }]
           }],
           generationConfig: {
-            responseMimeType: "application/json"
+            responseMimeType: 'application/json',
+            responseSchema: RESPONSE_SCHEMA,
+            // 2.5 Flash는 기본적으로 '사고' 토큰을 쓰는데, 짧은 입력에도 2000토큰이 넘게
+            // 소모돼 무료 할당량을 빠르게 갉아먹습니다. 이 작업은 추출/요약이라 필요 없습니다.
+            thinkingConfig: { thinkingBudget: 0 },
           }
         })
       });
 
       if (!response.ok) {
-        // 503(Service Unavailable) 또는 429(Rate Limit) 등 일시적 오류 시 재시도 진행
+        const errorBody = await response.text().catch(() => '');
+
+        // 할당량 소진은 기다린다고 풀리지 않습니다. 재시도하면 시간만 쓰고
+        // 남은 호출까지 갉아먹으므로 즉시 중단하고 사용자에게 그대로 알립니다.
+        const isQuotaExhausted =
+          response.status === 429 && /quota|billing/i.test(errorBody);
+        if (isQuotaExhausted) {
+          return {
+            ok: false,
+            reason:
+              'Gemini 무료 할당량을 모두 사용했습니다. 한도가 초기화된 뒤 다시 시도하거나 결제 설정을 확인하세요.',
+          };
+        }
+
+        // 503(과부하)이나 순간적인 rate limit은 잠시 후 풀릴 수 있어 재시도합니다.
         if (response.status === 503 || response.status === 429) {
           if (attempt < maxAttempts) {
             console.log(`[GeminiAPI] 일시적 HTTP ${response.status} 에러 감지. ${delay}ms 후 재시도합니다. (시도 ${attempt}/${maxAttempts})`);
@@ -693,7 +786,7 @@ ${rawContent.slice(0, 8000)}
             continue;
           }
         }
-        const errorBody = await response.text().catch(() => '');
+
         throw new Error(`HTTP ${response.status} ${errorBody.slice(0, 120)}`);
       }
 
@@ -701,26 +794,17 @@ ${rawContent.slice(0, 8000)}
       const responseText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text;
       
       if (responseText) {
-        // 1. 마크다운 백틱 등 정제
-        let cleaned = responseText.replace(/```json/gi, '').replace(/```/gi, '').trim();
-
-        // 2. 중괄호 영역 강제 추출 (앞뒤로 설명글이 들어올 경우 방어)
-        const startIdx = cleaned.indexOf('{');
-        const endIdx = cleaned.lastIndexOf('}');
-        if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-          cleaned = cleaned.slice(startIdx, endIdx + 1);
+        const cleaned = extractFirstJsonObject(responseText);
+        if (!cleaned) {
+          return { ok: false, reason: '응답에서 JSON 객체를 찾지 못했습니다.' };
         }
 
-        // 3. 개행 정제 및 JSON 파싱
         try {
           return { ok: true, data: JSON.parse(cleaned) };
         } catch (parseErr) {
-          console.log(`[GeminiAPI] JSON 파싱 1차 실패 (시도 ${attempt}/${maxAttempts}). 개행 복구 시도.`, parseErr);
-          // 쌍따옴표로 감싸진 필드 내부의 실제 줄바꿈 문자를 이스케이프(\n) 문자로 강제 치환
-          const repaired = cleaned.replace(/"([^"]*)"/g, (match: string, p1: string) => {
-            return '"' + p1.replace(/\n/g, '\\n').replace(/\r/g, '\\r') + '"';
-          });
-          return { ok: true, data: JSON.parse(repaired) };
+          const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
+          console.log(`[GeminiAPI] JSON 파싱 실패 (시도 ${attempt}/${maxAttempts}):`, message);
+          return { ok: false, reason: `JSON 파싱 실패: ${message}` };
         }
       }
 
