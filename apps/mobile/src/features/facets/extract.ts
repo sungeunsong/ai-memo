@@ -76,16 +76,19 @@ export function extractFacets(item: SavedItem): Facet[] {
   const category = getItemCategory(item);
   const facets: Facet[] = [];
 
-  if (category === 'recipe') {
-    pushArray(facets, 'ingredient', structured?.ingredients);
-  }
+  // 카테고리로 가르지 않고 "있는 필드는 전부" 뽑습니다.
+  //
+  // DM 하나에 여행 추천과 레시피가 같이 오는 일이 흔한데, 아이템의 카테고리는
+  // 하나뿐이라 카테고리로 가르면 나머지 절반이 통째로 버려집니다.
+  // AI가 분류를 틀렸을 때도 필드만 채워져 있으면 건질 수 있습니다.
+  pushArray(facets, 'ingredient', structured?.ingredients);
+  pushArray(facets, 'muscle', structured?.targetMuscles);
+  pushArray(facets, 'equipment', structured?.equipments);
 
-  if (category === 'workout') {
-    pushArray(facets, 'muscle', structured?.targetMuscles);
-    pushArray(facets, 'equipment', structured?.equipments);
-  }
+  const hasTravelFields =
+    structured?.location || structured?.travelTheme || structured?.highlights;
 
-  if (category === 'travel') {
+  if (category === 'travel' || hasTravelFields) {
     // location은 '강원도 강릉시'처럼 통짜 문자열로 오므로 그대로 쓰지 않습니다.
     // 아래 scanTerms가 그 안에서 '강릉'과 '강원도'를 분리해 뽑아냅니다.
 

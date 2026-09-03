@@ -118,10 +118,14 @@ export async function fetchTextMetadataPatch(rawText: string): Promise<ItemMetad
 
   if (!aiResponse) {
     // API 키가 없거나 호출에 실패한 경우. 원문에서 발췌한 정리본만이라도 붙입니다.
+    //
+    // 발췌가 성공해도 상태는 'failed'입니다. AI 요약은 실제로 실패했고,
+    // 이걸 'completed'로 적으면 화면에 '정리 완료'가 떠서 사용자가 원인을 알 수 없습니다.
+    // 상태를 정직하게 남겨야 재분석을 눌러볼 수 있습니다. (AI Functional Spec §7)
     const digest = buildExcerptDigest(trimmed);
     return {
       ...(digest ? { digest } : null),
-      aiStatus: digest ? 'completed' : 'failed',
+      aiStatus: 'failed',
       updatedAt,
     };
   }
