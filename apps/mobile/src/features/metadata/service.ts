@@ -433,7 +433,59 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
   // Jina 호출 실패 시 기존의 단순 HTML og tag 크롤러로 폴백
   console.log('[MetadataService] 로컬 기본 HTML 메타데이터 크롤러 작동 시작');
   const htmlMetadata = await fetchHtmlMetadata(sourceUrl);
-  const sourceType = classifySourceType(sourceUrl, htmlMetadata.summary);
+  const instagramCaption = isInstagramHost(new URL(sourceUrl).hostname)
+    ? extractInstagramCaption(htmlMetadata.rawDescription)
+    : null;
+  const sourceText = instagramCaption || htmlMetadata.summary;
+  const sourceType = classifySourceType(sourceUrl, sourceText);
+
+  // Jina가 Instagram 접근을 일시적으로 막더라도 Instagram 페이지 자체의
+  // description 메타태그에는 캡션이 (개행까지 포함해) 들어 있습니다.
+  // 예전에는 sanitizeText()로 그 개행을 모두 뭉갠 뒤 summary에만 넣어서,
+  // 원문도 사라지고 그 통짜 문자열이 AI 요약처럼 보였습니다.
+  if (instagramCaption) {
+    const aiResult = await callGeminiApi(htmlMetadata.title, instagramCaption);
+    let title = htmlMetadata.title;
+    let summary = generateAISummary(title, instagramCaption, sourceType);
+    let parsedStructure: any = {
+      ...parseStructuredFromContent(instagramCaption, sourceType),
+      detailedAnalysis: buildExcerptDigest(instagramCaption),
+    };
+    let aiError: string | null = null;
+
+    if (aiResult.ok) {
+      summary = aiResult.data.summary;
+      parsedStructure = aiResult.data;
+
+      const aiTitle =
+        typeof aiResult.data.title === 'string' ? aiResult.data.title.trim() : '';
+      if (aiTitle && isUninformativeTitle(title, sourceUrl)) {
+        title = aiTitle;
+      }
+    } else {
+      aiError = aiResult.reason;
+    }
+
+    const { detailedAnalysis, summary: _summary, ...structuredFields } = parsedStructure ?? {};
+
+    return {
+      sourceUrl: htmlMetadata.sourceUrl ?? sourceUrl,
+      title,
+      summary,
+      content: JSON.stringify({
+        category: parsedStructure?.category || sourceType,
+        ...structuredFields,
+      }),
+      contentText: instagramCaption,
+      digest:
+        typeof detailedAnalysis === 'string' && detailedAnalysis.trim()
+          ? detailedAnalysis
+          : null,
+      aiError,
+      thumbnailUrl: htmlMetadata.thumbnailUrl,
+      sourceType,
+    };
+  }
 
 
   const structuredContent = JSON.stringify({
@@ -484,10 +536,13 @@ async function fetchHtmlMetadata(sourceUrl: string) {
     extractTitleTag(html),
     `${getHostname(sourceUrl)} 저장 링크`,
   ]);
+  const rawDescription = pickFirstMeaningful([
+    extractMetaContentPreservingWhitespace(html, 'property', 'og:description'),
+    extractMetaContentPreservingWhitespace(html, 'name', 'description'),
+    extractMetaContentPreservingWhitespace(html, 'name', 'twitter:description'),
+  ]);
   const summary = pickFirstMeaningful([
-    extractMetaContent(html, 'property', 'og:description'),
-    extractMetaContent(html, 'name', 'description'),
-    extractMetaContent(html, 'name', 'twitter:description'),
+    sanitizeText(rawDescription),
     `${getHostname(sourceUrl)} 링크를 저장했습니다.`,
   ]);
   const thumbnailUrl = pickFirstMeaningUrl([
@@ -499,6 +554,7 @@ async function fetchHtmlMetadata(sourceUrl: string) {
     sourceUrl: canonicalUrl,
     title,
     summary,
+    rawDescription,
     thumbnailUrl,
   };
 }
@@ -522,6 +578,21 @@ async function fetchWithTimeout(input: string, init?: RequestInit) {
 
 
 function extractMetaContent(html: string, attribute: 'property' | 'name', key: string) {
+  return sanitizeText(extractMetaContentPreservingWhitespace(html, attribute, key));
+}
+
+/**
+ * 메타태그의 원문 공백과 개행을 보존해 읽습니다.
+ *
+ * Instagram 캡션은 content 속성 안에 실제 LF를 포함합니다. 제목이나 일반 요약에는
+ * 공백 정리가 유용하지만 캡션에 sanitizeText()를 적용하면 문단과 목록이 모두 한 줄로
+ * 합쳐지므로, 원문이 필요한 경로는 이 함수를 사용해야 합니다.
+ */
+function extractMetaContentPreservingWhitespace(
+  html: string,
+  attribute: 'property' | 'name',
+  key: string
+) {
   const regex = new RegExp(
     `<meta[^>]+${attribute}=["']${escapeRegExp(key)}["'][^>]+content=["']([^"']+)["'][^>]*>`,
     'i'
@@ -531,7 +602,37 @@ function extractMetaContent(html: string, attribute: 'property' | 'name', key: s
     'i'
   );
 
-  return sanitizeText(html.match(regex)?.[1] ?? html.match(reverseRegex)?.[1] ?? '');
+  return decodeHtmlEntities(html.match(regex)?.[1] ?? html.match(reverseRegex)?.[1] ?? '')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+}
+
+/**
+ * Instagram description의 통계/계정/날짜 껍데기에서 실제 캡션만 꺼냅니다.
+ *
+ * 입력 예:
+ *   1,423 likes, 14K comments - kkimmmin - August 11, 2026: "첫 줄\n둘째 줄"
+ * 언어나 숫자 표기가 달라도 첫 `: "`와 마지막 따옴표를 경계로 삼습니다.
+ */
+function extractInstagramCaption(description: string): string | null {
+  if (!description) return null;
+
+  const openingQuote = description.search(/:\s*["“]/);
+  if (openingQuote === -1) return null;
+
+  const quoted = description.slice(openingQuote).replace(/^:\s*["“]/, '');
+  const caption = quoted.replace(/["”]\s*\.?\s*$/, '');
+  const normalized = caption
+    .replace(/\r\n?/g, '\n')
+    // Instagram에서 빈 줄 대신 쓰는 점자 공백은 실제 빈 줄로 취급합니다.
+    .replace(/^[\u2800\s]+$/gm, '')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return normalized || null;
 }
 
 function extractLinkHref(html: string, rel: string) {
