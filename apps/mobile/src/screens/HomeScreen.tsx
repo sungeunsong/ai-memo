@@ -63,6 +63,14 @@ import {
 } from '@/utils/formatters';
 
 const PANTRY_SETTING_KEY = 'pantry.owned';
+/**
+ * 무시한 클립보드 내용.
+ *
+ * ref에만 담아두면 앱을 완전히 종료했다 켤 때 초기화돼서,
+ * 같은 내용에 대해 배너가 계속 다시 뜹니다.
+ * 사용자가 한 번 거절한 것은 클립보드가 바뀌기 전까지 다시 묻지 않아야 합니다.
+ */
+const IGNORED_CLIPBOARD_KEY = 'clipboard.ignored';
 
 /** 헤더 버튼은 한 번 누를 때마다 다크 → 라이트 → 시스템으로 돕니다. */
 const THEME_ICONS: Record<string, string> = { dark: '🌙', light: '☀️', system: '🌗' };
@@ -246,6 +254,8 @@ export function HomeScreen() {
   // 공유 인텐트 refs
   const processedShareSignatureRef = useRef<string | null>(null);
   const ignoredClipboardRef = useRef<string | null>(null);
+  /** 저장소에서 무시 목록을 읽어오기 전에는 배너를 띄우지 않습니다. */
+  const ignoredClipboardLoadedRef = useRef(false);
 
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0] ?? null;
   const runtimeErrorMessage = errorMessage ?? shareIntentError ?? null;
@@ -326,6 +336,19 @@ export function HomeScreen() {
   // 클립보드 감지
   // ==========================================
   useEffect(() => {
+    void (async () => {
+      try {
+        ignoredClipboardRef.current = await getSettingAsync(IGNORED_CLIPBOARD_KEY);
+      } catch (error) {
+        console.log('[Clipboard] 무시 기록을 불러오지 못했습니다.', error);
+      } finally {
+        ignoredClipboardLoadedRef.current = true;
+        void checkClipboard();
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     void checkClipboard();
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (nextState === 'active') void checkClipboard();
@@ -334,6 +357,9 @@ export function HomeScreen() {
   }, [items]);
 
   async function checkClipboard() {
+    // 무시 기록을 읽기 전에 검사하면 이미 거절한 내용이 잠깐 다시 뜹니다.
+    if (!ignoredClipboardLoadedRef.current) return;
+
     try {
       const text = await Clipboard.getStringAsync();
       const trimmed = text.trim();
@@ -466,7 +492,12 @@ export function HomeScreen() {
   }
 
   function handleIgnoreClipboard() {
-    if (clipboardCandidate) ignoredClipboardRef.current = clipboardCandidate;
+    if (clipboardCandidate) {
+      ignoredClipboardRef.current = clipboardCandidate;
+      void setSettingAsync(IGNORED_CLIPBOARD_KEY, clipboardCandidate).catch((error) => {
+        console.log('[Clipboard] 무시 기록 저장에 실패했습니다.', error);
+      });
+    }
     setClipboardCandidate(null);
   }
 
