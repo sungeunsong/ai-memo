@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MarkdownViewer } from './MarkdownViewer';
-import { palette } from '@/theme/palette';
+import { Palette } from '@/theme/palette';
+import { useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 
 type Props = {
@@ -133,6 +134,7 @@ function sanitizeMarkdown(text: string): string {
 }
 
 export function ReaderModeModal({ visible, onClose, title, markdown }: Props) {
+  const styles = useThemedStyles(createStyles);
   const [scaleIndex, setScaleIndex] = useState(1); // 기본값 '보통' (1.0)
   const currentScale = SCALE_OPTIONS[scaleIndex];
 
@@ -189,7 +191,8 @@ export function ReaderModeModal({ visible, onClose, title, markdown }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (palette: Palette) =>
+  StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: palette.background,
@@ -233,12 +236,12 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   fontScaleIcon: {
-    color: '#c084fc',
+    color: palette.accentText,
     fontSize: 12,
     fontWeight: '900',
   },
   fontScaleLabel: {
-    color: '#a78bfa',
+    color: palette.accentLink,
     fontSize: 11,
     fontWeight: '800',
   },

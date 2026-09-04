@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View, Image, Linking, Pressable } from 'react-native';
-import { palette } from '@/theme/palette';
+import { useTheme } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 
 type Props = {
@@ -10,6 +10,7 @@ type Props = {
 
 export function MarkdownViewer({ markdown, fontSizeScale = 1.0 }: Props) {
   const scale = fontSizeScale;
+  const { palette } = useTheme();
 
   const styles = useMemo(() => {
     return StyleSheet.create({
@@ -54,8 +55,8 @@ export function MarkdownViewer({ markdown, fontSizeScale = 1.0 }: Props) {
       inlineCode: {
         fontFamily: 'monospace',
         fontSize: 13 * scale,
-        color: '#c084fc',
-        backgroundColor: 'rgba(192, 132, 252, 0.12)',
+        color: palette.accentText,
+        backgroundColor: palette.accentSoft,
         paddingHorizontal: 4,
         borderRadius: 4,
       },
@@ -83,7 +84,7 @@ export function MarkdownViewer({ markdown, fontSizeScale = 1.0 }: Props) {
       bulletDot: {
         fontSize: 14.5 * scale,
         lineHeight: 22 * scale,
-        color: '#8b5cf6',
+        color: palette.accent,
       },
       bulletText: {
         flex: 1,
@@ -93,8 +94,8 @@ export function MarkdownViewer({ markdown, fontSizeScale = 1.0 }: Props) {
       },
       blockquote: {
         borderLeftWidth: 3,
-        borderLeftColor: '#8b5cf6',
-        backgroundColor: 'rgba(139, 92, 246, 0.05)',
+        borderLeftColor: palette.accent,
+        backgroundColor: palette.accentSoft,
         paddingHorizontal: spacing[3],
         paddingVertical: spacing[2],
         borderRadius: 4,
@@ -125,11 +126,11 @@ export function MarkdownViewer({ markdown, fontSizeScale = 1.0 }: Props) {
         marginVertical: spacing[4],
       },
       linkText: {
-        color: '#a78bfa',
+        color: palette.accentLink,
         textDecorationLine: 'underline',
       },
     });
-  }, [scale]);
+  }, [scale, palette]);
 
   function parseInlineText(text: string): React.ReactNode[] {
     // 1. 복합 이미지 링크 패턴 `[![대체](img_url)](link_url)` 제거

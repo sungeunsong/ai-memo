@@ -11,6 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 
 import { SavedItem } from '@/features/items/types';
@@ -33,7 +34,10 @@ import { parseActionItems, ActionItem } from '@/utils/actionParser';
 import * as WebBrowser from 'expo-web-browser';
 
 import { ReaderModeModal } from '@/components/ReaderModeModal';
-import { palette } from '@/theme/palette';
+import { MarkdownViewer } from '@/components/MarkdownViewer';
+import { StructuredText } from '@/components/StructuredText';
+import { Palette } from '@/theme/palette';
+import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 
 type Props = {
@@ -44,22 +48,41 @@ type Props = {
   onDelete?: (itemId: string) => void;
 };
 
+/**
+ * 상세는 화면을 꽉 채웁니다.
+ *
+ * 바텀시트로 92%만 덮으면 위쪽에 남은 목록이 계속 눈에 걸리고,
+ * 정작 읽어야 할 본문은 좁아집니다. 저장해둔 걸 읽는 게 이 화면의 목적이라
+ * 목록으로 돌아가는 길(뒤로가기 / ← 버튼)만 분명하면 전체 화면이 낫습니다.
+ *
+ * Modal의 onRequestClose가 안드로이드 하드웨어 뒤로가기를 받아
+ * 앱 종료 대신 이 화면만 닫습니다.
+ */
 export function DetailScreen({ item, checkedItems, onToggleCheck, onClose, onDelete }: Props) {
+  const styles = useThemedStyles(createStyles);
   return (
-    <View style={styles.backdrop}>
-      <Pressable style={styles.backdropClickable} onPress={onClose} />
-      <View style={styles.container}>
+    <Modal
+      visible
+      animationType="slide"
+      presentationStyle="fullScreen"
+      onRequestClose={onClose}
+    >
+      <SafeAreaView style={styles.fullScreen} edges={['top', 'bottom']}>
         <View style={styles.header}>
-          <View style={styles.handle} />
           <Pressable
             onPress={onClose}
+            hitSlop={10}
+            accessibilityLabel="목록으로 돌아가기"
             style={({ pressed }) => [
-              styles.closeBtn,
-              { transform: [{ scale: pressed ? 0.85 : 1 }] },
+              styles.backBtn,
+              { transform: [{ scale: pressed ? 0.9 : 1 }] },
             ]}
           >
-            <Text style={styles.closeBtnText}>✕</Text>
+            <Text style={styles.backBtnText}>←</Text>
           </Pressable>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
         </View>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
@@ -72,8 +95,8 @@ export function DetailScreen({ item, checkedItems, onToggleCheck, onClose, onDel
             onDelete={onDelete}
           />
         </ScrollView>
-      </View>
-    </View>
+      </SafeAreaView>
+    </Modal>
   );
 }
 
@@ -91,7 +114,9 @@ export function DetailContent({
   onToggleCheck: (itemId: string, key: string) => void;
   onDelete?: (itemId: string) => void;
 }) {
-  const theme = getSourceTheme(selectedItem.sourceType);
+  const { palette, mode } = useTheme();
+  const styles = useThemedStyles(createStyles);
+  const theme = getSourceTheme(selectedItem.sourceType, mode);
   const itemCategory = getItemCategory(selectedItem);
   const [userNoteInput, setUserNoteInput] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -123,6 +148,13 @@ export function DetailContent({
   // 본문은 contentText 컬럼으로 분리됐습니다.
   // structured.description은 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
   const readerMarkdown: string = selectedItem.contentText || structured?.description || '';
+
+  const summaryBody: string = (
+    selectedItem.digest ||
+    structured?.detailedAnalysis ||
+    selectedItem.summary ||
+    ''
+  ).trim();
 
   /**
    * 원본은 인앱 브라우저(Android Chrome Custom Tab)로 엽니다.
@@ -291,20 +323,23 @@ export function DetailContent({
               ]}
             >
               {isSaving || selectedItem.aiStatus === 'pending' ? (
-                <ActivityIndicator size="small" color="#c084fc" />
+                <ActivityIndicator size="small" color={palette.accentText} />
               ) : (
                 <Text style={styles.reanalyzeBtnText}>재분석 🧪</Text>
               )}
             </Pressable>
           </View>
-          <Text style={styles.summaryValue}>
-            {/* 정리본이 상세 화면의 본문입니다.
-                structured.detailedAnalysis는 digest 컬럼 분리 이전에 저장된 아이템을 위한 호환 경로입니다. */}
-            {selectedItem.digest ||
-              structured?.detailedAnalysis ||
-              selectedItem.summary ||
-              'AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.'}
-          </Text>
+          {/* 정리본이 상세 화면의 본문입니다.
+              structured.detailedAnalysis는 digest 컬럼 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
+              소제목·불릿을 써서 오라고 프롬프트에 적어놓고 정작 <Text> 하나에 밀어넣고 있었습니다.
+              마크다운으로 렌더링해야 그 구조가 화면에 나타납니다. */}
+          {summaryBody ? (
+            <MarkdownViewer markdown={summaryBody} />
+          ) : (
+            <Text style={styles.summaryValue}>
+              AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.
+            </Text>
+          )}
 
           {/* 실패했으면 이유를 그대로 보여줍니다.
               폰에서 도는 앱이라 콘솔을 열기 어렵고, 사용자 입장에서도
@@ -477,6 +512,7 @@ function RecipeCard({
   checkedItems: Record<string, Record<string, boolean>>;
   onToggleCheck: (itemId: string, key: string) => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   const list = (structured.ingredients as string[]) || [];
   const total = list.length;
   const checked = list.filter((ing) => checkedItems[selectedItem.id]?.[ing]).length;
@@ -534,6 +570,7 @@ function WorkoutCard({
   checkedItems: Record<string, Record<string, boolean>>;
   onToggleCheck: (itemId: string, key: string) => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   const list = (structured.routine as string[]) || [];
   const equipments = (structured.equipments as string[]) || [];
   const targetMuscles = (structured.targetMuscles as string[]) || [];
@@ -602,6 +639,8 @@ function TravelCard({
   checkedItems: Record<string, Record<string, boolean>>;
   onToggleCheck: (itemId: string, key: string) => void;
 }) {
+  const styles = useThemedStyles(createStyles);
+  const { palette } = useTheme();
   const checklistItems = (structured.checklist as string[]) || [];
   const highlights = (structured.highlights as string[]) || [];
   const total = checklistItems.length;
@@ -618,13 +657,13 @@ function TravelCard({
         </View>
         <View style={styles.travelThemeBadgeRow}>
           {structured.travelTheme?.includes('국내') && (
-            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', borderColor: '#3b82f6' }]}>국내 🇰🇷</Text>
+            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(59, 130, 246, 0.15)', color: palette.infoText, borderColor: '#3b82f6' }]}>국내 🇰🇷</Text>
           )}
           {structured.travelTheme?.includes('해외') && (
             <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(236, 72, 153, 0.15)', color: '#fbcfe8', borderColor: '#ec4899' }]}>해외 ✈</Text>
           )}
           {structured.travelTheme?.includes('호캉스') && (
-            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(139, 92, 246, 0.15)', color: '#c084fc', borderColor: '#8b5cf6' }]}>호캉스 🏨</Text>
+            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(139, 92, 246, 0.15)', color: palette.accentText, borderColor: '#8b5cf6' }]}>호캉스 🏨</Text>
           )}
         </View>
       </View>
@@ -686,6 +725,7 @@ function TravelCard({
 // 공통 서브 컴포넌트
 // ==========================================
 function ProgressBar({ label, total, checked, ratio, color }: { label: string; total: number; checked: number; ratio: number; color: string }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.progressBarContainer}>
       <View style={styles.progressBarHeader}>
@@ -699,19 +739,26 @@ function ProgressBar({ label, total, checked, ratio, color }: { label: string; t
   );
 }
 
+/**
+ * 공유 원문은 인스타 캡션처럼 소제목과 항목이 섞인 글이 대부분입니다.
+ * 통짜 <Text>로 흘리면 줄바꿈만 남아 눈이 걸릴 데가 없어서,
+ * 소제목·불릿·해시태그를 나눠 그립니다. 긴 글은 접어둡니다.
+ */
 function RawInputSection({ item }: { item: SavedItem }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.rawInputPanel}>
       <View style={styles.rawInputHeader}>
         <Text style={styles.detailLabel}>{item.type === 'text' ? '저장된 원문' : '공유 원문'}</Text>
         <Text style={styles.rawInputMeta}>{describeSavedItemShape(item)}</Text>
       </View>
-      <Text style={styles.rawInputPrimaryText}>{item.rawInput}</Text>
+      <StructuredText text={item.rawInput} collapseAfter={14} />
     </View>
   );
 }
 
 function MetaBlock({ label, value }: { label: string; value: string }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.metaBlock}>
       <Text style={styles.metaLabel}>{label}</Text>
@@ -743,6 +790,7 @@ function CategoryPicker({
   onClose: () => void;
   onSelect: (category: string | null) => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   const options = ['recipe', 'workout', 'travel', 'parenting', 'shopping', 'interior', 'other'];
 
   return (
@@ -789,6 +837,7 @@ function CategoryPicker({
  * 그래서 남은 기간을 눈에 띄게 보여주고, 지난 건 분명히 표시합니다.
  */
 function ShoppingCard({ structured }: { structured: any }) {
+  const styles = useThemedStyles(createStyles);
   const deadline = typeof structured.deadline === 'string' ? structured.deadline.trim() : '';
   let deadlineNote: { text: string; expired: boolean } | null = null;
 
@@ -846,7 +895,8 @@ function ShoppingCard({ structured }: { structured: any }) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (palette: Palette) =>
+  StyleSheet.create({
   deadlineBox: {
     marginTop: spacing[3],
     backgroundColor: 'rgba(245, 158, 11, 0.12)',
@@ -861,7 +911,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(239, 68, 68, 0.35)',
   },
   deadlineLabel: {
-    color: '#fbbf24',
+    color: palette.warnText,
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 0.5,
@@ -876,7 +926,7 @@ const styles = StyleSheet.create({
   },
   pickerBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    backgroundColor: palette.overlay,
     justifyContent: 'center',
     paddingHorizontal: spacing[6],
   },
@@ -909,10 +959,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   pickerRowTextActive: {
-    color: '#c084fc',
+    color: palette.accentText,
   },
   pickerCheck: {
-    color: '#c084fc',
+    color: palette.accentText,
     fontSize: 13,
     fontWeight: '900',
   },
@@ -962,65 +1012,49 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '600',
   },
-  // 오버레이
-  backdrop: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    zIndex: 999,
-  },
-  backdropClickable: { flex: 1 },
-  container: {
-    position: 'absolute',
-    bottom: 0, left: 0, right: 0,
-    height: '92%',
-    backgroundColor: palette.backgroundStrong,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderWidth: 1,
-    borderColor: palette.borderStrong,
-    shadowColor: '#000000',
-    shadowOpacity: 0.35,
-    shadowRadius: 30,
-    shadowOffset: { width: 0, height: -10 },
-    elevation: 24,
+  // 전체 화면 상세
+  fullScreen: {
+    flex: 1,
+    backgroundColor: palette.background,
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 14,
+    gap: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
     borderBottomWidth: 1,
     borderColor: palette.border,
-    position: 'relative',
+    backgroundColor: palette.backgroundStrong,
   },
-  handle: {
-    width: 36, height: 4,
-    backgroundColor: palette.textMuted,
-    borderRadius: 99,
-    opacity: 0.5,
-  },
-  closeBtn: {
-    position: 'absolute',
-    right: 20, top: 10,
-    width: 30, height: 30,
-    backgroundColor: palette.surface,
+  backBtn: {
+    width: 34, height: 34,
     borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: palette.surface,
     borderWidth: 1,
     borderColor: palette.border,
   },
-  closeBtnText: {
-    color: palette.textSecondary,
-    fontSize: 12, fontWeight: '800',
+  backBtnText: {
+    color: palette.textPrimary,
+    fontSize: 17,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  headerTitle: {
+    flex: 1,
+    color: palette.textPrimary,
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: -0.3,
   },
   scrollContent: {
     padding: spacing[5],
     paddingBottom: spacing[10],
   },
   // 상세 카드
-  detailCard: { gap: spacing[3] },
+  detailCard: { gap: spacing[4] },
   detailHero: {
     backgroundColor: palette.surfaceRaised,
     borderRadius: 18,
@@ -1032,8 +1066,8 @@ const styles = StyleSheet.create({
   detailHeroText: { gap: spacing[1] },
   detailTitle: {
     color: palette.textPrimary,
-    fontSize: 18, lineHeight: 24,
-    fontWeight: '900', letterSpacing: -0.3,
+    fontSize: 20, lineHeight: 28,
+    fontWeight: '900', letterSpacing: -0.4,
   },
   detailSource: {
     color: palette.textSecondary,
@@ -1055,15 +1089,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2],
   },
   openSourceBtnText: {
-    color: '#93c5fd',
+    color: palette.infoText,
     fontSize: 12, fontWeight: '800',
   },
   detailSection: { gap: spacing[2] },
   detailLabel: {
-    color: palette.textMuted,
-    fontSize: 11, fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    // 한글 라벨에 자간을 넓게 주면 오히려 읽기 힘듭니다.
+    color: palette.textSecondary,
+    fontSize: 11.5, fontWeight: '900',
+    letterSpacing: 0.2,
   },
   noteInputRow: {
     flexDirection: 'row',
@@ -1099,7 +1133,7 @@ const styles = StyleSheet.create({
     padding: spacing[4],
     gap: spacing[3],
     borderWidth: 1,
-    borderColor: 'rgba(139, 92, 246, 0.25)',
+    borderColor: palette.accentBorder,
   },
   summaryHeader: {
     flexDirection: 'row',
@@ -1108,13 +1142,13 @@ const styles = StyleSheet.create({
     gap: spacing[2],
   },
   summaryTitle: {
-    color: '#c084fc',
+    color: palette.accentText,
     fontSize: 15, fontWeight: '900',
     letterSpacing: -0.3,
   },
   summaryValue: {
-    color: palette.textPrimary,
-    fontSize: 14, lineHeight: 22,
+    color: palette.textSecondary,
+    fontSize: 14.5, lineHeight: 24,
     fontWeight: '500',
   },
   reanalyzeBtn: {
@@ -1126,10 +1160,10 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(139, 92, 246, 0.25)',
+    borderColor: palette.accentBorder,
   },
   reanalyzeBtnText: {
-    color: '#c084fc',
+    color: palette.accentText,
     fontSize: 11, fontWeight: '800',
   },
   toast: {
@@ -1231,7 +1265,7 @@ const styles = StyleSheet.create({
   },
   muscleBadge: {
     backgroundColor: 'rgba(139, 92, 246, 0.15)',
-    color: '#a78bfa',
+    color: palette.accentLink,
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -1414,12 +1448,12 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(139, 92, 246, 0.15)',
   },
   urlClickableNum: {
-    color: '#a78bfa',
+    color: palette.accentLink,
     fontSize: 12, fontWeight: '800',
   },
   urlClickableText: {
     flex: 1,
-    color: '#c084fc',
+    color: palette.accentText,
     fontSize: 12, fontWeight: '700',
   },
   // 썸네일
@@ -1520,10 +1554,6 @@ const styles = StyleSheet.create({
     color: palette.success,
     fontSize: 11, fontWeight: '900',
   },
-  rawInputPrimaryText: {
-    color: palette.textPrimary,
-    fontSize: 14, lineHeight: 22,
-  },
   // 삭제 버튼
   deleteBtn: {
     marginTop: spacing[4],
@@ -1593,7 +1623,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   readerModeBtnText: {
-    color: '#c084fc',
+    color: palette.accentText,
     fontSize: 14,
     fontWeight: '800',
   },

@@ -26,7 +26,8 @@ import { pickSharedImagePath } from '@/features/capture/imageCapture';
 import * as ImagePicker from 'expo-image-picker';
 import { useAppStore } from '@/store';
 import { getSettingAsync, setSettingAsync } from '@/db';
-import { palette } from '@/theme/palette';
+import { Palette } from '@/theme/palette';
+import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 
 import { ItemCard } from '@/components/ItemCard';
@@ -63,7 +64,13 @@ import {
 
 const PANTRY_SETTING_KEY = 'pantry.owned';
 
+/** 헤더 버튼은 한 번 누를 때마다 다크 → 라이트 → 시스템으로 돕니다. */
+const THEME_ICONS: Record<string, string> = { dark: '🌙', light: '☀️', system: '🌗' };
+const THEME_LABELS: Record<string, string> = { dark: '다크', light: '라이트', system: '시스템' };
+
 export function HomeScreen() {
+  const { palette, mode, preference, cyclePreference } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { width } = useWindowDimensions();
   const isWideLayout = width >= 940;
 
@@ -509,7 +516,7 @@ export function HomeScreen() {
   // ==========================================
   const renderItem = useCallback(
     ({ item }: { item: SavedItem }) => {
-      const theme = getSourceTheme(item.sourceType);
+      const theme = getSourceTheme(item.sourceType, mode);
       return (
         <Pressable
           onPress={() => handleSelectItem(item.id)}
@@ -533,7 +540,7 @@ export function HomeScreen() {
         </Pressable>
       );
     },
-    [selectedItem?.id, highlightedItemId]
+    [selectedItem?.id, highlightedItemId, mode, styles]
   );
 
   const keyExtractor = useCallback((item: SavedItem) => item.id, []);
@@ -559,6 +566,16 @@ export function HomeScreen() {
           <Text style={styles.headerLogo}>문갑</Text>
         </View>
         <View style={styles.headerRight}>
+          <Pressable
+            onPress={cyclePreference}
+            accessibilityLabel={`테마 전환 (현재 ${THEME_LABELS[preference]})`}
+            style={({ pressed }) => [
+              styles.themeToggle,
+              { transform: [{ scale: pressed ? 0.9 : 1 }] },
+            ]}
+          >
+            <Text style={styles.themeToggleIcon}>{THEME_ICONS[preference]}</Text>
+          </Pressable>
           <View style={styles.syncIndicator}>
             <View
               style={[
@@ -794,7 +811,8 @@ export function HomeScreen() {
 // ==========================================
 // 스타일
 // ==========================================
-const styles = StyleSheet.create({
+const createStyles = (palette: Palette) =>
+  StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: palette.background,
@@ -850,6 +868,20 @@ const styles = StyleSheet.create({
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing[2],
+  },
+  themeToggle: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  themeToggleIcon: {
+    fontSize: 14,
   },
   syncIndicator: {
     flexDirection: 'row',
@@ -869,7 +901,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.success,
   },
   syncDotActive: { backgroundColor: '#8b5cf6' },
-  syncDotPending: { backgroundColor: '#fbbf24' },
+  syncDotPending: { backgroundColor: palette.pending },
   syncText: {
     color: palette.textSecondary,
     fontSize: 10,
@@ -912,7 +944,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(251, 191, 36, 0.2)',
   },
   syncInfoText: {
-    color: '#fbbf24',
+    color: palette.warnText,
     fontSize: 12,
     fontWeight: '700',
   },
@@ -976,7 +1008,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(59, 130, 246, 0.28)',
   },
   clipboardBtnPreviewText: {
-    color: '#93c5fd',
+    color: palette.infoText,
     fontSize: 11,
     fontWeight: '800',
   },

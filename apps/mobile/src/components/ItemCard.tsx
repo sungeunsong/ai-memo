@@ -8,11 +8,14 @@ import {
   describeSavedItemShape,
   formatReadableDate,
 } from '@/utils/formatters';
-import { palette } from '@/theme/palette';
+import { Palette } from '@/theme/palette';
+import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 
 export function ItemCard({ item }: { item: SavedItem }) {
-  const theme = getSourceTheme(item.sourceType);
+  const styles = useThemedStyles(createStyles);
+  const { mode } = useTheme();
+  const theme = getSourceTheme(item.sourceType, mode);
 
   const isInstagram =
     item.sourceType === 'instagram_reel' ||
@@ -59,6 +62,8 @@ export function ItemCard({ item }: { item: SavedItem }) {
 }
 
 function ThumbnailThumb({ item }: { item: SavedItem }) {
+  const styles = useThemedStyles(createStyles);
+  const { mode } = useTheme();
   if (item.type === 'text') {
     return null;
   }
@@ -73,7 +78,7 @@ function ThumbnailThumb({ item }: { item: SavedItem }) {
     );
   }
 
-  const theme = getSourceTheme(item.sourceType);
+  const theme = getSourceTheme(item.sourceType, mode);
   return (
     <View style={[styles.cardThumbnailPlaceholder, { borderColor: theme.border }]}>
       <Text style={[styles.cardThumbnailPlaceholderText, { color: theme.badgeText }]}>
@@ -83,7 +88,8 @@ function ThumbnailThumb({ item }: { item: SavedItem }) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (palette: Palette) =>
+  StyleSheet.create({
   cardContent: {
     paddingVertical: 12,
     paddingHorizontal: spacing[4],

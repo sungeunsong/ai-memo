@@ -12,7 +12,8 @@ import {
 import { SavedItem } from '@/features/items/types';
 import { matchPantry, summarizeShoppingWins } from '@/features/facets/pantry';
 import { facetEmoji } from '@/features/facets/labels';
-import { palette } from '@/theme/palette';
+import { Palette } from '@/theme/palette';
+import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 
 type Props = {
@@ -39,6 +40,8 @@ export function PantryModal({
   onClose,
   onSelectItem,
 }: Props) {
+  const { palette } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [draft, setDraft] = useState('');
 
   const matches = useMemo(() => matchPantry(items, owned), [items, owned]);
@@ -206,10 +209,11 @@ export function PantryModal({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (palette: Palette) =>
+  StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    backgroundColor: palette.overlay,
     justifyContent: 'flex-end',
   },
   sheet: {
@@ -284,7 +288,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   ownedChipText: {
-    color: '#c084fc',
+    color: palette.accentText,
     fontSize: 11,
     fontWeight: '800',
   },

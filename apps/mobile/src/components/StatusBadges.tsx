@@ -2,7 +2,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { SavedItem } from '@/features/items/types';
 import { getSaveStatusLabel, getAiStatusLabel } from '@/utils/formatters';
-import { palette } from '@/theme/palette';
+import { Palette } from '@/theme/palette';
+import { useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 
 export function StatusBadge({
@@ -14,6 +15,7 @@ export function StatusBadge({
   tone?: 'saved' | 'pending' | 'failed';
   compact?: boolean;
 }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View
       style={[
@@ -43,6 +45,7 @@ export function StatusPills({
   item: SavedItem;
   compact?: boolean;
 }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={[styles.statusPillRow, compact && styles.statusPillRowCompact]}>
       <StatusBadge label={getSaveStatusLabel(item)} tone="saved" compact={compact} />
@@ -55,7 +58,8 @@ export function StatusPills({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (palette: Palette) =>
+  StyleSheet.create({
   pendingBadge: {
     backgroundColor: 'rgba(251, 191, 36, 0.1)',
     borderRadius: 999,
@@ -76,7 +80,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[2],
   },
   pendingBadgeText: {
-    color: '#fbbf24',
+    color: palette.warnText,
     fontSize: 10,
     fontWeight: '800',
   },

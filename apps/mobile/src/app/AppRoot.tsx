@@ -7,7 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { HomeScreen } from '@/screens/HomeScreen';
 import { useAppStore } from '@/store';
-import { palette } from '@/theme/palette';
+import { ThemeProvider, useTheme } from '@/theme/ThemeContext';
 
 export function AppRoot() {
   const initialize = useAppStore((state) => state.initialize);
@@ -27,9 +27,25 @@ export function AppRoot() {
       }}
     >
       <SafeAreaProvider>
-        <StatusBar style="dark" backgroundColor={palette.background} />
-        <HomeScreen />
+        <ThemeProvider>
+          <ThemedApp />
+        </ThemeProvider>
       </SafeAreaProvider>
     </ShareIntentProvider>
+  );
+}
+
+/** 상태바 색을 테마와 맞추려면 ThemeProvider 안쪽이어야 합니다. */
+function ThemedApp() {
+  const { mode, palette } = useTheme();
+
+  return (
+    <>
+      <StatusBar
+        style={mode === 'dark' ? 'light' : 'dark'}
+        backgroundColor={palette.background}
+      />
+      <HomeScreen />
+    </>
   );
 }

@@ -4,7 +4,8 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { FacetOption } from '@/features/facets/query';
 import { KIND_LABELS, facetLabel } from '@/features/facets/labels';
 import { SavedFilter } from '@/features/facets/savedFilters';
-import { palette } from '@/theme/palette';
+import { Palette } from '@/theme/palette';
+import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 
 type Props = {
@@ -60,6 +61,8 @@ export function SearchFilterBar({
   canSaveFilter,
   describeFacetKey,
 }: Props) {
+  const { palette } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [isNamingFilter, setIsNamingFilter] = useState(false);
   const [filterName, setFilterName] = useState('');
 
@@ -258,7 +261,8 @@ export function SearchFilterBar({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (palette: Palette) =>
+  StyleSheet.create({
   container: {
     gap: spacing[3],
   },
@@ -317,7 +321,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   tabTextActive: {
-    color: '#c084fc',
+    color: palette.accentText,
   },
   selectedPanel: {
     gap: spacing[1] + 2,
@@ -412,7 +416,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   chipTextActive: {
-    color: '#c084fc',
+    color: palette.accentText,
   },
   chipCount: {
     color: palette.textMuted,

@@ -3,7 +3,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Relaxation } from '@/features/facets/query';
 import { parseFacetKey } from '@/features/facets/extract';
 import { facetLabel } from '@/features/facets/labels';
-import { palette } from '@/theme/palette';
+import { Palette } from '@/theme/palette';
+import { useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 
 type Props = {
@@ -37,6 +38,7 @@ export function EmptyResultGuide({
   onClearSearch,
   onClearAll,
 }: Props) {
+  const styles = useThemedStyles(createStyles);
   const canDropSearch = searchQuery.trim().length > 0 && withoutSearchCount > 0;
   if (isCollectionEmpty) {
     return (
@@ -119,7 +121,8 @@ export function EmptyResultGuide({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (palette: Palette) =>
+  StyleSheet.create({
   container: {
     alignItems: 'center',
     justifyContent: 'center',

@@ -8,8 +8,10 @@ import {
   View,
 } from 'react-native';
 
-import { palette } from '@/theme/palette';
+import { Palette } from '@/theme/palette';
+import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
+import { useBackHandler } from '@/hooks/useBackHandler';
 
 type Props = {
   visible: boolean;
@@ -28,8 +30,12 @@ export function CaptureModal({
   initialValue = '',
   onPickImage,
 }: Props) {
+  const { palette } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [input, setInput] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
+
+  useBackHandler(visible, onClose);
 
   if (!visible) return null;
 
@@ -122,6 +128,7 @@ export function CaptureModal({
 }
 
 export function CaptureFloatingButton({ onPress }: { onPress: () => void }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <Pressable
       onPress={onPress}
@@ -135,7 +142,8 @@ export function CaptureFloatingButton({ onPress }: { onPress: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (palette: Palette) =>
+  StyleSheet.create({
   imagePickBtn: {
     marginTop: spacing[3],
     backgroundColor: palette.surfaceRaised,
@@ -156,7 +164,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    backgroundColor: palette.overlay,
     zIndex: 1000,
     justifyContent: 'flex-end',
   },
@@ -169,7 +177,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 28,
     borderWidth: 1,
     borderColor: palette.borderStrong,
-    shadowColor: '#000000',
+    shadowColor: palette.shadow,
     shadowOpacity: 0.35,
     shadowRadius: 30,
     shadowOffset: { width: 0, height: -10 },

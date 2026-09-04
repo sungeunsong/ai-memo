@@ -172,72 +172,79 @@ export type SourceTheme = {
   label: string;
 };
 
-export function getSourceTheme(sourceType: string): SourceTheme {
+/**
+ * 소스별 색은 색상 하나(rgb)에서 파생시킵니다.
+ * 배지 글자색만 테마별로 따로 잡는데, 다크에서 쓰던 연한 톤(#fca5a5 등)은
+ * 흰 배경에서 거의 읽히지 않기 때문입니다.
+ */
+type SourceHue = { rgb: string; darkText: string; lightText: string };
+
+const HUES = {
+  red: { rgb: '239, 68, 68', darkText: '#fca5a5', lightText: '#b91c1c' },
+  orange: { rgb: '251, 146, 60', darkText: '#fdbb2d', lightText: '#b45309' },
+  pink: { rgb: '236, 72, 153', darkText: '#fbcfe8', lightText: '#be185d' },
+  blue: { rgb: '59, 130, 246', darkText: '#93c5fd', lightText: '#1d4ed8' },
+  amber: { rgb: '249, 115, 22', darkText: '#fcd34d', lightText: '#c2410c' },
+  violet: { rgb: '139, 92, 246', darkText: '#c084fc', lightText: '#6d28d9' },
+} as const satisfies Record<string, SourceHue>;
+
+function buildTheme(hue: SourceHue, label: string, mode: 'dark' | 'light'): SourceTheme {
+  const isDark = mode === 'dark';
+  return {
+    border: `rgba(${hue.rgb}, ${isDark ? 0.2 : 0.28})`,
+    bg: `rgba(${hue.rgb}, ${isDark ? 0.1 : 0.08})`,
+    badgeBg: `rgba(${hue.rgb}, ${isDark ? 0.18 : 0.14})`,
+    badgeText: isDark ? hue.darkText : hue.lightText,
+    label,
+  };
+}
+
+export function getSourceTheme(sourceType: string, mode: 'dark' | 'light' = 'dark'): SourceTheme {
   switch (sourceType) {
     case 'youtube':
-      return {
-        border: 'rgba(239, 68, 68, 0.2)',
-        bg: 'rgba(239, 68, 68, 0.1)',
-        badgeBg: 'rgba(239, 68, 68, 0.18)',
-        badgeText: '#fca5a5',
-        label: 'YouTube',
-      };
+      return buildTheme(HUES.red, 'YouTube', mode);
     case 'parenting':
-      return {
-        border: 'rgba(251, 146, 60, 0.2)',
-        bg: 'rgba(251, 146, 60, 0.1)',
-        badgeBg: 'rgba(251, 146, 60, 0.18)',
-        badgeText: '#fdbb2d',
-        label: '육아 👶',
-      };
+      return buildTheme(HUES.orange, '육아 👶', mode);
     case 'instagram':
     case 'instagram_post':
     case 'instagram_reel':
     case 'workout':
-      return {
-        border: 'rgba(236, 72, 153, 0.2)',
-        bg: 'rgba(236, 72, 153, 0.1)',
-        badgeBg: 'rgba(236, 72, 153, 0.18)',
-        badgeText: '#fbcfe8',
-        label: sourceType === 'workout' ? '홈트/운동' : sourceType === 'instagram_reel' ? 'Instagram Reel' : sourceType === 'instagram_post' ? 'Instagram Post' : 'Instagram',
-      };
+      return buildTheme(
+        HUES.pink,
+        sourceType === 'workout'
+          ? '홈트/운동'
+          : sourceType === 'instagram_reel'
+            ? 'Instagram Reel'
+            : sourceType === 'instagram_post'
+              ? 'Instagram Post'
+              : 'Instagram',
+        mode
+      );
     case 'notion':
     case 'recipe':
-      return {
-        border: 'rgba(239, 68, 68, 0.2)',
-        bg: 'rgba(239, 68, 68, 0.1)',
-        badgeBg: 'rgba(239, 68, 68, 0.18)',
-        badgeText: '#fca5a5',
-        label: sourceType === 'recipe' ? '레시피 요리' : 'Notion',
-      };
+      return buildTheme(HUES.red, sourceType === 'recipe' ? '레시피 요리' : 'Notion', mode);
     case 'google_docs':
     case 'google_sheets':
     case 'google_drive':
     case 'google_form':
     case 'travel':
-      return {
-        border: 'rgba(59, 130, 246, 0.2)',
-        bg: 'rgba(59, 130, 246, 0.1)',
-        badgeBg: 'rgba(59, 130, 246, 0.18)',
-        badgeText: '#93c5fd',
-        label: sourceType === 'travel' ? '여행 코스' : sourceType === 'google_docs' ? 'Google Docs' : sourceType === 'google_sheets' ? 'Google Sheets' : sourceType === 'google_form' ? 'Google Form' : 'Google Drive',
-      };
+      return buildTheme(
+        HUES.blue,
+        sourceType === 'travel'
+          ? '여행 코스'
+          : sourceType === 'google_docs'
+            ? 'Google Docs'
+            : sourceType === 'google_sheets'
+              ? 'Google Sheets'
+              : sourceType === 'google_form'
+                ? 'Google Form'
+                : 'Google Drive',
+        mode
+      );
     case 'manual_text':
-      return {
-        border: 'rgba(249, 115, 22, 0.2)',
-        bg: 'rgba(249, 115, 22, 0.1)',
-        badgeBg: 'rgba(249, 115, 22, 0.18)',
-        badgeText: '#fcd34d',
-        label: '직접 메모',
-      };
+      return buildTheme(HUES.amber, '직접 메모', mode);
     default:
-      return {
-        border: 'rgba(139, 92, 246, 0.2)',
-        bg: 'rgba(139, 92, 246, 0.1)',
-        badgeBg: 'rgba(139, 92, 246, 0.18)',
-        badgeText: '#c084fc',
-        label: 'Web Link',
-      };
+      return buildTheme(HUES.violet, 'Web Link', mode);
   }
 }
 
