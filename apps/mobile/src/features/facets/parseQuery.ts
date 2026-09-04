@@ -52,7 +52,23 @@ export function parseQueryToFacets(index: FacetIndex, query: string): ParsedQuer
 
   for (const token of convertible) {
     const canonical = canonicalize(token);
-    const matched = canonical ? byValue.get(canonical) : undefined;
+    if (!canonical) {
+      rest.push(token);
+      continue;
+    }
+
+    // 정확히 일치하면 바로 승격합니다.
+    let matched = byValue.get(canonical);
+
+    if (!matched) {
+      // 앞부분만 쳐도 알아보게 합니다. '강원'이라 치면 '강원도'로 붙습니다.
+      // 다만 후보가 둘 이상이면 사용자가 어느 쪽을 뜻했는지 알 수 없으므로
+      // 건드리지 않고 텍스트로 남깁니다. 잘못 짚으면 통제감을 잃습니다.
+      const prefixMatches = [...byValue.keys()].filter((value) => value.startsWith(canonical));
+      if (prefixMatches.length === 1) {
+        matched = byValue.get(prefixMatches[0]);
+      }
+    }
 
     if (matched && matched.length > 0) {
       for (const key of matched) {

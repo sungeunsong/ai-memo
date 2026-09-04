@@ -1,8 +1,9 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { FacetOption } from '@/features/facets/query';
 import { KIND_LABELS, facetLabel } from '@/features/facets/labels';
+import { SavedFilter } from '@/features/facets/savedFilters';
 import { palette } from '@/theme/palette';
 import { spacing } from '@/theme/spacing';
 
@@ -20,6 +21,13 @@ type Props = {
    * 0건이 되는 것은 애초에 여기 담기지 않습니다.
    */
   facetOptions: FacetOption[];
+  /** 저장해둔 조합 조건 (스마트 폴더) */
+  savedFilters: SavedFilter[];
+  onApplyFilter: (filter: SavedFilter) => void;
+  onRemoveFilter: (id: string) => void;
+  onSaveFilter: (name: string) => void;
+  canSaveFilter: boolean;
+  describeFacetKey: (key: string) => string;
 };
 
 const FOLDERS = [
@@ -29,6 +37,7 @@ const FOLDERS = [
   { label: '여행 ✈️', value: 'travel' },
   { label: '육아 🍼', value: 'parenting' },
   { label: '공구·꿀템 🛍️', value: 'shopping' },
+  { label: '인테리어 🛋️', value: 'interior' },
   { label: '미분류 🏷️', value: 'other' },
 ];
 
@@ -44,7 +53,23 @@ export function SearchFilterBar({
   onToggleFacet,
   onClearFacets,
   facetOptions,
+  savedFilters,
+  onApplyFilter,
+  onRemoveFilter,
+  onSaveFilter,
+  canSaveFilter,
+  describeFacetKey,
 }: Props) {
+  const [isNamingFilter, setIsNamingFilter] = useState(false);
+  const [filterName, setFilterName] = useState('');
+
+  function commitFilterName() {
+    const name = filterName.trim();
+    if (!name) return;
+    onSaveFilter(name);
+    setFilterName('');
+    setIsNamingFilter(false);
+  }
   const handleSearchInput = useCallback(
     (text: string) => {
       onSearchChange(text);
@@ -134,6 +159,68 @@ export function SearchFilterBar({
               </Pressable>
             ))}
           </ScrollView>
+        </View>
+      ) : null}
+
+      {/* 3.5. 스마트 폴더 — 자주 쓰는 조합에 이름을 붙여 저장해둡니다.
+              폴더에 아이템을 옮겨 담는 대신 "질문"을 저장하는 방식이라,
+              나중에 저장한 것도 조건에 맞으면 자동으로 들어옵니다. */}
+      {savedFilters.length > 0 || canSaveFilter ? (
+        <View style={styles.selectedPanel}>
+          <View style={styles.selectedHeader}>
+            <Text style={styles.panelLabel}>내 조건</Text>
+            {canSaveFilter && !isNamingFilter ? (
+              <Pressable onPress={() => setIsNamingFilter(true)} hitSlop={8}>
+                <Text style={styles.clearAllText}>+ 지금 조건 저장</Text>
+              </Pressable>
+            ) : null}
+          </View>
+
+          {isNamingFilter ? (
+            <View style={styles.filterNameRow}>
+              <TextInput
+                autoFocus
+                value={filterName}
+                onChangeText={setFilterName}
+                onSubmitEditing={commitFilterName}
+                placeholder="이름 (예: 내 냉장고, 주말 강원도)"
+                placeholderTextColor={palette.textMuted}
+                style={styles.filterNameInput}
+                returnKeyType="done"
+              />
+              <Pressable onPress={commitFilterName} style={styles.filterNameBtn}>
+                <Text style={styles.filterNameBtnText}>저장</Text>
+              </Pressable>
+              <Pressable onPress={() => setIsNamingFilter(false)} hitSlop={8}>
+                <Text style={styles.clearAllText}>취소</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {savedFilters.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipsContainer}
+            >
+              {savedFilters.map((filter) => (
+                <Pressable
+                  key={filter.id}
+                  onPress={() => onApplyFilter(filter)}
+                  onLongPress={() => onRemoveFilter(filter.id)}
+                  style={({ pressed }) => [
+                    styles.savedFilterChip,
+                    { transform: [{ scale: pressed ? 0.94 : 1 }] },
+                  ]}
+                >
+                  <Text style={styles.savedFilterName}>⭐ {filter.name}</Text>
+                  <Text style={styles.savedFilterDesc} numberOfLines={1}>
+                    {filter.facetKeys.map(describeFacetKey).join(' · ') || '전체'}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          ) : null}
         </View>
       ) : null}
 
@@ -252,6 +339,53 @@ const styles = StyleSheet.create({
     color: palette.textSecondary,
     fontSize: 10,
     fontWeight: '800',
+  },
+  filterNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  filterNameInput: {
+    flex: 1,
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    color: palette.textPrimary,
+    fontSize: 12,
+  },
+  filterNameBtn: {
+    backgroundColor: palette.accent,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  filterNameBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  savedFilterChip: {
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    maxWidth: 200,
+  },
+  savedFilterName: {
+    color: palette.textPrimary,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  savedFilterDesc: {
+    color: palette.textMuted,
+    fontSize: 9.5,
+    fontWeight: '700',
+    marginTop: 1,
   },
   chipsContainer: {
     flexDirection: 'row',

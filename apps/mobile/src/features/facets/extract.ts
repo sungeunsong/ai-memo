@@ -23,7 +23,9 @@ export type FacetKind =
   | 'seller'
   | 'purchase'
   | 'babyAge'
-  | 'topic';
+  | 'topic'
+  | 'room'
+  | 'style';
 
 export type Facet = {
   kind: FacetKind;
@@ -101,6 +103,10 @@ export function extractFacets(item: SavedItem): Facet[] {
     facets.push({ kind: 'babyAge', value: bucket });
   }
   pushValues(facets, 'topic', structured?.parentingTopic);
+
+  // 인테리어
+  pushValues(facets, 'room', structured?.roomType);
+  pushValues(facets, 'style', structured?.interiorStyle);
 
   // 쇼핑·공동구매
   pushValues(facets, 'product', structured?.productType);

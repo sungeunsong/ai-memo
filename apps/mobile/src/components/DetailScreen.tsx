@@ -743,7 +743,7 @@ function CategoryPicker({
   onClose: () => void;
   onSelect: (category: string | null) => void;
 }) {
-  const options = ['recipe', 'workout', 'travel', 'parenting', 'shopping', 'other'];
+  const options = ['recipe', 'workout', 'travel', 'parenting', 'shopping', 'interior', 'other'];
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>

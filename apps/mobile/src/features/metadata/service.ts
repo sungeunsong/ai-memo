@@ -732,7 +732,7 @@ const RESPONSE_SCHEMA = {
     detailedAnalysis: { type: 'string' },
     category: {
       type: 'string',
-      enum: ['recipe', 'workout', 'travel', 'parenting', 'shopping', 'web'],
+      enum: ['recipe', 'workout', 'travel', 'parenting', 'shopping', 'interior', 'web'],
     },
     cookTime: { type: 'string' },
     difficulty: { type: 'string' },
@@ -753,6 +753,8 @@ const RESPONSE_SCHEMA = {
     babyAgeMonths: { type: 'string' },
     parentingTopic: { type: 'string' },
     extractedText: { type: 'string' },
+    roomType: { type: 'string' },
+    interiorStyle: { type: 'string' },
   },
   required: ['title', 'summary', 'detailedAnalysis', 'category'],
 };
@@ -776,7 +778,7 @@ async function callGeminiApi(
   "title": "12~32자 내외의 핵심 요약형 제목 (과장/클릭베이트 금지)",
   "summary": "홈용 3줄 요약 (가독성 좋게 1), 2), 3) 번호 매김)",
   "detailedAnalysis": "상세 뷰용 전체 요약 정리본 (원문 본문의 중요한 핵심 논지, 세부 정보들을 소제목과 글머리 기호(불릿)를 활용해 일목요연하고 깊이 있게 정리한 상세 설명 텍스트, 한국어로 정성스럽게 작성할 것)",
-  "category": "recipe | workout | travel | parenting | shopping | web 중 하나로 분류 (공동구매/꿀템/제품추천은 shopping)",
+  "category": "recipe | workout | travel | parenting | shopping | interior | web 중 하나로 분류 (공동구매/꿀템/제품추천은 shopping, 방꾸미기/가구/조명은 interior)",
   "cookTime": "조리 시간 (예: '20분')",
   "difficulty": "조리 난이도 ('쉬움', '보통', '어려움' 중 하나)",
   "ingredients": ["재료1", "재료2", "재료3"],
@@ -794,7 +796,9 @@ async function callGeminiApi(
   "deadline": "마감일이 본문에 있으면 YYYY-MM-DD 형식으로. 없으면 빈 문자열",
   "price": "가격 정보 (예: '19,900원')",
   "babyAgeMonths": "대상 아기 월령을 숫자 개월로. 범위면 '6-12', 단일이면 '6'. 없으면 빈 문자열 (돌=12, 3세=36)",
-  "parentingTopic": "육아 주제 (이유식 | 수면 | 발달 | 놀이 | 마사지 | 건강 | 교육 | 외출 | 용품 중 하나)"
+  "parentingTopic": "육아 주제 (이유식 | 수면 | 발달 | 놀이 | 마사지 | 건강 | 교육 | 외출 | 용품 중 하나)",
+  "roomType": "공간 (거실 | 침실 | 주방 | 욕실 | 현관 | 서재 | 아이방 | 베란다 중 하나)",
+  "interiorStyle": "인테리어 스타일 (북유럽 | 미니멀 | 모던 | 빈티지 | 내추럴 | 인더스트리얼 | 러블리 중 하나)"
 }
 
 ${base64Image

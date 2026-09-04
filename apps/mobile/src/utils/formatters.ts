@@ -263,6 +263,7 @@ export function getItemCategory(item: SavedItem): string {
   if (category === 'recipe') return 'recipe';
   if (category === 'workout') return 'workout';
   if (category === 'shopping') return 'shopping';
+  if (category === 'interior') return 'interior';
 
   const title = item.title.toLowerCase();
   // 본문은 contentText로 분리됐습니다. item.content에는 구조화 데이터만 남아 있어
@@ -300,6 +301,7 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
   recipe: ['레시피', '요리', '조리법'],
   workout: ['운동', '루틴', '홈트', '헬스'],
   shopping: ['공구', '공동구매', '꿀템', '할인', '특가', '최저가'],
+  interior: ['인테리어', '방꾸미기', '집꾸미기', '가구배치', '홈스타일링'],
 };
 
 function countOccurrences(text: string, keyword: string): number {
@@ -338,6 +340,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   travel: '여행 ✈️',
   parenting: '육아 🍼',
   shopping: '공구·꿀템 🛍️',
+  interior: '인테리어 🛋️',
   other: '미분류 🏷️',
 };
 

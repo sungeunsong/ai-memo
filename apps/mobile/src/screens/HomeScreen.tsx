@@ -41,6 +41,15 @@ import {
   matchesCategoryTab,
 } from '@/features/facets/query';
 import { parseQueryToFacets } from '@/features/facets/parseQuery';
+import {
+  SavedFilter,
+  addSavedFilter,
+  isFilterSaveable,
+  loadSavedFilters,
+  removeSavedFilter,
+} from '@/features/facets/savedFilters';
+import { parseFacetKey } from '@/features/facets/extract';
+import { facetLabel } from '@/features/facets/labels';
 import { CaptureModal, CaptureFloatingButton } from '@/components/CaptureModal';
 import { DetailScreen, DetailContent } from '@/components/DetailScreen';
 import {
@@ -147,6 +156,42 @@ export function HomeScreen() {
       setToastMessage('이미지를 불러오지 못했습니다.');
     }
   }, [saveImage]);
+
+  // ==========================================
+  // 스마트 폴더 (조합 조건 저장)
+  // ==========================================
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
+
+  useEffect(() => {
+    void (async () => setSavedFilters(await loadSavedFilters()))();
+  }, []);
+
+  const handleSaveFilter = useCallback(
+    async (name: string) => {
+      const next = await addSavedFilter(savedFilters, {
+        name,
+        category: activeCategory,
+        facetKeys: selectedFacets,
+        searchQuery,
+      });
+      setSavedFilters(next);
+      setToastMessage(`'${name}' 조건을 저장했습니다`);
+    },
+    [savedFilters, activeCategory, selectedFacets, searchQuery]
+  );
+
+  const handleApplyFilter = useCallback((filter: SavedFilter) => {
+    setActiveCategory(filter.category);
+    setSelectedFacets(filter.facetKeys);
+    setSearchQuery(filter.searchQuery);
+  }, []);
+
+  const handleRemoveFilter = useCallback(
+    async (id: string) => {
+      setSavedFilters(await removeSavedFilter(savedFilters, id));
+    },
+    [savedFilters]
+  );
 
   const handleToggleFacet = useCallback((key: string) => {
     setSelectedFacets((prev) =>
@@ -615,6 +660,15 @@ export function HomeScreen() {
               onToggleFacet={handleToggleFacet}
               onClearFacets={handleClearFacets}
               facetOptions={facetOptions}
+              savedFilters={savedFilters}
+              onApplyFilter={handleApplyFilter}
+              onRemoveFilter={handleRemoveFilter}
+              onSaveFilter={handleSaveFilter}
+              canSaveFilter={isFilterSaveable(activeCategory, selectedFacets, searchQuery)}
+              describeFacetKey={(key) => {
+                const parsed = parseFacetKey(key);
+                return parsed ? facetLabel(parsed.kind, parsed.value) : key;
+              }}
             />
           </View>
 

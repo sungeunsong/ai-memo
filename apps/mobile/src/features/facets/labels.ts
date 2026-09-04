@@ -26,6 +26,12 @@ const VALUE_EMOJIS: Record<string, string> = {
   '2~4세': '🧒', '5세 이상': '🧑',
   '이유식': '🥣', '수면': '😴', '발달': '📈', '놀이': '🧩',
   '마사지': '💆', '건강': '🩺', '교육': '📖', '외출': '🚶', '용품': '🧸',
+  // 인테리어
+  // '주방'은 쇼핑 품목에도 있어 위에서 이미 정의했습니다.
+  '거실': '🛋️', '침실': '🛏️', '욕실': '🛁', '현관': '🚪',
+  '서재': '📚', '아이방': '🧸', '베란다': '🪴',
+  '북유럽': '🇸🇪', '미니멀': '⬜', '모던': '🖤', '빈티지': '🕰️',
+  '내추럴': '🌿', '인더스트리얼': '🏭', '러블리': '🎀',
 };
 
 const KIND_FALLBACK_EMOJIS: Record<FacetKind, string> = {
@@ -40,6 +46,8 @@ const KIND_FALLBACK_EMOJIS: Record<FacetKind, string> = {
   purchase: '🛍️',
   babyAge: '👶',
   topic: '📚',
+  room: '🚪',
+  style: '🎨',
 };
 
 export const KIND_LABELS: Record<FacetKind, string> = {
@@ -54,6 +62,8 @@ export const KIND_LABELS: Record<FacetKind, string> = {
   purchase: '구매형태',
   babyAge: '월령',
   topic: '주제',
+  room: '공간',
+  style: '스타일',
 };
 
 export function facetEmoji(kind: FacetKind, value: string): string {

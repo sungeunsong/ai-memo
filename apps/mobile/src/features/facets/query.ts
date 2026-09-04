@@ -192,6 +192,7 @@ const CATEGORY_FACET_KINDS: Record<string, FacetKind[]> = {
   travel: ['region', 'amenity', 'theme'],
   parenting: ['babyAge', 'topic'],
   shopping: ['product', 'seller', 'purchase'],
+  interior: ['room', 'style'],
 };
 
 export const TAB_CATEGORIES = Object.keys(CATEGORY_FACET_KINDS);
