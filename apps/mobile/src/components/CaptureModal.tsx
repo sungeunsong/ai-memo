@@ -17,6 +17,7 @@ type Props = {
   onSave: (input: string) => Promise<{ ok: boolean; message?: string }>;
   isSaving: boolean;
   initialValue?: string;
+  onPickImage: () => void;
 };
 
 export function CaptureModal({
@@ -25,6 +26,7 @@ export function CaptureModal({
   onSave,
   isSaving,
   initialValue = '',
+  onPickImage,
 }: Props) {
   const [input, setInput] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +70,20 @@ export function CaptureModal({
             style={styles.input}
             value={input}
           />
+
+          {/* 스크린샷은 찍는 순간 공유하는 게 가장 빠르지만,
+              갤러리에 이미 쌓아둔 것을 나중에 넣는 경로도 필요합니다. */}
+          <Pressable
+            onPress={onPickImage}
+            disabled={isSaving}
+            style={({ pressed }) => [
+              styles.imagePickBtn,
+              isSaving && { opacity: 0.5 },
+              { transform: [{ scale: pressed ? 0.97 : 1 }] },
+            ]}
+          >
+            <Text style={styles.imagePickBtnText}>🖼️  이미지에서 가져오기</Text>
+          </Pressable>
 
           {error ? (
             <Text style={styles.errorText}>{error}</Text>
@@ -120,6 +136,20 @@ export function CaptureFloatingButton({ onPress }: { onPress: () => void }) {
 }
 
 const styles = StyleSheet.create({
+  imagePickBtn: {
+    marginTop: spacing[3],
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingVertical: spacing[3],
+    alignItems: 'center',
+  },
+  imagePickBtnText: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
   backdrop: {
     position: 'absolute',
     top: 0,

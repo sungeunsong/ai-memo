@@ -55,12 +55,45 @@ export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): SaveU
     digest: null,
     aiError: null,
     userCategory: null,
+    imageUri: null,
     thumbnailUrl: null,
     aiStatus: 'pending',
     syncStatus: 'local_only',
     userNote: null,
     extractedUrls,
     sourceType,
+    savedFrom,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+/**
+ * 이미지로 저장할 때의 초기 아이템.
+ * AI가 읽기 전이라 제목과 요약은 자리만 잡아둡니다.
+ */
+export function buildFallbackImageItem(imageUri: string, savedFrom = 'manual'): SaveUrlPayload {
+  const timestamp = new Date().toISOString();
+
+  return {
+    id: createItemId(),
+    type: 'image',
+    sourceUrl: null,
+    rawInput: '',
+    title: `이미지 메모 (${formatDate(timestamp)})`,
+    summary: '이미지에서 내용을 읽는 중입니다.',
+    content: '',
+    contentText: null,
+    digest: null,
+    aiError: null,
+    userCategory: null,
+    imageUri,
+    thumbnailUrl: imageUri,
+    aiStatus: 'pending',
+    syncStatus: 'local_only',
+    userNote: null,
+    extractedUrls: [],
+    sourceType: 'image',
     savedFrom,
     createdAt: timestamp,
     updatedAt: timestamp,

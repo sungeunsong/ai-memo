@@ -382,7 +382,7 @@ export function DetailContent({
       ) : null}
 
       {/* 6. 썸네일 */}
-      {selectedItem.type === 'url' && selectedItem.thumbnailUrl ? (
+      {(selectedItem.type === 'url' || selectedItem.type === 'image') && selectedItem.thumbnailUrl ? (
         <View style={styles.thumbnailPanel}>
           <Text style={styles.detailLabel}>썸네일</Text>
           <View style={styles.thumbnailPreview}>

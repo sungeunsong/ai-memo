@@ -161,6 +161,55 @@ export async function fetchTextMetadataPatch(rawText: string): Promise<ItemMetad
   };
 }
 
+/**
+ * 스크린샷 등 이미지에서 정보를 추출합니다.
+ *
+ * OCR로 글자만 뽑아 다시 파싱하는 2단계 대신, 이미지를 그대로 넘겨
+ * 구조화 결과까지 한 번에 받습니다. 화면 배치까지 모델이 보기 때문에
+ * 텍스트만 넘길 때보다 결과가 낫습니다.
+ *
+ * 이미지 토큰은 크기와 무관하게 258로 고정이라, 링크 한 건을 처리할 때와
+ * 비용이 다르지 않습니다.
+ */
+export async function fetchImageMetadataPatch(base64Image: string): Promise<ItemMetadataPatch> {
+  const updatedAt = new Date().toISOString();
+
+  if (!base64Image) {
+    return { aiStatus: 'failed', aiError: '이미지를 읽지 못했습니다.', updatedAt };
+  }
+
+  const result = await callGeminiApi('', '', base64Image);
+
+  if (!result.ok) {
+    return { aiStatus: 'failed', aiError: result.reason, updatedAt };
+  }
+
+  const aiResponse = result.data;
+  const {
+    title: aiTitle,
+    summary: aiSummary,
+    detailedAnalysis,
+    ...structuredFields
+  } = aiResponse;
+
+  const structuredContent = JSON.stringify({
+    category: aiResponse.category || 'web',
+    ...structuredFields,
+  });
+
+  return {
+    ...(typeof aiTitle === 'string' && aiTitle.trim() ? { title: aiTitle.trim() } : null),
+    ...(typeof aiSummary === 'string' && aiSummary.trim() ? { summary: aiSummary.trim() } : null),
+    content: structuredContent,
+    // 이미지에서 읽어낸 글자를 본문으로 보관합니다. 검색과 재추출의 근거가 됩니다.
+    contentText: typeof aiResponse.extractedText === 'string' ? aiResponse.extractedText : null,
+    digest: typeof detailedAnalysis === 'string' && detailedAnalysis.trim() ? detailedAnalysis : null,
+    aiStatus: 'completed',
+    aiError: null,
+    updatedAt,
+  };
+}
+
 function normalizeSourceUrl(input: string) {
   const url = new URL(input);
 
@@ -703,11 +752,16 @@ const RESPONSE_SCHEMA = {
     price: { type: 'string' },
     babyAgeMonths: { type: 'string' },
     parentingTopic: { type: 'string' },
+    extractedText: { type: 'string' },
   },
   required: ['title', 'summary', 'detailedAnalysis', 'category'],
 };
 
-async function callGeminiApi(title: string, rawContent: string): Promise<GeminiResult> {
+async function callGeminiApi(
+  title: string,
+  rawContent: string,
+  base64Image?: string
+): Promise<GeminiResult> {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) {
     console.log('[GeminiAPI] EXPO_PUBLIC_GEMINI_API_KEY 환경변수가 설정되지 않아 로컬 요약기로 폴백합니다.');
@@ -743,10 +797,14 @@ async function callGeminiApi(title: string, rawContent: string): Promise<GeminiR
   "parentingTopic": "육아 주제 (이유식 | 수면 | 발달 | 놀이 | 마사지 | 건강 | 교육 | 외출 | 용품 중 하나)"
 }
 
-분석할 원문 지식:
+${base64Image
+  ? `분석 대상: 첨부된 이미지 (스크린샷일 수 있음)
+이미지에 보이는 글자를 빠짐없이 읽고, 그 내용을 기준으로 위 항목들을 채워라.
+읽어낸 글자 원문은 "extractedText" 필드에 그대로 담아라.`
+  : `분석할 원문 지식:
 제목: ${title}
 본문:
-${rawContent.slice(0, 8000)}
+${rawContent.slice(0, 8000)}`}
 `;
 
   const maxAttempts = 3;
@@ -762,9 +820,12 @@ ${rawContent.slice(0, 8000)}
         },
         body: JSON.stringify({
           contents: [{
-            parts: [{
-              text: prompt
-            }]
+            parts: base64Image
+              ? [
+                  { text: prompt },
+                  { inline_data: { mime_type: 'image/jpeg', data: base64Image } },
+                ]
+              : [{ text: prompt }],
           }],
           generationConfig: {
             responseMimeType: 'application/json',

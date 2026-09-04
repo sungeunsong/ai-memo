@@ -36,7 +36,8 @@
         {
           "disableIOS": true,
           "androidIntentFilters": [
-            "text/*"
+            "text/*",
+            "image/*"
           ]
         }
       ],

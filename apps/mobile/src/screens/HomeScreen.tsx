@@ -22,6 +22,8 @@ import {
   getSharedInputValue,
   hasUnsupportedSharedFiles,
 } from '@/features/capture/shareIntent';
+import { pickSharedImagePath } from '@/features/capture/imageCapture';
+import * as ImagePicker from 'expo-image-picker';
 import { useAppStore } from '@/store';
 import { getSettingAsync, setSettingAsync } from '@/db';
 import { palette } from '@/theme/palette';
@@ -67,6 +69,7 @@ export function HomeScreen() {
   const syncWorkerMessage = useAppStore((s) => s.syncWorkerMessage);
   const isSyncWorkerRunning = useAppStore((s) => s.isSyncWorkerRunning);
   const saveUrl = useAppStore((s) => s.saveUrl);
+  const saveImage = useAppStore((s) => s.saveImage);
   const selectItem = useAppStore((s) => s.selectItem);
   const clearError = useAppStore((s) => s.clearError);
   const deleteItem = useAppStore((s) => s.deleteItem);
@@ -116,6 +119,34 @@ export function HomeScreen() {
     // 카테고리가 바뀌면 이전 조건은 대부분 의미가 없어집니다.
     setSelectedFacets([]);
   }, []);
+
+  /** 갤러리에서 이미지를 골라 저장합니다. */
+  const handlePickImage = useCallback(async () => {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setToastMessage('사진 접근 권한이 필요합니다.');
+        return;
+      }
+
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 1,
+      });
+      if (picked.canceled || !picked.assets?.[0]?.uri) return;
+
+      setIsCaptureVisible(false);
+      const result = await saveImage(picked.assets[0].uri, 'gallery');
+      if (result.ok) {
+        setToastMessage('이미지를 저장했습니다. 내용을 읽는 중입니다.');
+        const nextId = useAppStore.getState().selectedItemId;
+        if (nextId) setHighlightedItemId(nextId);
+      }
+    } catch (error) {
+      console.warn('[Home] 이미지 선택 실패:', error);
+      setToastMessage('이미지를 불러오지 못했습니다.');
+    }
+  }, [saveImage]);
 
   const handleToggleFacet = useCallback((key: string) => {
     setSelectedFacets((prev) =>
@@ -284,10 +315,29 @@ export function HomeScreen() {
     const sharedInput = getSharedInputValue(shareIntent);
     const currentSignature = buildShareIntentSignature(shareIntent);
 
+    // 이미지 공유 (스크린샷 등)
+    const sharedImagePath = pickSharedImagePath(shareIntent.files as any);
+    if (!sharedInput && sharedImagePath) {
+      if (processedShareSignatureRef.current === currentSignature) return;
+      processedShareSignatureRef.current = currentSignature;
+      clearError();
+
+      void (async () => {
+        const result = await saveImage(sharedImagePath, 'share');
+        if (result.ok) {
+          const nextId = useAppStore.getState().selectedItemId;
+          setToastMessage('이미지를 저장했습니다. 내용을 읽는 중입니다.');
+          if (nextId) setHighlightedItemId(nextId);
+        }
+        resetShareIntent();
+      })();
+      return;
+    }
+
     if (hasUnsupportedSharedFiles(shareIntent)) {
       if (processedShareSignatureRef.current === currentSignature) return;
       processedShareSignatureRef.current = currentSignature;
-      setToastMessage('파일 공유는 지원되지 않으며 링크 공유만 가능합니다.');
+      setToastMessage('이 형식은 아직 지원하지 않습니다. 링크·텍스트·이미지를 공유해 주세요.');
       resetShareIntent();
       return;
     }
@@ -652,6 +702,7 @@ export function HomeScreen() {
 
       {/* 캡처 모달 */}
       <CaptureModal
+        onPickImage={handlePickImage}
         visible={isCaptureVisible}
         onClose={() => setIsCaptureVisible(false)}
         onSave={handleSaveFromCapture}

@@ -1,4 +1,4 @@
-export type ItemType = 'url' | 'text';
+export type ItemType = 'url' | 'text' | 'image';
 
 export type AIStatus = 'pending' | 'completed' | 'failed';
 
@@ -34,6 +34,8 @@ export type SavedItem = {
    * 재분석을 돌려도 덮어쓰지 않도록 AI 결과와 별도 필드에 둡니다.
    */
   userCategory: string | null;
+  /** 앱 폴더에 보관한 이미지 경로. 스크린샷으로 저장한 아이템의 원본입니다. */
+  imageUri: string | null;
   syncStatus: SyncStatus;
   userNote: string | null;
   extractedUrls: string[];
@@ -69,6 +71,8 @@ export type SaveUrlPayload = {
    * 재분석을 돌려도 덮어쓰지 않도록 AI 결과와 별도 필드에 둡니다.
    */
   userCategory: string | null;
+  /** 앱 폴더에 보관한 이미지 경로. 스크린샷으로 저장한 아이템의 원본입니다. */
+  imageUri: string | null;
   syncStatus: SyncStatus;
   userNote: string | null;
   extractedUrls: string[];
@@ -87,6 +91,7 @@ export type ItemMetadataPatch = {
   digest?: string | null;
   aiError?: string | null;
   userCategory?: string | null;
+  imageUri?: string | null;
   thumbnailUrl?: string | null;
   aiStatus?: AIStatus;
   userNote?: string | null;

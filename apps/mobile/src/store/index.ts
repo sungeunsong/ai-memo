@@ -10,8 +10,17 @@ import {
   updateItemMetadataAsync,
   deleteItemAsync,
 } from '@/db';
-import { fetchMetadataPatch, fetchTextMetadataPatch } from '@/features/metadata/service';
-import { buildFallbackItem, normalizeUrl } from '@/features/items/fallback';
+import {
+  fetchMetadataPatch,
+  fetchTextMetadataPatch,
+  fetchImageMetadataPatch,
+} from '@/features/metadata/service';
+import { buildFallbackItem, buildFallbackImageItem, normalizeUrl } from '@/features/items/fallback';
+import {
+  persistImage,
+  readImageForAnalysis,
+  deletePersistedImage,
+} from '@/features/capture/imageCapture';
 import {
   ItemMetadataPatch,
   SavedItem,
@@ -40,6 +49,7 @@ type AppStore = {
   isSyncWorkerRunning: boolean;
   initialize: () => Promise<void>;
   saveUrl: (input: string, savedFrom?: string) => Promise<SaveUrlResult>;
+  saveImage: (sourceUri: string, savedFrom?: string) => Promise<SaveUrlResult>;
   selectItem: (itemId: string) => void;
   updateUserNote: (itemId: string, userNote: string) => Promise<void>;
   retryEnrichMetadata: (itemId: string) => Promise<void>;
@@ -169,6 +179,63 @@ export const useAppStore = create<AppStore>((set, get) => ({
       };
     }
   },
+  /**
+   * 스크린샷 등 이미지를 저장합니다.
+   *
+   * 공유로 넘어온 URI는 임시 경로라 앱 폴더로 옮겨두지 않으면 나중에 못 엽니다.
+   * 그래서 저장 시점에 리사이즈해서 복사한 뒤, 그 경로를 원본으로 삼습니다.
+   */
+  async saveImage(sourceUri, savedFrom = 'manual') {
+    if (!get().isReady) {
+      await get().initialize();
+    }
+
+    set({ isSaving: true, errorMessage: null });
+
+    try {
+      if (!get().isReady) {
+        throw new Error('로컬 저장소를 준비하지 못했습니다. 다시 시도해 주세요.');
+      }
+
+      const draft = buildFallbackImageItem('', savedFrom);
+      const storedUri = await persistImage(sourceUri, draft.id);
+
+      const fallbackItem = {
+        ...draft,
+        imageUri: storedUri,
+        thumbnailUrl: storedUri,
+        syncStatus: 'queued' as const,
+      };
+
+      const syncJob = buildItemSyncJob(fallbackItem);
+      await saveUrlItemWithSyncJobAsync(fallbackItem, syncJob);
+
+      set((state) => ({
+        isSaving: false,
+        items: [fallbackItem, ...state.items],
+        selectedItemId: fallbackItem.id,
+        syncQueuePendingCount: state.syncQueuePendingCount + 1,
+        syncWorkerMessage: null,
+      }));
+
+      void enrichSavedItemMetadata(
+        fallbackItem.id,
+        async () => {
+          const base64 = await readImageForAnalysis(storedUri);
+          return fetchImageMetadataPatch(base64 ?? '');
+        },
+        set,
+        get
+      );
+      void runSyncWorker(set, get);
+
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '이미지 저장에 실패했습니다.';
+      set({ isSaving: false, errorMessage: message });
+      return { ok: false, message };
+    }
+  },
   selectItem(itemId) {
     set({
       selectedItemId: itemId,
@@ -275,7 +342,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const extractedUrls = item.rawInput.match(urlRegex);
       const activeUrl = item.sourceUrl || (extractedUrls && extractedUrls[0]) || null;
 
-      if (item.type === 'url' || activeUrl) {
+      if (item.type === 'image' && item.imageUri) {
+        const imageUri = item.imageUri;
+        await enrichSavedItemMetadata(
+          itemId,
+          async () => {
+            const base64 = await readImageForAnalysis(imageUri);
+            return fetchImageMetadataPatch(base64 ?? '');
+          },
+          set,
+          get
+        );
+      } else if (item.type === 'url' || activeUrl) {
         // 복원된 URL을 DB 및 Zustand 스토어에 바인딩
         if (activeUrl && !item.sourceUrl) {
           const urlPatch: ItemMetadataPatch = {
@@ -329,6 +407,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   async deleteItem(itemId) {
     if (!get().isReady) return;
     try {
+      // 아이템만 지우면 앱 폴더에 이미지가 남아 용량만 차지합니다.
+      const target = get().items.find((item) => item.id === itemId);
+      if (target?.imageUri) {
+        await deletePersistedImage(target.imageUri);
+      }
+
       await deleteItemAsync(itemId);
       const nextItems = get().items.filter((item) => item.id !== itemId);
       set({
@@ -384,6 +468,7 @@ async function enrichSavedItemMetadata(
         digest: itemToQueue.digest,
         aiError: itemToQueue.aiError,
         userCategory: itemToQueue.userCategory,
+        imageUri: itemToQueue.imageUri,
         thumbnailUrl: itemToQueue.thumbnailUrl,
         aiStatus: itemToQueue.aiStatus,
         syncStatus: 'queued',
@@ -441,6 +526,7 @@ function applyMetadataPatch(item: SavedItem, itemId: string, patch: ItemMetadata
     // 실패 이유는 성공 시 null로 지워져야 하므로 undefined 여부로 판단합니다.
     ...(patch.aiError !== undefined ? { aiError: patch.aiError } : null),
     ...(patch.userCategory !== undefined ? { userCategory: patch.userCategory } : null),
+    ...(patch.imageUri ? { imageUri: patch.imageUri } : null),
     ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
     ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
     ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),
@@ -468,6 +554,7 @@ function buildItemSyncJob(item: SavedItem) {
       digest: item.digest,
       aiError: item.aiError,
       userCategory: item.userCategory,
+      imageUri: item.imageUri,
       thumbnailUrl: item.thumbnailUrl,
       aiStatus: item.aiStatus,
       syncStatus: item.syncStatus,
