@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "문갑",
-    "slug": "mungap",
+    "name": "시렁",
+    "slug": "sireong",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "scheme": "mungap",
+    "scheme": "sireong",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -15,7 +15,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.lab5devel.mungap"
+      "bundleIdentifier": "com.lab5devel.sireong"
     },
     "android": {
       "adaptiveIcon": {
@@ -24,7 +24,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.lab5devel.mungap"
+      "package": "com.lab5devel.sireong"
     },
     "web": {
       "favicon": "./assets/favicon.png"

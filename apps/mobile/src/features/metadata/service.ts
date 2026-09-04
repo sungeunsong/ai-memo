@@ -294,8 +294,10 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
     if (response.ok) {
       const json = await response.json();
       if (json && json.data) {
-        let title = json.data.title || `${getHostname(sourceUrl)} 저장 링크`;
-        const rawContent = json.data.content || '';
+        // Jina가 돌려주는 값에도 엔티티가 섞여 옵니다. 저장 전에 풀어둡니다.
+        let title = sanitizeText(json.data.title || '') || `${getHostname(sourceUrl)} 저장 링크`;
+        // 본문은 sanitizeText를 쓰지 않습니다. 공백을 뭉개면 마크다운 구조가 사라집니다.
+        const rawContent = decodeHtmlEntities(json.data.content || '');
         
         // Notion 등 기본 타이틀이 무의미한 고정 문구일 경우 본문 첫 줄 또는 핵심 요소를 추출해 제목으로 승격시킵니다.
         const isGenericNotionTitle = title.includes('Where teams and agents work together') || title.toLowerCase() === 'notion';
@@ -515,13 +517,34 @@ function sanitizeText(value: string) {
     .trim();
 }
 
+/**
+ * HTML 엔티티를 실제 문자로 되돌립니다.
+ *
+ * 이름 있는 엔티티만 처리하면 한글이 통째로 깨집니다.
+ * 인스타그램 릴스 제목은 한글이 &#xc758; 같은 16진수 문자 참조로 넘어오는데,
+ * 그걸 그대로 저장하면 화면에도 검색 색인에도 기호가 그대로 남습니다.
+ * 숫자 참조(10진수/16진수)를 함께 처리해야 하는 이유입니다.
+ */
 function decodeHtmlEntities(value: string) {
   return value
-    .replace(/&amp;/g, '&')
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => safeFromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => safeFromCodePoint(parseInt(dec, 10)))
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
     .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    // &amp;는 마지막에 풀어야 &amp;lt; 같은 이중 인코딩이 잘못 해석되지 않습니다.
+    .replace(/&amp;/g, '&');
+}
+
+/** 잘못된 코드포인트가 들어와도 원문을 잃지 않도록 실패 시 빈 문자열 대신 그대로 둡니다. */
+function safeFromCodePoint(code: number): string {
+  try {
+    return String.fromCodePoint(code);
+  } catch {
+    return '';
+  }
 }
 
 function pickFirstMeaningful(values: string[]) {
