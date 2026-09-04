@@ -127,6 +127,8 @@ export function DetailContent({
   const isSaving = useAppStore((state) => state.isSaving);
   const setItemCategory = useAppStore((state) => state.setItemCategory);
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
+  const [isDeadlineEditorVisible, setIsDeadlineEditorVisible] = useState(false);
+  const setItemDeadline = useAppStore((state) => state.setItemDeadline);
 
   useEffect(() => {
     setUserNoteInput(selectedItem.userNote ?? '');
@@ -393,7 +395,14 @@ export function DetailContent({
         (structured.category === 'shopping' ||
           structured.purchaseType ||
           structured.seller ||
-          structured.deadline) && <ShoppingCard structured={structured} />}
+          structured.deadline ||
+          selectedItem.userDeadline) && (
+        <ShoppingCard
+          structured={structured}
+          userDeadline={selectedItem.userDeadline}
+          onEditDeadline={() => setIsDeadlineEditorVisible(true)}
+        />
+      )}
 
       {structured &&
         (structured.category === 'travel' ||
@@ -487,6 +496,18 @@ export function DetailContent({
           <Text style={styles.deleteBtnText}>이 항목 삭제</Text>
         </Pressable>
       ) : null}
+
+      <DeadlineEditor
+        visible={isDeadlineEditorVisible}
+        current={selectedItem.userDeadline || structured?.deadline || ''}
+        isManual={Boolean(selectedItem.userDeadline)}
+        onClose={() => setIsDeadlineEditorVisible(false)}
+        onSubmit={(value) => {
+          setIsDeadlineEditorVisible(false);
+          void setItemDeadline(selectedItem.id, value);
+          setToastMessage(value ? '마감일을 바꿨습니다' : 'AI가 읽은 값으로 되돌렸습니다');
+        }}
+      />
 
       <CategoryPicker
         visible={isCategoryPickerVisible}
@@ -785,6 +806,89 @@ function MetaBlock({ label, value }: { label: string; value: string }) {
 // 스타일
 // ==========================================
 /**
+ * 마감일 직접 입력 시트.
+ *
+ * 마감일은 AI가 캡션에서 추론한 값이라 틀릴 수 있는데, 화면에서는 '마감됨'이라는
+ * 강한 경고를 띄웁니다. 잘못된 경고로 멀쩡한 공구를 놓치지 않으려면
+ * 사용자가 고칠 수 있어야 합니다.
+ *
+ * 날짜 선택기는 네이티브 모듈이라 앱을 다시 빌드해야 해서 직접 입력으로 둡니다.
+ */
+function DeadlineEditor({
+  visible,
+  current,
+  isManual,
+  onClose,
+  onSubmit,
+}: {
+  visible: boolean;
+  current: string;
+  isManual: boolean;
+  onClose: () => void;
+  onSubmit: (value: string | null) => void;
+}) {
+  const styles = useThemedStyles(createStyles);
+  const palette = useTheme().palette;
+  const [input, setInput] = useState(current);
+  const [error, setError] = useState<string | null>(null);
+
+  // 시트를 열 때마다 현재 값에서 시작합니다.
+  useEffect(() => {
+    if (visible) {
+      setInput(current);
+      setError(null);
+    }
+  }, [visible, current]);
+
+  function submit() {
+    const value = input.trim();
+    if (!value) {
+      onSubmit(null);
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(new Date(value).getTime())) {
+      setError('YYYY-MM-DD 형식으로 입력해 주세요. (예: 2026-08-31)');
+      return;
+    }
+    onSubmit(value);
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.pickerBackdrop} onPress={onClose}>
+        <Pressable style={styles.pickerSheet} onPress={(e) => e.stopPropagation()}>
+          <Text style={styles.pickerTitle}>마감일 고치기</Text>
+
+          <TextInput
+            autoFocus
+            value={input}
+            onChangeText={setInput}
+            onSubmitEditing={submit}
+            placeholder="YYYY-MM-DD"
+            placeholderTextColor={palette.textMuted}
+            style={styles.deadlineInput}
+            keyboardType="numbers-and-punctuation"
+            returnKeyType="done"
+          />
+
+          {error ? <Text style={styles.deadlineError}>{error}</Text> : null}
+
+          <Pressable onPress={submit} style={styles.deadlineSubmit}>
+            <Text style={styles.deadlineSubmitText}>저장</Text>
+          </Pressable>
+
+          <Pressable onPress={() => onSubmit(null)} style={styles.pickerReset}>
+            <Text style={styles.pickerResetText}>
+              {isManual ? 'AI가 읽은 값으로 되돌리기' : '마감일 지우기'}
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+/**
  * 카테고리 직접 지정 시트.
  *
  * AI 분류는 자주 틀립니다. 키워드 폴백은 본문에 '육아'가 한 번만 나와도
@@ -850,9 +954,19 @@ function CategoryPicker({
  * 공구는 마감이 지나면 저장해둔 의미가 없어집니다.
  * 그래서 남은 기간을 눈에 띄게 보여주고, 지난 건 분명히 표시합니다.
  */
-function ShoppingCard({ structured }: { structured: any }) {
+function ShoppingCard({
+  structured,
+  userDeadline,
+  onEditDeadline,
+}: {
+  structured: any;
+  userDeadline: string | null;
+  onEditDeadline: () => void;
+}) {
   const styles = useThemedStyles(createStyles);
-  const deadline = typeof structured.deadline === 'string' ? structured.deadline.trim() : '';
+  // 사용자가 고친 값이 있으면 그것이 우선입니다.
+  const aiDeadline = typeof structured.deadline === 'string' ? structured.deadline.trim() : '';
+  const deadline = (userDeadline ?? aiDeadline).trim();
   let deadlineNote: { text: string; expired: boolean } | null = null;
 
   if (deadline) {
@@ -897,14 +1011,22 @@ function ShoppingCard({ structured }: { structured: any }) {
         </View>
       </View>
 
-      {deadlineNote ? (
-        <View style={[styles.deadlineBox, deadlineNote.expired && styles.deadlineBoxExpired]}>
-          <Text style={[styles.deadlineLabel, deadlineNote.expired && styles.deadlineLabelExpired]}>
-            {deadlineNote.expired ? '⛔ 마감됨' : '⏰ 마감'}
-          </Text>
-          <Text style={styles.deadlineText}>{deadlineNote.text}</Text>
-        </View>
-      ) : null}
+      <Pressable
+        onPress={onEditDeadline}
+        style={({ pressed }) => [
+          styles.deadlineBox,
+          deadlineNote?.expired && styles.deadlineBoxExpired,
+          pressed && { opacity: 0.7 },
+        ]}
+      >
+        <Text style={[styles.deadlineLabel, deadlineNote?.expired && styles.deadlineLabelExpired]}>
+          {deadlineNote ? (deadlineNote.expired ? '⛔ 마감됨' : '⏰ 마감') : '⏰ 마감일'}
+          {userDeadline ? ' · 직접 지정' : ''}
+        </Text>
+        <Text style={styles.deadlineText}>
+          {deadlineNote ? deadlineNote.text : '눌러서 입력'}
+        </Text>
+      </Pressable>
     </View>
   );
 }
@@ -919,6 +1041,35 @@ const createStyles = (palette: Palette) =>
     borderColor: 'rgba(245, 158, 11, 0.35)',
     padding: spacing[3],
     gap: 3,
+  },
+  deadlineInput: {
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 10,
+    color: palette.textPrimary,
+    fontSize: 14,
+    marginTop: spacing[2],
+  },
+  deadlineError: {
+    color: palette.dangerText,
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: spacing[2],
+  },
+  deadlineSubmit: {
+    backgroundColor: palette.accent,
+    borderRadius: 12,
+    paddingVertical: spacing[3],
+    alignItems: 'center',
+    marginTop: spacing[3],
+  },
+  deadlineSubmitText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
   },
   deadlineBoxExpired: {
     backgroundColor: palette.dangerSoft,

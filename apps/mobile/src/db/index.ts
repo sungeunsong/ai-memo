@@ -56,7 +56,8 @@ export async function initializeDatabase() {
     'ALTER TABLE items ADD COLUMN digest TEXT;',
     'ALTER TABLE items ADD COLUMN ai_error TEXT;',
     'ALTER TABLE items ADD COLUMN user_category TEXT;',
-    'ALTER TABLE items ADD COLUMN image_uri TEXT;'
+    'ALTER TABLE items ADD COLUMN image_uri TEXT;',
+    'ALTER TABLE items ADD COLUMN user_deadline TEXT;'
   ];
 
   for (const query of migrations) {
@@ -410,6 +411,7 @@ function updateWebItem(itemId: string, patch: ItemMetadataPatch) {
           ...(patch.aiError !== undefined ? { aiError: patch.aiError } : null),
           ...(patch.userCategory !== undefined ? { userCategory: patch.userCategory } : null),
           ...(patch.imageUri ? { imageUri: patch.imageUri } : null),
+          ...(patch.userDeadline !== undefined ? { userDeadline: patch.userDeadline } : null),
           ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
           ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
           ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),

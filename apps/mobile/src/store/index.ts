@@ -54,6 +54,7 @@ type AppStore = {
   updateUserNote: (itemId: string, userNote: string) => Promise<void>;
   retryEnrichMetadata: (itemId: string) => Promise<void>;
   setItemCategory: (itemId: string, category: string | null) => Promise<void>;
+  setItemDeadline: (itemId: string, deadline: string | null) => Promise<void>;
   deleteItem: (itemId: string) => Promise<void>;
   clearError: () => void;
 };
@@ -310,6 +311,27 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     void runSyncWorker(set, get);
   },
+  /**
+   * 마감일을 직접 고칩니다. null이면 지정을 해제하고 AI 값을 따릅니다.
+   */
+  async setItemDeadline(itemId, deadline) {
+    if (!get().isReady) return;
+
+    const patch: ItemMetadataPatch = {
+      userDeadline: deadline,
+      updatedAt: new Date().toISOString(),
+    };
+    await updateItemMetadataAsync(itemId, patch);
+
+    const nextItems = get().items.map((item) =>
+      item.id === itemId ? { ...item, userDeadline: deadline, updatedAt: patch.updatedAt } : item
+    );
+    set({ items: nextItems });
+
+    const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
+    if (itemToQueue) await queueUpsertItemSyncAsync(itemToQueue);
+    void runSyncWorker(set, get);
+  },
   async retryEnrichMetadata(itemId) {
     if (!get().isReady) {
       return;
@@ -476,6 +498,7 @@ async function enrichSavedItemMetadata(
         aiError: itemToQueue.aiError,
         userCategory: itemToQueue.userCategory,
         imageUri: itemToQueue.imageUri,
+        userDeadline: itemToQueue.userDeadline,
         thumbnailUrl: itemToQueue.thumbnailUrl,
         aiStatus: itemToQueue.aiStatus,
         syncStatus: 'queued',
@@ -534,6 +557,7 @@ function applyMetadataPatch(item: SavedItem, itemId: string, patch: ItemMetadata
     ...(patch.aiError !== undefined ? { aiError: patch.aiError } : null),
     ...(patch.userCategory !== undefined ? { userCategory: patch.userCategory } : null),
     ...(patch.imageUri ? { imageUri: patch.imageUri } : null),
+    ...(patch.userDeadline !== undefined ? { userDeadline: patch.userDeadline } : null),
     ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
     ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
     ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),
@@ -562,6 +586,7 @@ function buildItemSyncJob(item: SavedItem) {
       aiError: item.aiError,
       userCategory: item.userCategory,
       imageUri: item.imageUri,
+      userDeadline: item.userDeadline,
       thumbnailUrl: item.thumbnailUrl,
       aiStatus: item.aiStatus,
       syncStatus: item.syncStatus,

@@ -15,6 +15,7 @@ type ItemRow = {
   ai_error: string | null;
   user_category: string | null;
   image_uri: string | null;
+  user_deadline: string | null;
   thumbnail_url: string | null;
   ai_status: 'pending' | 'completed' | 'failed';
   sync_status: 'local_only' | 'queued' | 'synced' | 'failed';
@@ -29,10 +30,10 @@ type ItemRow = {
 export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayload) {
   await db.runAsync(
     `INSERT INTO items (
-      id, type, source_url, raw_input, title, summary, content, content_text, digest, ai_error, user_category, image_uri,
+      id, type, source_url, raw_input, title, summary, content, content_text, digest, ai_error, user_category, image_uri, user_deadline,
       thumbnail_url, ai_status, sync_status, user_note, extracted_urls, source_type,
       saved_from, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     item.id,
     item.type,
     item.sourceUrl,
@@ -45,6 +46,7 @@ export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayloa
     item.aiError,
     item.userCategory,
     item.imageUri,
+    item.userDeadline,
     item.thumbnailUrl,
     item.aiStatus,
     item.syncStatus,
@@ -72,6 +74,7 @@ export async function listItemsAsync(db: SQLiteDatabase) {
       ai_error,
       user_category,
       image_uri,
+      user_deadline,
       thumbnail_url,
       ai_status,
       sync_status,
@@ -107,6 +110,7 @@ export async function updateItemMetadataAsync(
       -- patch에 키가 있을 때만 덮어쓰도록 플래그로 구분합니다.
       user_category = CASE WHEN ? = 1 THEN ? ELSE user_category END,
       image_uri = COALESCE(?, image_uri),
+      user_deadline = CASE WHEN ? = 1 THEN ? ELSE user_deadline END,
       thumbnail_url = COALESCE(?, thumbnail_url),
       ai_status = COALESCE(?, ai_status),
       user_note = COALESCE(?, user_note),
@@ -125,6 +129,8 @@ export async function updateItemMetadataAsync(
     patch.userCategory !== undefined ? 1 : 0,
     patch.userCategory ?? null,
     patch.imageUri ?? null,
+    patch.userDeadline !== undefined ? 1 : 0,
+    patch.userDeadline ?? null,
     patch.thumbnailUrl ?? null,
     patch.aiStatus ?? null,
     patch.userNote ?? null,
@@ -185,6 +191,7 @@ function mapItemRow(row: ItemRow): SavedItem {
     aiError: row.ai_error,
     userCategory: row.user_category,
     imageUri: row.image_uri,
+    userDeadline: row.user_deadline,
     thumbnailUrl: row.thumbnail_url,
     aiStatus: row.ai_status,
     syncStatus: row.sync_status,

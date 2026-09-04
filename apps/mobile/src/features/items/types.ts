@@ -36,6 +36,12 @@ export type SavedItem = {
   userCategory: string | null;
   /** 앱 폴더에 보관한 이미지 경로. 스크린샷으로 저장한 아이템의 원본입니다. */
   imageUri: string | null;
+  /**
+   * 사용자가 직접 고친 마감일 (YYYY-MM-DD).
+   * AI가 추론한 날짜는 틀릴 수 있는데 '마감됨' 경고를 띄우는 자리라 교정이 필요합니다.
+   * 재분석이 덮어쓰지 않도록 AI 결과와 별도 필드에 둡니다.
+   */
+  userDeadline: string | null;
   syncStatus: SyncStatus;
   userNote: string | null;
   extractedUrls: string[];
@@ -73,6 +79,12 @@ export type SaveUrlPayload = {
   userCategory: string | null;
   /** 앱 폴더에 보관한 이미지 경로. 스크린샷으로 저장한 아이템의 원본입니다. */
   imageUri: string | null;
+  /**
+   * 사용자가 직접 고친 마감일 (YYYY-MM-DD).
+   * AI가 추론한 날짜는 틀릴 수 있는데 '마감됨' 경고를 띄우는 자리라 교정이 필요합니다.
+   * 재분석이 덮어쓰지 않도록 AI 결과와 별도 필드에 둡니다.
+   */
+  userDeadline: string | null;
   syncStatus: SyncStatus;
   userNote: string | null;
   extractedUrls: string[];
@@ -92,6 +104,7 @@ export type ItemMetadataPatch = {
   aiError?: string | null;
   userCategory?: string | null;
   imageUri?: string | null;
+  userDeadline?: string | null;
   thumbnailUrl?: string | null;
   aiStatus?: AIStatus;
   userNote?: string | null;
