@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@react-native-community/datetimepicker": "8.4.4",
     "expo": "~54.0.33",
     "expo-clipboard": "~8.0.8",
     "expo-dev-client": "~6.0.20",

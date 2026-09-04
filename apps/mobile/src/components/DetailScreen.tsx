@@ -32,6 +32,7 @@ import {
 } from '@/utils/formatters';
 import { parseActionItems, ActionItem } from '@/utils/actionParser';
 import * as WebBrowser from 'expo-web-browser';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 import { ReaderModeModal } from '@/components/ReaderModeModal';
 import { MarkdownViewer } from '@/components/MarkdownViewer';
@@ -805,14 +806,23 @@ function MetaBlock({ label, value }: { label: string; value: string }) {
 // ==========================================
 // 스타일
 // ==========================================
+function pad2(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function toDateKey(date: Date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
 /**
- * 마감일 직접 입력 시트.
+ * 마감일 선택.
  *
  * 마감일은 AI가 캡션에서 추론한 값이라 틀릴 수 있는데, 화면에서는 '마감됨'이라는
  * 강한 경고를 띄웁니다. 잘못된 경고로 멀쩡한 공구를 놓치지 않으려면
  * 사용자가 고칠 수 있어야 합니다.
  *
- * 날짜 선택기는 네이티브 모듈이라 앱을 다시 빌드해야 해서 직접 입력으로 둡니다.
+ * OS 기본 날짜 선택기를 씁니다. 사용자가 다른 앱에서 이미 익숙한 UI이고,
+ * 달력을 직접 그리면 로케일과 접근성을 전부 다시 만들어야 합니다.
  */
 function DeadlineEditor({
   visible,
@@ -828,63 +838,41 @@ function DeadlineEditor({
   onSubmit: (value: string | null) => void;
 }) {
   const styles = useThemedStyles(createStyles);
-  const palette = useTheme().palette;
-  const [input, setInput] = useState(current);
-  const [error, setError] = useState<string | null>(null);
 
-  // 시트를 열 때마다 현재 값에서 시작합니다.
-  useEffect(() => {
-    if (visible) {
-      setInput(current);
-      setError(null);
-    }
-  }, [visible, current]);
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(current) ? new Date(current) : null;
+  const initial = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date();
 
-  function submit() {
-    const value = input.trim();
-    if (!value) {
-      onSubmit(null);
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(new Date(value).getTime())) {
-      setError('YYYY-MM-DD 형식으로 입력해 주세요. (예: 2026-08-31)');
-      return;
-    }
-    onSubmit(value);
-  }
+  if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.pickerBackdrop} onPress={onClose}>
-        <Pressable style={styles.pickerSheet} onPress={(e) => e.stopPropagation()}>
-          <Text style={styles.pickerTitle}>마감일 고치기</Text>
+    <>
+      <DateTimePicker
+        value={initial}
+        mode="date"
+        display="calendar"
+        onChange={(event, date) => {
+          // 안드로이드는 취소해도 콜백이 옵니다. type으로 구분해야 합니다.
+          if (event.type === 'set' && date) {
+            onSubmit(toDateKey(date));
+          } else {
+            onClose();
+          }
+        }}
+      />
 
-          <TextInput
-            autoFocus
-            value={input}
-            onChangeText={setInput}
-            onSubmitEditing={submit}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor={palette.textMuted}
-            style={styles.deadlineInput}
-            keyboardType="numbers-and-punctuation"
-            returnKeyType="done"
-          />
-
-          {error ? <Text style={styles.deadlineError}>{error}</Text> : null}
-
-          <Pressable onPress={submit} style={styles.deadlineSubmit}>
-            <Text style={styles.deadlineSubmitText}>저장</Text>
-          </Pressable>
-
-          <Pressable onPress={() => onSubmit(null)} style={styles.pickerReset}>
-            <Text style={styles.pickerResetText}>
-              {isManual ? 'AI가 읽은 값으로 되돌리기' : '마감일 지우기'}
-            </Text>
+      {/* 선택기는 OS가 그리므로 해제 버튼만 따로 띄웁니다. */}
+      <Modal transparent visible animationType="none">
+        <Pressable style={styles.deadlineResetBackdrop} onPress={onClose}>
+          <Pressable style={styles.deadlineResetSheet} onPress={(e) => e.stopPropagation()}>
+            <Pressable onPress={() => onSubmit(null)} style={styles.pickerReset}>
+              <Text style={styles.pickerResetText}>
+                {isManual ? 'AI가 읽은 값으로 되돌리기' : '마감일 지우기'}
+              </Text>
+            </Pressable>
           </Pressable>
         </Pressable>
-      </Pressable>
-    </Modal>
+      </Modal>
+    </>
   );
 }
 
@@ -1042,34 +1030,17 @@ const createStyles = (palette: Palette) =>
     padding: spacing[3],
     gap: 3,
   },
-  deadlineInput: {
-    backgroundColor: palette.surfaceRaised,
-    borderRadius: 12,
+  deadlineResetBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    paddingBottom: spacing[9],
+    paddingHorizontal: spacing[5],
+  },
+  deadlineResetSheet: {
+    backgroundColor: palette.backgroundStrong,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: palette.border,
-    paddingHorizontal: spacing[3],
-    paddingVertical: 10,
-    color: palette.textPrimary,
-    fontSize: 14,
-    marginTop: spacing[2],
-  },
-  deadlineError: {
-    color: palette.dangerText,
-    fontSize: 11,
-    fontWeight: '700',
-    marginTop: spacing[2],
-  },
-  deadlineSubmit: {
-    backgroundColor: palette.accent,
-    borderRadius: 12,
-    paddingVertical: spacing[3],
-    alignItems: 'center',
-    marginTop: spacing[3],
-  },
-  deadlineSubmitText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '900',
   },
   deadlineBoxExpired: {
     backgroundColor: palette.dangerSoft,
