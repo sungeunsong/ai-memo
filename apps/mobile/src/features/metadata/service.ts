@@ -60,14 +60,17 @@ type YouTubeOEmbedResponse = {
   thumbnail_url?: string;
 };
 
-export async function fetchMetadataPatch(sourceUrl: string): Promise<ItemMetadataPatch> {
+export async function fetchMetadataPatch(
+  sourceUrl: string,
+  referenceDate?: string
+): Promise<ItemMetadataPatch> {
   const updatedAt = new Date().toISOString();
 
   try {
     const normalizedSourceUrl = normalizeSourceUrl(sourceUrl);
     const metadata = isYouTubeUrl(normalizedSourceUrl)
       ? await fetchYouTubeMetadata(normalizedSourceUrl)
-      : await fetchGenericMetadata(normalizedSourceUrl);
+      : await fetchGenericMetadata(normalizedSourceUrl, referenceDate);
 
     return {
       sourceUrl: metadata.sourceUrl,
@@ -113,7 +116,10 @@ export async function fetchMetadataPatch(sourceUrl: string): Promise<ItemMetadat
  * 링크와 달리 원문이 곧 본문이므로 contentText는 채우지 않습니다.
  * 원문은 이미 rawInput에 온전히 남아 있습니다.
  */
-export async function fetchTextMetadataPatch(rawText: string): Promise<ItemMetadataPatch> {
+export async function fetchTextMetadataPatch(
+  rawText: string,
+  referenceDate?: string
+): Promise<ItemMetadataPatch> {
   const updatedAt = new Date().toISOString();
 
   const trimmed = rawText.trim();
@@ -121,7 +127,7 @@ export async function fetchTextMetadataPatch(rawText: string): Promise<ItemMetad
     return { aiStatus: 'failed', updatedAt };
   }
 
-  const result = await callGeminiApi('', trimmed);
+  const result = await callGeminiApi('', trimmed, undefined, referenceDate);
 
   if (!result.ok) {
     // API 키가 없거나 호출에 실패한 경우. 원문에서 발췌한 정리본만이라도 붙입니다.
@@ -175,14 +181,17 @@ export async function fetchTextMetadataPatch(rawText: string): Promise<ItemMetad
  * 이미지 토큰은 크기와 무관하게 258로 고정이라, 링크 한 건을 처리할 때와
  * 비용이 다르지 않습니다.
  */
-export async function fetchImageMetadataPatch(base64Image: string): Promise<ItemMetadataPatch> {
+export async function fetchImageMetadataPatch(
+  base64Image: string,
+  referenceDate?: string
+): Promise<ItemMetadataPatch> {
   const updatedAt = new Date().toISOString();
 
   if (!base64Image) {
     return { aiStatus: 'failed', aiError: '이미지를 읽지 못했습니다.', updatedAt };
   }
 
-  const result = await callGeminiApi('', '', base64Image);
+  const result = await callGeminiApi('', '', base64Image, referenceDate);
 
   if (!result.ok) {
     return { aiStatus: 'failed', aiError: result.reason, updatedAt };
@@ -315,7 +324,10 @@ async function fetchYouTubeMetadata(sourceUrl: string): Promise<MetadataResult> 
   };
 }
 
-async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> {
+async function fetchGenericMetadata(
+  sourceUrl: string,
+  referenceDate?: string
+): Promise<MetadataResult> {
   const jinaUrl = `https://r.jina.ai/${sourceUrl}`;
   try {
     console.log(`[MetadataService] Jina Reader API를 통해 콘텐츠를 렌더링 및 파싱합니다. URL: ${jinaUrl}`);
@@ -375,7 +387,7 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
         let aiError: string | null = null;
 
         // 1. 진짜 AI 요약 API (Gemini 2.5 Flash LLM) 호출 시도
-        const aiResult = await callGeminiApi(title, rawContent);
+        const aiResult = await callGeminiApi(title, rawContent, undefined, referenceDate);
         if (aiResult.ok) {
           console.log('[MetadataService] Gemini API를 활용한 실제 AI 요약 및 구조화 파싱에 성공했습니다.');
           summary = aiResult.data.summary;
@@ -444,7 +456,7 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
   // 예전에는 sanitizeText()로 그 개행을 모두 뭉갠 뒤 summary에만 넣어서,
   // 원문도 사라지고 그 통짜 문자열이 AI 요약처럼 보였습니다.
   if (instagramCaption) {
-    const aiResult = await callGeminiApi(htmlMetadata.title, instagramCaption);
+    const aiResult = await callGeminiApi(htmlMetadata.title, instagramCaption, undefined, referenceDate);
     let title = htmlMetadata.title;
     let summary = generateAISummary(title, instagramCaption, sourceType);
     let parsedStructure: any = {
@@ -844,24 +856,28 @@ export type GeminiResult =
 /**
  * 마감일의 연도를 바로잡습니다.
  *
- * 프롬프트로 오늘 날짜를 알려줘도 모델이 연도를 잘못 넣는 경우가 있습니다.
+ * 프롬프트로 날짜를 알려줘도 모델이 연도를 잘못 넣는 경우가 있습니다.
  * 원문 어디에도 네 자리 연도가 없는데 결과가 과거 연도라면, 그건 모델이
- * 지어낸 것이므로 저장 시점의 연도로 맞춥니다.
+ * 지어낸 것이므로 기준 날짜의 연도로 맞춥니다.
+ *
+ * 기준은 '오늘'이 아니라 '저장 시점'입니다. 2026년에 저장한 공구를 2027년에
+ * 재분석하면 오늘 기준으로는 2027년으로 밀려버립니다.
  * 원문에 연도가 실제로 적혀 있으면 그건 사실이므로 건드리지 않습니다.
  */
-function normalizeDeadlineYear(data: any, sourceText: string): any {
+function normalizeDeadlineYear(data: any, sourceText: string, referenceDate: string): any {
   const deadline = typeof data?.deadline === 'string' ? data.deadline.trim() : '';
   const match = deadline.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return data;
 
   const parsedYear = Number(match[1]);
-  const currentYear = new Date().getFullYear();
-  if (parsedYear >= currentYear) return data;
+  const baseYear = new Date(referenceDate).getFullYear();
+  if (!Number.isFinite(baseYear)) return data;
+  if (parsedYear >= baseYear) return data;
 
   // 원문에 그 연도가 명시돼 있으면 모델이 읽은 것이므로 존중합니다.
   if (sourceText && new RegExp(`${parsedYear}`).test(sourceText)) return data;
 
-  return { ...data, deadline: `${currentYear}-${match[2]}-${match[3]}` };
+  return { ...data, deadline: `${baseYear}-${match[2]}-${match[3]}` };
 }
 
 /**
@@ -952,7 +968,9 @@ const RESPONSE_SCHEMA = {
 async function callGeminiApi(
   title: string,
   rawContent: string,
-  base64Image?: string
+  base64Image?: string,
+  /** 날짜 해석의 기준. 아이템을 저장한 시점이며 없으면 지금입니다. */
+  referenceDate: string = new Date().toISOString()
 ): Promise<GeminiResult> {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) {
@@ -962,7 +980,7 @@ async function callGeminiApi(
 
   // 모델은 오늘이 며칠인지 모릅니다. 알려주지 않으면 '8/31까지' 같은 표기의 연도를
   // 학습 시점 근처로 찍어버려, 방금 저장한 공구가 몇백 일 지난 것으로 표시됩니다.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = referenceDate.slice(0, 10);
 
   const prompt = `오늘 날짜는 ${today}이다. 연도가 적혀 있지 않은 날짜는 오늘이 속한 연도로 해석하라.
 
@@ -1076,7 +1094,7 @@ ${rawContent.slice(0, 8000)}`}
 
         try {
           const data = JSON.parse(cleaned);
-          return { ok: true, data: normalizeDeadlineYear(data, rawContent) };
+          return { ok: true, data: normalizeDeadlineYear(data, rawContent, referenceDate) };
         } catch (parseErr) {
           const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
           console.log(`[GeminiAPI] JSON 파싱 실패 (시도 ${attempt}/${maxAttempts}):`, message);

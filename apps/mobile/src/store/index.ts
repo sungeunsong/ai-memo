@@ -348,7 +348,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           itemId,
           async () => {
             const base64 = await readImageForAnalysis(imageUri);
-            return fetchImageMetadataPatch(base64 ?? '');
+            return fetchImageMetadataPatch(base64 ?? '', item.createdAt);
           },
           set,
           get
@@ -367,12 +367,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
         }
 
         const targetUrl = activeUrl || item.sourceUrl!;
-        await enrichSavedItemMetadata(itemId, () => fetchMetadataPatch(targetUrl), set, get);
+        // 재분석해도 날짜 해석의 기준은 '지금'이 아니라 '저장한 때'입니다.
+        // 2026년에 저장한 공구를 2027년에 재분석하면 마감일이 밀려버립니다.
+        await enrichSavedItemMetadata(
+          itemId,
+          () => fetchMetadataPatch(targetUrl, item.createdAt),
+          set,
+          get
+        );
       } else {
         // 링크가 없는 텍스트도 재분석 대상입니다.
         await enrichSavedItemMetadata(
           itemId,
-          () => fetchTextMetadataPatch(item.rawInput),
+          () => fetchTextMetadataPatch(item.rawInput, item.createdAt),
           set,
           get
         );
