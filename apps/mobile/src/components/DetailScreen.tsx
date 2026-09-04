@@ -149,10 +149,19 @@ export function DetailContent({
   // structured.description은 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
   const readerMarkdown: string = selectedItem.contentText || structured?.description || '';
 
+  /**
+   * 요약 자리에 무엇을 보여줄지.
+   *
+   * AI가 실패했는데 summary(대개 og:description 원문)를 조용히 채워 넣으면
+   * 사용자는 그걸 AI 결과로 착각합니다. 실제로 정리본이 있는 것과
+   * 원문이 그대로 들어간 것이 화면에서 구분되지 않았습니다.
+   * 실패했으면 정리본 자리를 비우고, 아래 실패 사유 박스가 이유를 말하게 합니다.
+   */
+  const aiFailed = selectedItem.aiStatus === 'failed';
   const summaryBody: string = (
     selectedItem.digest ||
     structured?.detailedAnalysis ||
-    selectedItem.summary ||
+    (aiFailed ? '' : selectedItem.summary) ||
     ''
   ).trim();
 
@@ -258,10 +267,6 @@ export function DetailContent({
         </View>
       ) : null}
 
-      {shouldShowRawInputFirst(selectedItem) ? (
-        <RawInputSection item={selectedItem} />
-      ) : null}
-
       {/* 1.7. 📖 리더 모드 버튼
           인스타그램 제외 조건도 본문을 못 긁던 시절의 잔재입니다.
           지금은 캡션을 가져오므로, 본문이 있으면 보여줍니다. */}
@@ -337,7 +342,9 @@ export function DetailContent({
           <MarkdownViewer markdown={summaryBody} />
         ) : (
           <Text style={styles.summaryValue}>
-            AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.
+            {aiFailed
+              ? '요약을 만들지 못했습니다. 위 재분석 버튼을 눌러 다시 시도할 수 있습니다.'
+              : 'AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.'}
           </Text>
         )}
 
@@ -351,6 +358,14 @@ export function DetailContent({
           </View>
         ) : null}
       </View>
+
+      {/* 3.5. 원문
+          정리본을 먼저 보여주고 원문은 아래에 둡니다.
+          이 앱은 정리해서 보여주는 앱이라, 캡션이 위에 있으면 정리한 의미가 없습니다.
+          원문은 "AI가 놓친 게 있나" 확인할 때 보는 자리입니다. */}
+      {shouldShowRawInputFirst(selectedItem) ? (
+        <RawInputSection item={selectedItem} />
+      ) : null}
 
       {/* 4. 도메인 특화 카드 */}
       {structured && (structured.category === 'recipe' || structured.ingredients?.length > 0) && (
