@@ -29,6 +29,7 @@ const FOLDERS = [
   { label: '여행 ✈️', value: 'travel' },
   { label: '육아 🍼', value: 'parenting' },
   { label: '공구·꿀템 🛍️', value: 'shopping' },
+  { label: '미분류 🏷️', value: 'other' },
 ];
 
 /** 추천 칩이 너무 많으면 고르는 것 자체가 일이 됩니다. */

@@ -36,6 +36,7 @@ import {
   buildFacetIndex,
   selectByFacets,
   suggestRelaxations,
+  matchesCategoryTab,
 } from '@/features/facets/query';
 import { parseQueryToFacets } from '@/features/facets/parseQuery';
 import { CaptureModal, CaptureFloatingButton } from '@/components/CaptureModal';
@@ -174,8 +175,11 @@ export function HomeScreen() {
   const facetIndex = useMemo(() => buildFacetIndex(items), [items]);
 
   const baseItems = useMemo(
-    () => filterItems(items, searchQuery, activeCategory),
-    [items, searchQuery, activeCategory]
+    () =>
+      filterItems(items, searchQuery).filter((item) =>
+        matchesCategoryTab(facetIndex, item, activeCategory)
+      ),
+    [items, searchQuery, activeCategory, facetIndex]
   );
 
   const baseIds = useMemo(
@@ -205,7 +209,9 @@ export function HomeScreen() {
    */
   const withoutSearchCount = useMemo(() => {
     if (!searchQuery.trim()) return 0;
-    const withoutSearch = filterItems(items, '', activeCategory);
+    const withoutSearch = filterItems(items, '').filter((item) =>
+      matchesCategoryTab(facetIndex, item, activeCategory)
+    );
     const ids = new Set(withoutSearch.map((item) => item.id));
     return selectByFacets(facetIndex, selectedFacets, ids).size;
   }, [items, activeCategory, searchQuery, facetIndex, selectedFacets]);

@@ -9,6 +9,8 @@
 
 import { SavedItem } from '@/features/items/types';
 
+import { getItemCategory } from '@/utils/formatters';
+
 import { Facet, FacetKind, extractFacets, facetKey, parseFacetKey } from './extract';
 
 export type FacetIndex = {
@@ -172,4 +174,55 @@ export function suggestRelaxations(
   }
 
   return suggestions.sort((a, b) => b.count - a.count);
+}
+
+/**
+ * 카테고리 탭이 포함하는 facet 축.
+ *
+ * 탭 판정을 카테고리 값 하나로만 하면 놓치는 게 생깁니다.
+ * '돌아기랑 갈 만한 강릉 키즈펜션'은 AI가 카테고리를 하나만 고르므로 여행으로
+ * 찍히고, 월령·주제 축을 다 갖고도 육아 탭에서는 보이지 않았습니다.
+ *
+ * 그래서 탭은 "대표 분류가 맞거나, 그 탭의 축을 가진 것"으로 판정합니다.
+ * 카테고리는 상세의 대표 표시로 남기고, 탭은 관련된 것을 모두 보여주는 역할을 맡습니다.
+ */
+const CATEGORY_FACET_KINDS: Record<string, FacetKind[]> = {
+  recipe: ['ingredient'],
+  workout: ['muscle', 'equipment'],
+  travel: ['region', 'amenity', 'theme'],
+  parenting: ['babyAge', 'topic'],
+  shopping: ['product', 'seller', 'purchase'],
+};
+
+export const TAB_CATEGORIES = Object.keys(CATEGORY_FACET_KINDS);
+
+function matchesOneCategory(item: SavedItem, category: string, facets: Facet[]): boolean {
+  if (getItemCategory(item) === category) return true;
+  const kinds = CATEGORY_FACET_KINDS[category] ?? [];
+  return facets.some((facet) => kinds.includes(facet.kind));
+}
+
+/**
+ * 아이템이 해당 탭에 보여야 하는지 판단합니다.
+ *
+ * 'other'는 별도로 다룹니다. 어느 탭에도 걸리지 않는 아이템만 모으는 자리라,
+ * 분류에서 빠진 것이 '전체' 말고는 갈 곳이 없어 묻히는 일을 막습니다.
+ *
+ * facet은 이미 만들어둔 색인에서 꺼내 씁니다. 검색어를 칠 때마다 아이템 수만큼
+ * 다시 추출하면 비용이 커집니다.
+ */
+export function matchesCategoryTab(
+  index: FacetIndex,
+  item: SavedItem,
+  tab: string
+): boolean {
+  if (!tab) return true;
+
+  const facets = index.byItem.get(item.id) ?? [];
+
+  if (tab === 'other') {
+    return !TAB_CATEGORIES.some((category) => matchesOneCategory(item, category, facets));
+  }
+
+  return matchesOneCategory(item, tab, facets);
 }

@@ -274,48 +274,61 @@ export function getItemCategory(item: SavedItem): string {
   const content = `${(item.contentText ?? '').slice(0, CATEGORY_SCAN_LIMIT)} ${item.content.slice(0, CATEGORY_SCAN_LIMIT)}`.toLowerCase();
   const userNote = (item.userNote || '').toLowerCase();
 
-  if (
-    title.includes('기저귀') || title.includes('분유') || title.includes('육아') || title.includes('아동') || title.includes('출산') || title.includes('다자녀') ||
-    content.includes('기저귀') || content.includes('분유') || content.includes('육아') || content.includes('아동') || content.includes('출산') || content.includes('다자녀') ||
-    userNote.includes('기저귀') || userNote.includes('분유') || userNote.includes('육아') || userNote.includes('아동') || userNote.includes('출산')
-  ) {
-    return 'parenting';
-  }
-
-  if (
-    title.includes('여행') || title.includes('호캉스') || title.includes('항공권') ||
-    content.includes('여행') || content.includes('호캉스') || content.includes('항공권') ||
-    userNote.includes('여행') || userNote.includes('호캉스') || userNote.includes('항공권')
-  ) {
-    return 'travel';
-  }
-
-  if (
-    title.includes('레시피') || title.includes('요리') || title.includes('조리법') ||
-    content.includes('레시피') || content.includes('요리') || content.includes('조리법') ||
-    userNote.includes('레시피') || userNote.includes('요리') || userNote.includes('조리법')
-  ) {
-    return 'recipe';
-  }
-
-  if (
-    title.includes('운동') || title.includes('루틴') || title.includes('홈트') || title.includes('헬스') ||
-    content.includes('운동') || content.includes('루틴') || content.includes('홈트') || content.includes('헬스') ||
-    userNote.includes('운동') || userNote.includes('루틴') || userNote.includes('홈트') || userNote.includes('헬스')
-  ) {
-    return 'workout';
-  }
-
-  if (
-    title.includes('공구') || title.includes('공동구매') || title.includes('꿀템') ||
-    title.includes('할인') || title.includes('특가') || title.includes('최저가') ||
-    content.includes('공동구매') || content.includes('공구가') || content.includes('꿀템') ||
-    userNote.includes('공구') || userNote.includes('꿀템')
-  ) {
-    return 'shopping';
+  const fallback = classifyByKeyword(title, userNote, content);
+  if (fallback) {
+    return fallback;
   }
 
   return 'other';
+}
+
+/**
+ * AI가 분류하지 못했을 때 쓰는 키워드 폴백.
+ *
+ * 신호의 세기를 구분합니다.
+ * 제목이나 내 메모에 나온 단어는 그 아이템의 주제일 가능성이 높지만,
+ * 본문에 한 번 스쳐 지나간 단어는 아닙니다.
+ * ('강릉 오션뷰 후기' 본문의 "육아 시작하고 처음 간 여행"이 육아로 분류되던 문제)
+ *
+ * 그래서 제목·메모는 한 번으로 충분하고, 본문은 두 번 이상 나와야 인정합니다.
+ * 제목 검사를 모든 카테고리에 대해 먼저 돌리므로, 본문에 걸린 다른 카테고리가
+ * 순서 때문에 이기는 일도 없어집니다.
+ */
+const CATEGORY_KEYWORDS: Record<string, string[]> = {
+  parenting: ['기저귀', '분유', '육아', '아동', '출산', '다자녀'],
+  travel: ['여행', '호캉스', '항공권'],
+  recipe: ['레시피', '요리', '조리법'],
+  workout: ['운동', '루틴', '홈트', '헬스'],
+  shopping: ['공구', '공동구매', '꿀템', '할인', '특가', '최저가'],
+};
+
+function countOccurrences(text: string, keyword: string): number {
+  if (!text || !keyword) return 0;
+  let count = 0;
+  let index = text.indexOf(keyword);
+  while (index !== -1) {
+    count += 1;
+    index = text.indexOf(keyword, index + keyword.length);
+  }
+  return count;
+}
+
+function classifyByKeyword(title: string, userNote: string, content: string): string | null {
+  // 1차: 제목과 메모 (강한 신호)
+  for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (keywords.some((keyword) => title.includes(keyword) || userNote.includes(keyword))) {
+      return category;
+    }
+  }
+
+  // 2차: 본문 (약한 신호라 반복 등장을 요구)
+  for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (keywords.some((keyword) => countOccurrences(content, keyword) >= 2)) {
+      return category;
+    }
+  }
+
+  return null;
 }
 
 /** 카테고리를 화면에 보여줄 때 쓰는 라벨. */
@@ -357,23 +370,15 @@ function matchBodyText(text: string | null | undefined, query: string): boolean 
 }
 
 /**
- * 텍스트 검색과 카테고리로 1차 필터링합니다.
- * 재료/지역 같은 조합 조건은 features/facets가 이 결과 위에 AND로 얹습니다.
+ * 텍스트 검색만 담당합니다.
+ *
+ * 카테고리 탭 판정은 facet 축까지 봐야 해서 features/facets로 옮겼습니다.
+ * (여행으로 분류된 키즈펜션도 육아 탭에 보여야 하는 식)
+ * 조합 조건 역시 features/facets가 이 결과 위에 AND로 얹습니다.
  */
-export function filterItems(
-  items: SavedItem[],
-  searchQuery: string,
-  activeCategory: string
-): SavedItem[] {
+export function filterItems(items: SavedItem[], searchQuery: string): SavedItem[] {
   return items.filter((item) => {
-    // 1. 카테고리 필터링 (스마트 폴더)
-    if (activeCategory) {
-      if (getItemCategory(item) !== activeCategory) {
-        return false;
-      }
-    }
-
-    // 2. 검색어 필터
+    // 검색어 필터
     if (!searchQuery.trim()) return true;
     const query = searchQuery.trim();
 
