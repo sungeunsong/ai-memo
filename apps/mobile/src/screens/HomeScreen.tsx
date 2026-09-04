@@ -455,7 +455,7 @@ export function HomeScreen() {
       {/* 헤더 */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Text style={styles.headerLogo}>AI MEMO</Text>
+          <Text style={styles.headerLogo}>문갑</Text>
         </View>
         <View style={styles.headerRight}>
           <View style={styles.syncIndicator}>

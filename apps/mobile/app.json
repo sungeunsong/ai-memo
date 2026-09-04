@@ -1,20 +1,21 @@
 {
   "expo": {
-    "name": "AI Memo",
-    "slug": "ai-memo",
+    "name": "문갑",
+    "slug": "mungap",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "scheme": "aimemo",
+    "scheme": "mungap",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#f7f1e8"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.lab5devel.mungap"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +24,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.aimemo"
+      "package": "com.lab5devel.mungap"
     },
     "web": {
       "favicon": "./assets/favicon.png"
