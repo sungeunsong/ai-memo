@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#f7f1e8"
+      "backgroundColor": "#08142e"
     },
     "ios": {
       "supportsTablet": true,
@@ -20,7 +20,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#f7f1e8"
+        "backgroundColor": "#08142e"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -45,8 +45,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "34ff159e-163e-4282-93a4-1bdb3d3162a5"
+        "projectId": "4644074e-0363-4bd9-8084-8366a4d460f2"
       }
-    }
+    },
+    "owner": "songse"
   }
 }
