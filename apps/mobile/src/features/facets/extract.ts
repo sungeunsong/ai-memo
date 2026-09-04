@@ -21,7 +21,9 @@ export type FacetKind =
   | 'theme'
   | 'product'
   | 'seller'
-  | 'purchase';
+  | 'purchase'
+  | 'babyAge'
+  | 'topic';
 
 export type Facet = {
   kind: FacetKind;
@@ -94,6 +96,12 @@ export function extractFacets(item: SavedItem): Facet[] {
   pushArray(facets, 'muscle', structured?.targetMuscles);
   pushArray(facets, 'equipment', structured?.equipments);
 
+  // 육아
+  for (const bucket of toAgeBuckets(structured?.babyAgeMonths)) {
+    facets.push({ kind: 'babyAge', value: bucket });
+  }
+  pushValues(facets, 'topic', structured?.parentingTopic);
+
   // 쇼핑·공동구매
   pushValues(facets, 'product', structured?.productType);
   pushValues(facets, 'seller', structured?.seller);
@@ -141,6 +149,39 @@ export function extractFacets(item: SavedItem): Facet[] {
   }
 
   return dedupe(facets);
+}
+
+/**
+ * 월령 구간. 아이는 계속 크기 때문에 "지금 우리 애한테 맞는 것"으로 꺼내는 축이 됩니다.
+ * 개월 수를 그대로 두면 6개월과 7개월이 다른 값이 되어 조합이 흩어지므로 구간으로 묶습니다.
+ */
+const AGE_BUCKETS: { label: string; from: number; to: number }[] = [
+  { label: '신생아', from: 0, to: 3 },
+  { label: '4~6개월', from: 4, to: 6 },
+  { label: '7~12개월', from: 7, to: 12 },
+  { label: '돌~24개월', from: 13, to: 24 },
+  { label: '2~4세', from: 25, to: 48 },
+  { label: '5세 이상', from: 49, to: 200 },
+];
+
+/**
+ * '6' 또는 '6-12' 같은 개월 표기를 겹치는 구간 전부로 바꿉니다.
+ * 범위가 두 구간에 걸치면 양쪽 모두에서 검색되어야 합니다.
+ */
+function toAgeBuckets(raw: unknown): string[] {
+  if (typeof raw !== 'string') return [];
+
+  const numbers = raw.match(/\d+/g);
+  if (!numbers || numbers.length === 0) return [];
+
+  const from = Number(numbers[0]);
+  const to = numbers.length > 1 ? Number(numbers[1]) : from;
+  if (Number.isNaN(from) || Number.isNaN(to)) return [];
+
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+
+  return AGE_BUCKETS.filter((bucket) => bucket.from <= hi && bucket.to >= lo).map((b) => b.label);
 }
 
 function dedupe(facets: Facet[]): Facet[] {

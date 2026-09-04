@@ -43,6 +43,7 @@ type AppStore = {
   selectItem: (itemId: string) => void;
   updateUserNote: (itemId: string, userNote: string) => Promise<void>;
   retryEnrichMetadata: (itemId: string) => Promise<void>;
+  setItemCategory: (itemId: string, category: string | null) => Promise<void>;
   deleteItem: (itemId: string) => Promise<void>;
   clearError: () => void;
 };
@@ -215,6 +216,33 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     void runSyncWorker(set, get);
   },
+  /**
+   * 사용자가 카테고리를 직접 바꿉니다.
+   * null을 넘기면 지정을 해제하고 다시 AI 분류를 따릅니다.
+   */
+  async setItemCategory(itemId, category) {
+    if (!get().isReady) {
+      return;
+    }
+
+    const patch: ItemMetadataPatch = {
+      userCategory: category,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await updateItemMetadataAsync(itemId, patch);
+
+    const nextItems = get().items.map((item) =>
+      item.id === itemId ? { ...item, userCategory: category, updatedAt: patch.updatedAt } : item
+    );
+    set({ items: nextItems });
+
+    const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
+    if (itemToQueue) {
+      await queueUpsertItemSyncAsync(itemToQueue);
+    }
+    void runSyncWorker(set, get);
+  },
   async retryEnrichMetadata(itemId) {
     if (!get().isReady) {
       return;
@@ -355,6 +383,7 @@ async function enrichSavedItemMetadata(
         contentText: itemToQueue.contentText,
         digest: itemToQueue.digest,
         aiError: itemToQueue.aiError,
+        userCategory: itemToQueue.userCategory,
         thumbnailUrl: itemToQueue.thumbnailUrl,
         aiStatus: itemToQueue.aiStatus,
         syncStatus: 'queued',
@@ -411,6 +440,7 @@ function applyMetadataPatch(item: SavedItem, itemId: string, patch: ItemMetadata
     ...(patch.digest ? { digest: patch.digest } : null),
     // 실패 이유는 성공 시 null로 지워져야 하므로 undefined 여부로 판단합니다.
     ...(patch.aiError !== undefined ? { aiError: patch.aiError } : null),
+    ...(patch.userCategory !== undefined ? { userCategory: patch.userCategory } : null),
     ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
     ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
     ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),
@@ -437,6 +467,7 @@ function buildItemSyncJob(item: SavedItem) {
       contentText: item.contentText,
       digest: item.digest,
       aiError: item.aiError,
+      userCategory: item.userCategory,
       thumbnailUrl: item.thumbnailUrl,
       aiStatus: item.aiStatus,
       syncStatus: item.syncStatus,

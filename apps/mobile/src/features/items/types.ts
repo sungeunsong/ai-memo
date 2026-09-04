@@ -29,6 +29,11 @@ export type SavedItem = {
   aiStatus: AIStatus;
   /** AI 보강이 실패한 이유. 화면에 그대로 보여줘 원인을 알 수 있게 합니다. */
   aiError: string | null;
+  /**
+   * 사용자가 직접 지정한 카테고리. AI 분류보다 우선합니다.
+   * 재분석을 돌려도 덮어쓰지 않도록 AI 결과와 별도 필드에 둡니다.
+   */
+  userCategory: string | null;
   syncStatus: SyncStatus;
   userNote: string | null;
   extractedUrls: string[];
@@ -59,6 +64,11 @@ export type SaveUrlPayload = {
   aiStatus: AIStatus;
   /** AI 보강이 실패한 이유. 화면에 그대로 보여줘 원인을 알 수 있게 합니다. */
   aiError: string | null;
+  /**
+   * 사용자가 직접 지정한 카테고리. AI 분류보다 우선합니다.
+   * 재분석을 돌려도 덮어쓰지 않도록 AI 결과와 별도 필드에 둡니다.
+   */
+  userCategory: string | null;
   syncStatus: SyncStatus;
   userNote: string | null;
   extractedUrls: string[];
@@ -76,6 +86,7 @@ export type ItemMetadataPatch = {
   contentText?: string | null;
   digest?: string | null;
   aiError?: string | null;
+  userCategory?: string | null;
   thumbnailUrl?: string | null;
   aiStatus?: AIStatus;
   userNote?: string | null;

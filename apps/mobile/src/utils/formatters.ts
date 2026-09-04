@@ -249,6 +249,12 @@ export function getSourceTheme(sourceType: string): SourceTheme {
 const CATEGORY_SCAN_LIMIT = 2000;
 
 export function getItemCategory(item: SavedItem): string {
+  // 사용자가 직접 고친 분류가 있으면 그것이 최우선입니다.
+  // AI 재분석이나 키워드 규칙이 사람의 결정을 덮어써서는 안 됩니다.
+  if (item.userCategory) {
+    return item.userCategory;
+  }
+
   const structured = tryParseStructuredContent(item.content);
   const category = structured?.category || item.sourceType;
 

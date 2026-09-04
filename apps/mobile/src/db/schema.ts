@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS items (
   content_text TEXT,
   digest TEXT,
   ai_error TEXT,
+  user_category TEXT,
   thumbnail_url TEXT,
   ai_status TEXT NOT NULL,
   sync_status TEXT NOT NULL,

@@ -54,6 +54,7 @@ export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): SaveU
     contentText: null,
     digest: null,
     aiError: null,
+    userCategory: null,
     thumbnailUrl: null,
     aiStatus: 'pending',
     syncStatus: 'local_only',

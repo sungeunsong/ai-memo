@@ -21,6 +21,11 @@ const VALUE_EMOJIS: Record<string, string> = {
   '공동구매': '👥', '일반구매': '🛒',
   '식품': '🍱', '주방': '🍳', '생활': '🧻', '패션': '👕',
   '가전': '🔌', '뷰티': '💄', '인테리어': '🛋️', '육아용품': '🧸',
+  // 육아
+  '신생아': '🍼', '4~6개월': '👶', '7~12개월': '👶', '돌~24개월': '🧒',
+  '2~4세': '🧒', '5세 이상': '🧑',
+  '이유식': '🥣', '수면': '😴', '발달': '📈', '놀이': '🧩',
+  '마사지': '💆', '건강': '🩺', '교육': '📖', '외출': '🚶', '용품': '🧸',
 };
 
 const KIND_FALLBACK_EMOJIS: Record<FacetKind, string> = {
@@ -33,6 +38,8 @@ const KIND_FALLBACK_EMOJIS: Record<FacetKind, string> = {
   product: '📦',
   seller: '🏪',
   purchase: '🛍️',
+  babyAge: '👶',
+  topic: '📚',
 };
 
 export const KIND_LABELS: Record<FacetKind, string> = {
@@ -45,6 +52,8 @@ export const KIND_LABELS: Record<FacetKind, string> = {
   product: '품목',
   seller: '구매처',
   purchase: '구매형태',
+  babyAge: '월령',
+  topic: '주제',
 };
 
 export function facetEmoji(kind: FacetKind, value: string): string {

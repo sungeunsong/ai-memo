@@ -701,6 +701,8 @@ const RESPONSE_SCHEMA = {
     purchaseType: { type: 'string' },
     deadline: { type: 'string' },
     price: { type: 'string' },
+    babyAgeMonths: { type: 'string' },
+    parentingTopic: { type: 'string' },
   },
   required: ['title', 'summary', 'detailedAnalysis', 'category'],
 };
@@ -736,7 +738,9 @@ async function callGeminiApi(title: string, rawContent: string): Promise<GeminiR
   "seller": "판매처 또는 공구 주최 (예: '쿠팡', '네이버 스마트스토어', '인스타 공구')",
   "purchaseType": "구매 형태 ('공동구매' 또는 '일반구매')",
   "deadline": "마감일이 본문에 있으면 YYYY-MM-DD 형식으로. 없으면 빈 문자열",
-  "price": "가격 정보 (예: '19,900원')"
+  "price": "가격 정보 (예: '19,900원')",
+  "babyAgeMonths": "대상 아기 월령을 숫자 개월로. 범위면 '6-12', 단일이면 '6'. 없으면 빈 문자열 (돌=12, 3세=36)",
+  "parentingTopic": "육아 주제 (이유식 | 수면 | 발달 | 놀이 | 마사지 | 건강 | 교육 | 외출 | 용품 중 하나)"
 }
 
 분석할 원문 지식:

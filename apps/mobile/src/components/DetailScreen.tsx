@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Image,
   Linking,
   Pressable,
@@ -99,6 +100,8 @@ export function DetailContent({
   const updateUserNote = useAppStore((state) => state.updateUserNote);
   const retryEnrichMetadata = useAppStore((state) => state.retryEnrichMetadata);
   const isSaving = useAppStore((state) => state.isSaving);
+  const setItemCategory = useAppStore((state) => state.setItemCategory);
+  const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
 
   useEffect(() => {
     setUserNoteInput(selectedItem.userNote ?? '');
@@ -171,9 +174,15 @@ export function DetailContent({
           </Text>
           {/* 어느 카테고리로 분류됐는지. 지금까지는 출처만 보여서
               사용자가 분류 결과를 확인할 방법이 없었습니다. */}
-          <View style={styles.categoryChip}>
-            <Text style={styles.categoryChipText}>{getCategoryLabel(itemCategory)}</Text>
-          </View>
+          <Pressable
+            onPress={() => setIsCategoryPickerVisible(true)}
+            style={({ pressed }) => [styles.categoryChip, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.categoryChipText}>
+              {getCategoryLabel(itemCategory)}
+              {selectedItem.userCategory ? ' · 직접 지정' : ''} ▾
+            </Text>
+          </Pressable>
         </View>
         <View style={styles.detailHeroActionsRow}>
           <StatusPills item={selectedItem} />
@@ -429,6 +438,20 @@ export function DetailContent({
           <Text style={styles.deleteBtnText}>이 항목 삭제</Text>
         </Pressable>
       ) : null}
+
+      <CategoryPicker
+        visible={isCategoryPickerVisible}
+        current={itemCategory}
+        isManual={Boolean(selectedItem.userCategory)}
+        onClose={() => setIsCategoryPickerVisible(false)}
+        onSelect={(category) => {
+          setIsCategoryPickerVisible(false);
+          void setItemCategory(selectedItem.id, category);
+          setToastMessage(
+            category ? `${getCategoryLabel(category)}(으)로 변경했습니다` : 'AI 분류를 따르도록 되돌렸습니다'
+          );
+        }}
+      />
 
       <ReaderModeModal
         visible={isReaderVisible}
@@ -701,6 +724,65 @@ function MetaBlock({ label, value }: { label: string; value: string }) {
 // 스타일
 // ==========================================
 /**
+ * 카테고리 직접 지정 시트.
+ *
+ * AI 분류는 자주 틀립니다. 키워드 폴백은 본문에 '육아'가 한 번만 나와도
+ * 넘어갈 만큼 거칠고요. 분류를 보여주기만 하고 고칠 수 없으면
+ * 사용자는 틀린 걸 계속 보면서도 손쓸 방법이 없습니다.
+ */
+function CategoryPicker({
+  visible,
+  current,
+  isManual,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean;
+  current: string;
+  isManual: boolean;
+  onClose: () => void;
+  onSelect: (category: string | null) => void;
+}) {
+  const options = ['recipe', 'workout', 'travel', 'parenting', 'shopping', 'other'];
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.pickerBackdrop} onPress={onClose}>
+        <Pressable style={styles.pickerSheet} onPress={(e) => e.stopPropagation()}>
+          <Text style={styles.pickerTitle}>카테고리 바꾸기</Text>
+
+          {options.map((option) => {
+            const isCurrent = option === current;
+            return (
+              <Pressable
+                key={option}
+                onPress={() => onSelect(option)}
+                style={({ pressed }) => [
+                  styles.pickerRow,
+                  isCurrent && styles.pickerRowActive,
+                  pressed && { opacity: 0.7 },
+                ]}
+              >
+                <Text style={[styles.pickerRowText, isCurrent && styles.pickerRowTextActive]}>
+                  {getCategoryLabel(option)}
+                </Text>
+                {isCurrent ? <Text style={styles.pickerCheck}>✓</Text> : null}
+              </Pressable>
+            );
+          })}
+
+          {isManual ? (
+            <Pressable onPress={() => onSelect(null)} style={styles.pickerReset}>
+              <Text style={styles.pickerResetText}>AI 분류로 되돌리기</Text>
+            </Pressable>
+          ) : null}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+/**
  * 공동구매·꿀템용 카드.
  *
  * 공구는 마감이 지나면 저장해둔 의미가 없어집니다.
@@ -791,6 +873,59 @@ const styles = StyleSheet.create({
     color: palette.textPrimary,
     fontSize: 12.5,
     fontWeight: '700',
+  },
+  pickerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[6],
+  },
+  pickerSheet: {
+    backgroundColor: palette.backgroundStrong,
+    borderRadius: 20,
+    padding: spacing[5],
+    gap: spacing[1],
+  },
+  pickerTitle: {
+    color: palette.textPrimary,
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: spacing[2],
+  },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3],
+    borderRadius: 12,
+  },
+  pickerRowActive: {
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+  },
+  pickerRowText: {
+    color: palette.textSecondary,
+    fontSize: 13.5,
+    fontWeight: '800',
+  },
+  pickerRowTextActive: {
+    color: '#c084fc',
+  },
+  pickerCheck: {
+    color: '#c084fc',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  pickerReset: {
+    marginTop: spacing[2],
+    paddingVertical: spacing[3],
+    alignItems: 'center',
+  },
+  pickerResetText: {
+    color: palette.textMuted,
+    fontSize: 11.5,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
   },
   categoryChip: {
     alignSelf: 'flex-start',
