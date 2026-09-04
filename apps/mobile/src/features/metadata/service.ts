@@ -683,7 +683,7 @@ const RESPONSE_SCHEMA = {
     detailedAnalysis: { type: 'string' },
     category: {
       type: 'string',
-      enum: ['recipe', 'workout', 'travel', 'parenting', 'web'],
+      enum: ['recipe', 'workout', 'travel', 'parenting', 'shopping', 'web'],
     },
     cookTime: { type: 'string' },
     difficulty: { type: 'string' },
@@ -696,6 +696,11 @@ const RESPONSE_SCHEMA = {
     budget: { type: 'string' },
     highlights: { type: 'array', items: { type: 'string' } },
     checklist: { type: 'array', items: { type: 'string' } },
+    productType: { type: 'string' },
+    seller: { type: 'string' },
+    purchaseType: { type: 'string' },
+    deadline: { type: 'string' },
+    price: { type: 'string' },
   },
   required: ['title', 'summary', 'detailedAnalysis', 'category'],
 };
@@ -715,7 +720,7 @@ async function callGeminiApi(title: string, rawContent: string): Promise<GeminiR
   "title": "12~32자 내외의 핵심 요약형 제목 (과장/클릭베이트 금지)",
   "summary": "홈용 3줄 요약 (가독성 좋게 1), 2), 3) 번호 매김)",
   "detailedAnalysis": "상세 뷰용 전체 요약 정리본 (원문 본문의 중요한 핵심 논지, 세부 정보들을 소제목과 글머리 기호(불릿)를 활용해 일목요연하고 깊이 있게 정리한 상세 설명 텍스트, 한국어로 정성스럽게 작성할 것)",
-  "category": "recipe | workout | travel | parenting | web 중 하나로 분류",
+  "category": "recipe | workout | travel | parenting | shopping | web 중 하나로 분류 (공동구매/꿀템/제품추천은 shopping)",
   "cookTime": "조리 시간 (예: '20분')",
   "difficulty": "조리 난이도 ('쉬움', '보통', '어려움' 중 하나)",
   "ingredients": ["재료1", "재료2", "재료3"],
@@ -726,7 +731,12 @@ async function callGeminiApi(title: string, rawContent: string): Promise<GeminiR
   "location": "위치 및 숙소명",
   "budget": "예상 예산 정보",
   "highlights": ["추천 명소/특장점 1", "2"],
-  "checklist": ["준비물/예약 필요 항목 1", "2"]
+  "checklist": ["준비물/예약 필요 항목 1", "2"],
+  "productType": "품목 분류 한 단어 (식품 | 주방 | 생활 | 패션 | 가전 | 뷰티 | 인테리어 | 육아용품 중 하나)",
+  "seller": "판매처 또는 공구 주최 (예: '쿠팡', '네이버 스마트스토어', '인스타 공구')",
+  "purchaseType": "구매 형태 ('공동구매' 또는 '일반구매')",
+  "deadline": "마감일이 본문에 있으면 YYYY-MM-DD 형식으로. 없으면 빈 문자열",
+  "price": "가격 정보 (예: '19,900원')"
 }
 
 분석할 원문 지식:

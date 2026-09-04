@@ -12,7 +12,16 @@ import { getItemCategory } from '@/utils/formatters';
 
 import { AMENITY_TERMS, REGION_TERMS, canonicalize, normalizeToValues } from './normalize';
 
-export type FacetKind = 'ingredient' | 'muscle' | 'equipment' | 'region' | 'amenity' | 'theme';
+export type FacetKind =
+  | 'ingredient'
+  | 'muscle'
+  | 'equipment'
+  | 'region'
+  | 'amenity'
+  | 'theme'
+  | 'product'
+  | 'seller'
+  | 'purchase';
 
 export type Facet = {
   kind: FacetKind;
@@ -84,6 +93,11 @@ export function extractFacets(item: SavedItem): Facet[] {
   pushArray(facets, 'ingredient', structured?.ingredients);
   pushArray(facets, 'muscle', structured?.targetMuscles);
   pushArray(facets, 'equipment', structured?.equipments);
+
+  // 쇼핑·공동구매
+  pushValues(facets, 'product', structured?.productType);
+  pushValues(facets, 'seller', structured?.seller);
+  pushValues(facets, 'purchase', structured?.purchaseType);
 
   const hasTravelFields =
     structured?.location || structured?.travelTheme || structured?.highlights;

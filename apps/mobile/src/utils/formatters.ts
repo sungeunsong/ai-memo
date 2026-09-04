@@ -256,6 +256,7 @@ export function getItemCategory(item: SavedItem): string {
   if (category === 'travel') return 'travel';
   if (category === 'recipe') return 'recipe';
   if (category === 'workout') return 'workout';
+  if (category === 'shopping') return 'shopping';
 
   const title = item.title.toLowerCase();
   // 본문은 contentText로 분리됐습니다. item.content에는 구조화 데이터만 남아 있어
@@ -299,7 +300,30 @@ export function getItemCategory(item: SavedItem): string {
     return 'workout';
   }
 
+  if (
+    title.includes('공구') || title.includes('공동구매') || title.includes('꿀템') ||
+    title.includes('할인') || title.includes('특가') || title.includes('최저가') ||
+    content.includes('공동구매') || content.includes('공구가') || content.includes('꿀템') ||
+    userNote.includes('공구') || userNote.includes('꿀템')
+  ) {
+    return 'shopping';
+  }
+
   return 'other';
+}
+
+/** 카테고리를 화면에 보여줄 때 쓰는 라벨. */
+export const CATEGORY_LABELS: Record<string, string> = {
+  recipe: '레시피 🍳',
+  workout: '운동 💪',
+  travel: '여행 ✈️',
+  parenting: '육아 🍼',
+  shopping: '공구·꿀템 🛍️',
+  other: '미분류 🏷️',
+};
+
+export function getCategoryLabel(category: string): string {
+  return CATEGORY_LABELS[category] ?? CATEGORY_LABELS.other;
 }
 
 // ==========================================

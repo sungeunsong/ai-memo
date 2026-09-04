@@ -20,6 +20,8 @@ import {
   formatReadableDate,
   formatRelativeTime,
   getSourceTheme,
+  getCategoryLabel,
+  getItemCategory,
   getSyncStatusLabel,
   tryParseStructuredContent,
   truncateMiddle,
@@ -89,6 +91,7 @@ export function DetailContent({
   onDelete?: (itemId: string) => void;
 }) {
   const theme = getSourceTheme(selectedItem.sourceType);
+  const itemCategory = getItemCategory(selectedItem);
   const [userNoteInput, setUserNoteInput] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isMetaExpanded, setIsMetaExpanded] = useState(false);
@@ -166,6 +169,11 @@ export function DetailContent({
           <Text style={[styles.detailSource, { color: theme.badgeText, fontWeight: '700' }]}>
             {theme.label} · {selectedItem.sourceUrl ? getHostname(selectedItem.sourceUrl) : '로컬'}
           </Text>
+          {/* 어느 카테고리로 분류됐는지. 지금까지는 출처만 보여서
+              사용자가 분류 결과를 확인할 방법이 없었습니다. */}
+          <View style={styles.categoryChip}>
+            <Text style={styles.categoryChipText}>{getCategoryLabel(itemCategory)}</Text>
+          </View>
         </View>
         <View style={styles.detailHeroActionsRow}>
           <StatusPills item={selectedItem} />
@@ -322,6 +330,12 @@ export function DetailContent({
           onToggleCheck={onToggleCheck}
         />
       )}
+
+      {structured &&
+        (structured.category === 'shopping' ||
+          structured.purchaseType ||
+          structured.seller ||
+          structured.deadline) && <ShoppingCard structured={structured} />}
 
       {structured &&
         (structured.category === 'travel' ||
@@ -686,7 +700,113 @@ function MetaBlock({ label, value }: { label: string; value: string }) {
 // ==========================================
 // 스타일
 // ==========================================
+/**
+ * 공동구매·꿀템용 카드.
+ *
+ * 공구는 마감이 지나면 저장해둔 의미가 없어집니다.
+ * 그래서 남은 기간을 눈에 띄게 보여주고, 지난 건 분명히 표시합니다.
+ */
+function ShoppingCard({ structured }: { structured: any }) {
+  const deadline = typeof structured.deadline === 'string' ? structured.deadline.trim() : '';
+  let deadlineNote: { text: string; expired: boolean } | null = null;
+
+  if (deadline) {
+    const due = new Date(deadline);
+    if (!Number.isNaN(due.getTime())) {
+      // 날짜만 비교합니다. 마감 당일은 아직 지나지 않은 것으로 봅니다.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      due.setHours(0, 0, 0, 0);
+      const days = Math.round((due.getTime() - today.getTime()) / 86400000);
+
+      deadlineNote =
+        days < 0
+          ? { text: `${deadline} · ${-days}일 지남`, expired: true }
+          : { text: days === 0 ? `${deadline} · 오늘 마감` : `${deadline} · ${days}일 남음`, expired: false };
+    } else {
+      deadlineNote = { text: deadline, expired: false };
+    }
+  }
+
+  return (
+    <View style={styles.domainSpecCard}>
+      <View style={[styles.domainSpecHeader, { borderLeftColor: '#f59e0b' }]}>
+        <Text style={styles.domainSpecHeaderEmoji}>🛍️</Text>
+        <View>
+          <Text style={styles.domainSpecTitle}>구매 정보</Text>
+          <Text style={styles.domainSpecSub}>
+            {structured.purchaseType || '구매형태 미상'}
+            {structured.productType ? ` · ${structured.productType}` : ''}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.travelGrid}>
+        <View style={styles.travelGridBlock}>
+          <Text style={styles.travelBlockLabel}>🏪 구매처</Text>
+          <Text style={styles.travelBlockVal}>{structured.seller || '정보 없음'}</Text>
+        </View>
+        <View style={styles.travelGridBlock}>
+          <Text style={styles.travelBlockLabel}>💵 가격</Text>
+          <Text style={styles.travelBlockVal}>{structured.price || '정보 없음'}</Text>
+        </View>
+      </View>
+
+      {deadlineNote ? (
+        <View style={[styles.deadlineBox, deadlineNote.expired && styles.deadlineBoxExpired]}>
+          <Text style={[styles.deadlineLabel, deadlineNote.expired && styles.deadlineLabelExpired]}>
+            {deadlineNote.expired ? '⛔ 마감됨' : '⏰ 마감'}
+          </Text>
+          <Text style={styles.deadlineText}>{deadlineNote.text}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  deadlineBox: {
+    marginTop: spacing[3],
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+    padding: spacing[3],
+    gap: 3,
+  },
+  deadlineBoxExpired: {
+    backgroundColor: palette.dangerSoft,
+    borderColor: 'rgba(239, 68, 68, 0.35)',
+  },
+  deadlineLabel: {
+    color: '#fbbf24',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  deadlineLabelExpired: {
+    color: palette.dangerText,
+  },
+  deadlineText: {
+    color: palette.textPrimary,
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  categoryChip: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  categoryChipText: {
+    color: palette.textSecondary,
+    fontSize: 10.5,
+    fontWeight: '900',
+  },
   aiErrorBox: {
     marginTop: spacing[3],
     backgroundColor: palette.dangerSoft,
