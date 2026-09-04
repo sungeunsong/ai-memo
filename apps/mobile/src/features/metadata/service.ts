@@ -79,7 +79,11 @@ export async function fetchMetadataPatch(sourceUrl: string): Promise<ItemMetadat
       aiError: metadata.aiError,
       thumbnailUrl: metadata.thumbnailUrl,
       sourceType: metadata.sourceType,
-      aiStatus: 'completed',
+      // 페이지는 긁었지만 AI 요약이 실패했으면 '완료'가 아닙니다.
+      // 텍스트 경로는 이미 failed로 남기는데 여기만 항상 completed였습니다.
+      // 그 탓에 화면에는 '정리 완료'가 뜨고 실패 사유 박스는 가려져,
+      // 요약이 왜 원문 그대로인지 알 방법이 없었습니다.
+      aiStatus: metadata.aiError ? 'failed' : 'completed',
       updatedAt,
     };
   } catch (error) {
