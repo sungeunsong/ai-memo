@@ -262,11 +262,10 @@ export function DetailContent({
         <RawInputSection item={selectedItem} />
       ) : null}
 
-      {/* 1.7. 📖 리더 모드 버튼 */}
-      {readerMarkdown &&
-      selectedItem.sourceType !== 'instagram_reel' &&
-      selectedItem.sourceType !== 'instagram_post' &&
-      selectedItem.sourceType !== 'instagram' ? (
+      {/* 1.7. 📖 리더 모드 버튼
+          인스타그램 제외 조건도 본문을 못 긁던 시절의 잔재입니다.
+          지금은 캡션을 가져오므로, 본문이 있으면 보여줍니다. */}
+      {readerMarkdown ? (
         <Pressable
           onPress={() => setIsReaderVisible(true)}
           style={({ pressed }) => [
@@ -304,54 +303,54 @@ export function DetailContent({
         </View>
       </View>
 
-      {/* 3. AI 요약 */}
-      {selectedItem.sourceType !== 'instagram_reel' &&
-      selectedItem.sourceType !== 'instagram_post' &&
-      selectedItem.sourceType !== 'instagram' ? (
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryHeader}>
-            <Text style={styles.summaryTitle}>✨ AI 요약</Text>
-            <Pressable
-              disabled={isSaving || selectedItem.aiStatus === 'pending'}
-              onPress={async () => {
-                await retryEnrichMetadata(selectedItem.id);
-                setToastMessage('AI 분석을 다시 요청했습니다.');
-              }}
-              style={({ pressed }) => [
-                styles.reanalyzeBtn,
-                (pressed || isSaving || selectedItem.aiStatus === 'pending') && { opacity: 0.5 },
-              ]}
-            >
-              {isSaving || selectedItem.aiStatus === 'pending' ? (
-                <ActivityIndicator size="small" color={palette.accentText} />
-              ) : (
-                <Text style={styles.reanalyzeBtnText}>재분석 🧪</Text>
-              )}
-            </Pressable>
-          </View>
-          {/* 정리본이 상세 화면의 본문입니다.
-              structured.detailedAnalysis는 digest 컬럼 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
-              소제목·불릿을 써서 오라고 프롬프트에 적어놓고 정작 <Text> 하나에 밀어넣고 있었습니다.
-              마크다운으로 렌더링해야 그 구조가 화면에 나타납니다. */}
-          {summaryBody ? (
-            <MarkdownViewer markdown={summaryBody} />
-          ) : (
-            <Text style={styles.summaryValue}>
-              AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.
-            </Text>
-          )}
-
-          {/* 실패했으면 이유를 그대로 보여줍니다.
-              폰에서 도는 앱이라 콘솔을 열기 어렵고, 사용자 입장에서도
-              "요약이 왜 없지"에 답이 있어야 재분석을 눌러볼 수 있습니다. */}
-          {selectedItem.aiStatus === 'failed' && selectedItem.aiError ? (
-            <View style={styles.aiErrorBox}>
-              <Text style={styles.aiErrorLabel}>AI 요약 실패</Text>
-              <Text style={styles.aiErrorText}>{selectedItem.aiError}</Text>
-            </View>
-          ) : null}
+      {/* 3. AI 요약
+          예전에는 인스타그램 본문을 긁지 못해 이 카드를 통째로 숨겼습니다.
+          지금은 Jina로 캡션을 가져오고 정리본도 만들어지므로 숨길 이유가 없습니다.
+          숨겨두면 정리본이 있어도 볼 수 없고, 재분석 버튼도 사라져
+          AI가 실패했을 때 되돌릴 방법이 없어집니다. */}
+      <View style={styles.summaryCard}>
+        <View style={styles.summaryHeader}>
+          <Text style={styles.summaryTitle}>✨ AI 요약</Text>
+          <Pressable
+            disabled={isSaving || selectedItem.aiStatus === 'pending'}
+            onPress={async () => {
+              await retryEnrichMetadata(selectedItem.id);
+              setToastMessage('AI 분석을 다시 요청했습니다.');
+            }}
+            style={({ pressed }) => [
+              styles.reanalyzeBtn,
+              (pressed || isSaving || selectedItem.aiStatus === 'pending') && { opacity: 0.5 },
+            ]}
+          >
+            {isSaving || selectedItem.aiStatus === 'pending' ? (
+              <ActivityIndicator size="small" color={palette.accentText} />
+            ) : (
+              <Text style={styles.reanalyzeBtnText}>재분석 🧪</Text>
+            )}
+          </Pressable>
         </View>
-      ) : null}
+        {/* 정리본이 상세 화면의 본문입니다.
+            structured.detailedAnalysis는 digest 컬럼 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
+            소제목·불릿을 써서 오라고 프롬프트에 적어놓고 정작 <Text> 하나에 밀어넣고 있었습니다.
+            마크다운으로 렌더링해야 그 구조가 화면에 나타납니다. */}
+        {summaryBody ? (
+          <MarkdownViewer markdown={summaryBody} />
+        ) : (
+          <Text style={styles.summaryValue}>
+            AI가 분석을 완료하지 못했거나 요약된 내용이 없습니다.
+          </Text>
+        )}
+
+        {/* 실패했으면 이유를 그대로 보여줍니다.
+            폰에서 도는 앱이라 콘솔을 열기 어렵고, 사용자 입장에서도
+            "요약이 왜 없지"에 답이 있어야 재분석을 눌러볼 수 있습니다. */}
+        {selectedItem.aiStatus === 'failed' && selectedItem.aiError ? (
+          <View style={styles.aiErrorBox}>
+            <Text style={styles.aiErrorLabel}>AI 요약 실패</Text>
+            <Text style={styles.aiErrorText}>{selectedItem.aiError}</Text>
+          </View>
+        ) : null}
+      </View>
 
       {/* 4. 도메인 특화 카드 */}
       {structured && (structured.category === 'recipe' || structured.ingredients?.length > 0) && (
