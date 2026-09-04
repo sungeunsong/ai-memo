@@ -842,6 +842,29 @@ export type GeminiResult =
   | { ok: false; reason: string };
 
 /**
+ * 마감일의 연도를 바로잡습니다.
+ *
+ * 프롬프트로 오늘 날짜를 알려줘도 모델이 연도를 잘못 넣는 경우가 있습니다.
+ * 원문 어디에도 네 자리 연도가 없는데 결과가 과거 연도라면, 그건 모델이
+ * 지어낸 것이므로 저장 시점의 연도로 맞춥니다.
+ * 원문에 연도가 실제로 적혀 있으면 그건 사실이므로 건드리지 않습니다.
+ */
+function normalizeDeadlineYear(data: any, sourceText: string): any {
+  const deadline = typeof data?.deadline === 'string' ? data.deadline.trim() : '';
+  const match = deadline.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return data;
+
+  const parsedYear = Number(match[1]);
+  const currentYear = new Date().getFullYear();
+  if (parsedYear >= currentYear) return data;
+
+  // 원문에 그 연도가 명시돼 있으면 모델이 읽은 것이므로 존중합니다.
+  if (sourceText && new RegExp(`${parsedYear}`).test(sourceText)) return data;
+
+  return { ...data, deadline: `${currentYear}-${match[2]}-${match[3]}` };
+}
+
+/**
  * 응답 텍스트에서 "첫 번째 완전한 JSON 객체"만 잘라냅니다.
  *
  * 이전 구현은 첫 '{'부터 마지막 '}'까지를 통째로 잘랐는데, 모델이 객체를 두 개
@@ -937,7 +960,13 @@ async function callGeminiApi(
     return { ok: false, reason: 'API 키 없음 (EXPO_PUBLIC_GEMINI_API_KEY 미주입)' };
   }
 
-  const prompt = `너는 입력된 원문 지식에서 핵심적인 정보만을 고도로 구조화된 형태로 요약 및 추출하는 AI 에이전트이다.
+  // 모델은 오늘이 며칠인지 모릅니다. 알려주지 않으면 '8/31까지' 같은 표기의 연도를
+  // 학습 시점 근처로 찍어버려, 방금 저장한 공구가 몇백 일 지난 것으로 표시됩니다.
+  const today = new Date().toISOString().slice(0, 10);
+
+  const prompt = `오늘 날짜는 ${today}이다. 연도가 적혀 있지 않은 날짜는 오늘이 속한 연도로 해석하라.
+
+너는 입력된 원문 지식에서 핵심적인 정보만을 고도로 구조화된 형태로 요약 및 추출하는 AI 에이전트이다.
 다음 지침에 따라 반드시 JSON 형식으로만 응답해라. 백틱( \`\`\`json )이나 기타 텍스트는 일절 출력하지 마라.
 
 출력할 JSON 스키마:
@@ -960,7 +989,7 @@ async function callGeminiApi(
   "productType": "품목 분류 한 단어 (식품 | 주방 | 생활 | 패션 | 가전 | 뷰티 | 인테리어 | 육아용품 중 하나)",
   "seller": "판매처 또는 공구 주최 (예: '쿠팡', '네이버 스마트스토어', '인스타 공구')",
   "purchaseType": "구매 형태 ('공동구매' 또는 '일반구매')",
-  "deadline": "마감일이 본문에 있으면 YYYY-MM-DD 형식으로. 없으면 빈 문자열",
+  "deadline": "마감일이 본문에 있으면 YYYY-MM-DD 형식으로. 연도가 없으면 오늘 날짜의 연도를 쓸 것. 없으면 빈 문자열",
   "price": "가격 정보 (예: '19,900원')",
   "babyAgeMonths": "대상 아기 월령을 숫자 개월로. 범위면 '6-12', 단일이면 '6'. 없으면 빈 문자열 (돌=12, 3세=36)",
   "parentingTopic": "육아 주제 (이유식 | 수면 | 발달 | 놀이 | 마사지 | 건강 | 교육 | 외출 | 용품 중 하나)",
@@ -1046,7 +1075,8 @@ ${rawContent.slice(0, 8000)}`}
         }
 
         try {
-          return { ok: true, data: JSON.parse(cleaned) };
+          const data = JSON.parse(cleaned);
+          return { ok: true, data: normalizeDeadlineYear(data, rawContent) };
         } catch (parseErr) {
           const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
           console.log(`[GeminiAPI] JSON 파싱 실패 (시도 ${attempt}/${maxAttempts}):`, message);
