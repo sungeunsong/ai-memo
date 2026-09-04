@@ -210,6 +210,37 @@ export async function fetchImageMetadataPatch(base64Image: string): Promise<Item
   };
 }
 
+/**
+ * 제목이 내용을 말해주지 않는 경우를 가려냅니다.
+ *
+ * 인스타그램은 og:title이 항상 계정 이름입니다.
+ *   'Instagram의 이진 | 미소맘❥지니 🧞‍♂️여행★티켓'
+ * 이건 무엇에 관한 글인지 전혀 알려주지 않아서, 목록에서 훑을 때 쓸모가 없습니다.
+ */
+function isUninformativeTitle(title: string, sourceUrl: string): boolean {
+  const trimmed = title.trim();
+  if (!trimmed) return true;
+
+  // 인스타그램: 'Instagram의 OOO', 'OOO on Instagram', '... | Instagram'
+  if (/(^instagram|on instagram|\|\s*instagram)/i.test(trimmed)) return true;
+
+  // 노션 기본 문구
+  if (/where teams and agents work together/i.test(trimmed)) return true;
+  if (trimmed.toLowerCase() === 'notion') return true;
+
+  // 호스트명만 있는 경우
+  try {
+    const host = getHostname(sourceUrl);
+    if (host && trimmed.toLowerCase().replace(/\s/g, '') === host.toLowerCase()) return true;
+  } catch {}
+
+  // 한글·영문·숫자가 거의 없이 장식 문자와 이모지로만 이뤄진 제목
+  const meaningful = trimmed.replace(/[^가-힣a-zA-Z0-9]/g, '');
+  if (meaningful.length < 3) return true;
+
+  return false;
+}
+
 function normalizeSourceUrl(input: string) {
   const url = new URL(input);
 
@@ -345,6 +376,14 @@ async function fetchGenericMetadata(sourceUrl: string): Promise<MetadataResult> 
           console.log('[MetadataService] Gemini API를 활용한 실제 AI 요약 및 구조화 파싱에 성공했습니다.');
           summary = aiResult.data.summary;
           parsedStructure = aiResult.data;
+
+          // 페이지 제목이 내용을 말해주지 않을 때만 AI 제목으로 바꿉니다.
+          // 잘 쓰인 기사 제목은 AI가 새로 지은 것보다 대개 낫기 때문에 무조건 덮지 않습니다.
+          const aiTitle =
+            typeof aiResult.data.title === 'string' ? aiResult.data.title.trim() : '';
+          if (aiTitle && isUninformativeTitle(title, sourceUrl)) {
+            title = aiTitle;
+          }
         } else {
           aiError = aiResult.reason;
           // 2. API Key 환경변수가 없거나 에러 발생 시, 로컬 지능형 요약기 및 파서로 폴백

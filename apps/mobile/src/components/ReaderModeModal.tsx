@@ -31,8 +31,53 @@ const SCALE_OPTIONS: FontScaleOption[] = [
   { label: '크게', value: 1.25 },
 ];
 
+/**
+ * 줄바꿈 없이 길게 이어지는 문단을 문장 단위로 끊습니다.
+ *
+ * 인스타그램 캡션은 한 줄에 수백 자가 이어져 벽처럼 보입니다.
+ * 마크다운 문서는 이미 구조가 있으므로 건드리지 않고,
+ * 지나치게 긴 줄에만 적용합니다.
+ *
+ * 문장 끝 부호와 그 뒤에 붙는 이모지까지 한 덩어리로 보고 끊습니다.
+ * 캡션은 '느껴보실 분?🔥' 처럼 부호 다음에 이모지가 오는 경우가 많습니다.
+ */
+const LONG_LINE_THRESHOLD = 140;
+const EMOJI_RUN = '[\\u2190-\\u21FF\\u2300-\\u27BF\\u2B00-\\u2BFF\\uFE0F\\u200D\\uD83C-\\uDBFF\\uDC00-\\uDFFF]';
+
+function breakLongRuns(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => {
+      if (line.length < LONG_LINE_THRESHOLD) return line;
+      // 인용·목록·표·제목 같은 마크다운 구조 줄은 그대로 둡니다.
+      if (/^\s*([#>|]|[-*+]\s|\d+\.\s)/.test(line)) return line;
+
+      const pieces = line
+        .replace(new RegExp(`([.!?…]+\\s*(?:${EMOJI_RUN}+\\s*)?)`, 'g'), '$1\n')
+        .split('\n');
+
+      // '진심..'처럼 짧은 조각이 혼자 한 줄을 차지하면 오히려 읽기 나빠집니다.
+      // 앞 줄에 도로 붙입니다.
+      const merged: string[] = [];
+      for (const piece of pieces) {
+        const trimmed = piece.trim();
+        if (!trimmed) continue;
+        if (merged.length > 0 && trimmed.length < 12) {
+          merged[merged.length - 1] += ` ${trimmed}`;
+        } else {
+          merged.push(trimmed);
+        }
+      }
+
+      return merged.join('\n');
+    })
+    .join('\n');
+}
+
 function sanitizeMarkdown(text: string): string {
   if (!text) return '';
+
+  text = breakLongRuns(text);
 
   const lines = text.split('\n');
   let shouldStop = false;
