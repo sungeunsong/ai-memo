@@ -125,7 +125,15 @@ export async function listRunnableSyncJobsAsync(
   return rows.map(mapSyncJobRow);
 }
 
-export async function markSyncJobProcessingAsync(
+/**
+ * job을 'processing'으로 잡으면서 그 시점의 내용을 함께 읽어옵니다.
+ *
+ * 큐에서 목록을 읽은 뒤 처리를 시작하기 전에 AI 보강이 끝나면 같은 id에
+ * 새 payload가 덮어써집니다. 읽어둔 payload를 그대로 보내면 방금 만들어진
+ * 요약이 아니라 저장 직후의 빈 껍데기를 보내게 됩니다. 상태 전환과 읽기를
+ * 붙여두면 그 사이에 낀 갱신을 놓치지 않습니다.
+ */
+export async function claimSyncJobAsync(
   db: SQLiteDatabase,
   jobId: string,
   attemptCount: number,
@@ -142,6 +150,25 @@ export async function markSyncJobProcessingAsync(
     updatedAt,
     jobId
   );
+
+  const row = await db.getFirstAsync<SyncJobRow>(
+    `SELECT
+      id,
+      item_id,
+      operation,
+      payload_json,
+      status,
+      attempt_count,
+      last_error,
+      next_retry_at,
+      created_at,
+      updated_at
+    FROM sync_jobs
+    WHERE id = ?`,
+    jobId
+  );
+
+  return row ? mapSyncJobRow(row) : null;
 }
 
 export async function markSyncJobPendingAsync(
@@ -160,29 +187,46 @@ export async function markSyncJobPendingAsync(
   );
 }
 
-export async function markSyncJobCompletedAsync(db: SQLiteDatabase, jobId: string, updatedAt: string) {
-  await db.runAsync(
+/**
+ * 처리 중 job이 갱신되지 않았을 때만 완료로 적습니다.
+ *
+ * 원격 호출을 기다리는 동안 같은 id에 새 payload가 큐잉될 수 있습니다.
+ * 그걸 모르고 완료 도장을 찍으면 새 payload는 한 번도 전송되지 않고 사라집니다.
+ * updated_at이 잡아둘 때 그대로여야만 씁니다.
+ */
+export async function markSyncJobCompletedAsync(
+  db: SQLiteDatabase,
+  jobId: string,
+  updatedAt: string,
+  expectedUpdatedAt: string
+) {
+  const result = await db.runAsync(
     `UPDATE sync_jobs
     SET
       status = 'completed',
       last_error = NULL,
       next_retry_at = NULL,
       updated_at = ?
-    WHERE id = ?`,
+    WHERE id = ? AND updated_at = ?`,
     updatedAt,
-    jobId
+    jobId,
+    expectedUpdatedAt
   );
+
+  return result.changes;
 }
 
+/** 완료와 같은 이유로, 잡아둔 뒤 갱신되지 않았을 때만 실패로 적습니다. */
 export async function markSyncJobFailedAsync(
   db: SQLiteDatabase,
   jobId: string,
   attemptCount: number,
   lastError: string,
   nextRetryAt: string | null,
-  updatedAt: string
+  updatedAt: string,
+  expectedUpdatedAt: string
 ) {
-  await db.runAsync(
+  const result = await db.runAsync(
     `UPDATE sync_jobs
     SET
       status = 'failed',
@@ -190,13 +234,16 @@ export async function markSyncJobFailedAsync(
       last_error = ?,
       next_retry_at = ?,
       updated_at = ?
-    WHERE id = ?`,
+    WHERE id = ? AND updated_at = ?`,
     attemptCount,
     lastError,
     nextRetryAt,
     updatedAt,
-    jobId
+    jobId,
+    expectedUpdatedAt
   );
+
+  return result.changes;
 }
 
 /**

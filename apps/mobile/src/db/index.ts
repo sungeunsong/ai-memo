@@ -17,7 +17,7 @@ import {
   markSyncJobCompletedAsync as markSyncJobCompletedInRepositoryAsync,
   markSyncJobFailedAsync as markSyncJobFailedInRepositoryAsync,
   markSyncJobPendingAsync as markSyncJobPendingInRepositoryAsync,
-  markSyncJobProcessingAsync as markSyncJobProcessingInRepositoryAsync,
+  claimSyncJobAsync as claimSyncJobInRepositoryAsync,
   recoverStalledSyncJobsAsync as recoverStalledSyncJobsInRepositoryAsync,
   upsertSyncJobAsync as upsertSyncJobInRepositoryAsync,
 } from '@/db/syncJobsRepository';
@@ -280,23 +280,33 @@ export async function getRunnableSyncJobsAsync(limit: number) {
   return listRunnableSyncJobsInRepositoryAsync(database, new Date().toISOString(), limit);
 }
 
-export async function markSyncJobProcessingAsync(
+/**
+ * job을 처리 중으로 잡고, 그 시점의 내용을 돌려줍니다.
+ * 사이에 아이템이 삭제됐으면 null입니다.
+ */
+export async function claimSyncJobAsync(
   jobId: string,
   attemptCount: number,
   updatedAt: string
-) {
+): Promise<SyncJob | null> {
   if (Platform.OS === 'web') {
     updateWebSyncJob(jobId, {
       status: 'processing',
       attemptCount,
       updatedAt,
     });
-    return;
+    return getWebSyncJobs().find((job) => job.id === jobId) ?? null;
   }
 
+  // withTransactionAsync는 값을 돌려주지 않아 바깥 변수로 받습니다.
+  let claimed: SyncJob | null = null;
   await runWriteAsync((database) =>
-    markSyncJobProcessingInRepositoryAsync(database, jobId, attemptCount, updatedAt)
+    database.withTransactionAsync(async () => {
+      claimed = await claimSyncJobInRepositoryAsync(database, jobId, attemptCount, updatedAt);
+    })
   );
+
+  return claimed;
 }
 
 export async function restoreSyncJobPendingAsync(jobId: string, updatedAt: string) {
@@ -313,8 +323,24 @@ export async function restoreSyncJobPendingAsync(jobId: string, updatedAt: strin
   );
 }
 
-export async function markSyncJobSyncedAsync(jobId: string, itemId: string, updatedAt: string) {
+/**
+ * 동기화 성공을 기록합니다.
+ *
+ * 잡아둔 뒤 job이 갱신됐다면(보강이 끝나 새 payload가 큐잉된 경우) 아무것도 쓰지 않고
+ * false를 돌려줍니다. 그 job은 새 내용으로 다시 전송돼야 합니다.
+ */
+export async function markSyncJobSyncedAsync(
+  jobId: string,
+  itemId: string,
+  updatedAt: string,
+  expectedUpdatedAt: string
+): Promise<boolean> {
   if (Platform.OS === 'web') {
+    const job = getWebSyncJobs().find((entry) => entry.id === jobId);
+    if (!job || job.updatedAt !== expectedUpdatedAt) {
+      return false;
+    }
+
     updateWebItemSyncStatus(itemId, 'synced', updatedAt);
     updateWebSyncJob(jobId, {
       status: 'completed',
@@ -322,26 +348,46 @@ export async function markSyncJobSyncedAsync(jobId: string, itemId: string, upda
       nextRetryAt: null,
       updatedAt,
     });
-    return;
+    return true;
   }
 
+  let applied = false;
   await runWriteAsync((database) =>
     database.withTransactionAsync(async () => {
-      await updateItemSyncStatusInRepositoryAsync(database, itemId, 'synced', updatedAt);
-      await markSyncJobCompletedInRepositoryAsync(database, jobId, updatedAt);
+      // job을 먼저 씁니다. 갱신돼 있으면 아이템 상태도 건드리지 않아야 합니다.
+      const changes = await markSyncJobCompletedInRepositoryAsync(
+        database,
+        jobId,
+        updatedAt,
+        expectedUpdatedAt
+      );
+      applied = changes > 0;
+
+      if (applied) {
+        await updateItemSyncStatusInRepositoryAsync(database, itemId, 'synced', updatedAt);
+      }
     })
   );
+
+  return applied;
 }
 
+/** 완료와 같은 이유로, 잡아둔 뒤 갱신되지 않았을 때만 실패를 기록합니다. */
 export async function failSyncJobAttemptAsync(
   jobId: string,
   itemId: string,
   attemptCount: number,
   lastError: string,
   nextRetryAt: string | null,
-  updatedAt: string
-) {
+  updatedAt: string,
+  expectedUpdatedAt: string
+): Promise<boolean> {
   if (Platform.OS === 'web') {
+    const job = getWebSyncJobs().find((entry) => entry.id === jobId);
+    if (!job || job.updatedAt !== expectedUpdatedAt) {
+      return false;
+    }
+
     updateWebItemSyncStatus(itemId, 'failed', updatedAt);
     updateWebSyncJob(jobId, {
       status: 'failed',
@@ -350,22 +396,30 @@ export async function failSyncJobAttemptAsync(
       nextRetryAt,
       updatedAt,
     });
-    return;
+    return true;
   }
 
+  let applied = false;
   await runWriteAsync((database) =>
     database.withTransactionAsync(async () => {
-      await updateItemSyncStatusInRepositoryAsync(database, itemId, 'failed', updatedAt);
-      await markSyncJobFailedInRepositoryAsync(
+      const changes = await markSyncJobFailedInRepositoryAsync(
         database,
         jobId,
         attemptCount,
         lastError,
         nextRetryAt,
-        updatedAt
+        updatedAt,
+        expectedUpdatedAt
       );
+      applied = changes > 0;
+
+      if (applied) {
+        await updateItemSyncStatusInRepositoryAsync(database, itemId, 'failed', updatedAt);
+      }
     })
   );
+
+  return applied;
 }
 
 /**
