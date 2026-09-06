@@ -199,6 +199,28 @@ export async function markSyncJobFailedAsync(
   );
 }
 
+/**
+ * 앱이 꺼지며 'processing'에 갇힌 job을 다시 실행 대상으로 되돌립니다.
+ * 시도 횟수는 그대로 두어 백오프가 이어지게 합니다.
+ */
+export async function recoverStalledSyncJobsAsync(
+  db: SQLiteDatabase,
+  staleBefore: string,
+  updatedAt: string
+) {
+  const result = await db.runAsync(
+    `UPDATE sync_jobs
+    SET
+      status = 'pending',
+      updated_at = ?
+    WHERE status = 'processing' AND updated_at <= ?`,
+    updatedAt,
+    staleBefore
+  );
+
+  return result.changes;
+}
+
 function mapSyncJobRow(row: SyncJobRow): SyncJob {
   return {
     id: row.id,

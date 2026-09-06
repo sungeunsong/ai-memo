@@ -18,12 +18,14 @@ import {
   markSyncJobFailedAsync as markSyncJobFailedInRepositoryAsync,
   markSyncJobPendingAsync as markSyncJobPendingInRepositoryAsync,
   markSyncJobProcessingAsync as markSyncJobProcessingInRepositoryAsync,
+  recoverStalledSyncJobsAsync as recoverStalledSyncJobsInRepositoryAsync,
   upsertSyncJobAsync as upsertSyncJobInRepositoryAsync,
 } from '@/db/syncJobsRepository';
 import {
   STALLED_ENRICH_MESSAGE,
   STALLED_ENRICH_THRESHOLD_MS,
 } from '@/features/items/staleEnrich';
+import { STALLED_SYNC_JOB_THRESHOLD_MS } from '@/sync/retryPolicy';
 import {
   CreateSyncJobPayload,
   ItemMetadataPatch,
@@ -178,6 +180,27 @@ export async function recoverStalledEnrichAsync(now = Date.now()) {
       STALLED_ENRICH_MESSAGE,
       updatedAt
     )
+  );
+}
+
+/**
+ * 앱이 꺼지며 'processing'에 갇힌 동기화 job을 회수합니다.
+ * 회수한 건수를 돌려줍니다.
+ */
+export async function recoverStalledSyncJobsAsync(now = Date.now()) {
+  const staleBefore = new Date(now - STALLED_SYNC_JOB_THRESHOLD_MS).toISOString();
+  const updatedAt = new Date(now).toISOString();
+
+  if (Platform.OS === 'web') {
+    const stalled = getWebSyncJobs().filter(
+      (job) => job.status === 'processing' && job.updatedAt <= staleBefore
+    );
+    stalled.forEach((job) => updateWebSyncJob(job.id, { status: 'pending', updatedAt }));
+    return stalled.length;
+  }
+
+  return runWriteAsync((database) =>
+    recoverStalledSyncJobsInRepositoryAsync(database, staleBefore, updatedAt)
   );
 }
 

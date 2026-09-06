@@ -7,6 +7,7 @@ import {
   initializeDatabase,
   queueUpsertItemSyncAsync,
   recoverStalledEnrichAsync,
+  recoverStalledSyncJobsAsync,
   saveUrlItemWithSyncJobAsync,
   updateItemMetadataAsync,
   deleteItemAsync,
@@ -97,6 +98,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const recoveredCount = await recoverStalledEnrichAsync();
         if (recoveredCount > 0) {
           console.log(`[Init] 중단된 AI 정리 ${recoveredCount}건을 실패로 회수했습니다.`);
+        }
+
+        // 동기화 job도 같은 이유로 'processing'에 갇힙니다.
+        // 이쪽은 되돌려두면 아래 워커가 곧바로 다시 집어갑니다.
+        const recoveredJobCount = await recoverStalledSyncJobsAsync();
+        if (recoveredJobCount > 0) {
+          console.log(`[Init] 중단된 동기화 ${recoveredJobCount}건을 대기로 되돌렸습니다.`);
         }
 
         const [items, syncQueueSummary] = await Promise.all([

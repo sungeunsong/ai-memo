@@ -10,6 +10,14 @@ export type SyncAdapter = {
   upsertItem: (job: SyncJob) => Promise<SyncAdapterResponse>;
 };
 
+/**
+ * 원격 응답 대기 한계.
+ *
+ * 시한이 없으면 응답이 안 올 때 워커가 job을 'processing'에 둔 채 영원히 매달립니다.
+ * 워커는 한 번에 하나만 돌기 때문에(syncWorkerPromise) 그때부터 동기화 전체가 멈춥니다.
+ */
+const SYNC_REQUEST_TIMEOUT_MS = 20000;
+
 export function getSyncAdapter(): SyncAdapter {
   return {
     async upsertItem(job: SyncJob) {
@@ -25,6 +33,9 @@ export function getSyncAdapter(): SyncAdapter {
         return { kind: 'synced' };
       }
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS);
+
       try {
         const response = await fetch(`${supabaseUrl}/rest/v1/items`, {
           method: 'POST',
@@ -35,6 +46,7 @@ export function getSyncAdapter(): SyncAdapter {
             'Prefer': 'resolution=merge-duplicates',
           },
           body: job.payloadJson,
+          signal: controller.signal,
         });
 
         if (response.ok) {
@@ -59,6 +71,8 @@ export function getSyncAdapter(): SyncAdapter {
           kind: 'retryable_error',
           reason: `원격 데이터베이스 연결 끊김: ${error instanceof Error ? error.message : '네트워크 에러'}`,
         };
+      } finally {
+        clearTimeout(timeoutId);
       }
     },
   };
