@@ -482,9 +482,32 @@ async function enrichSavedItemMetadata(
   ) => void,
   get: () => AppStore
 ) {
-  console.log(`[SyncWorker] 메타데이터 보강을 시작합니다. item: ${itemId}`);
+  console.log(`[Enrich] 메타데이터 보강을 시작합니다. item: ${itemId}`);
+
+  // AI 단계와 저장·큐잉 단계를 나눠서 감쌉니다.
+  // 예전에는 한 try가 셋을 다 덮고 있어서, 동기화 큐 쓰기가 실패하면
+  // 멀쩡히 성공한 요약에 'AI 정리 실패' 도장이 찍혔습니다.
+  // 화면에는 요약이 그대로 보이는데 뱃지만 빨간, 설명할 수 없는 상태가 됐습니다.
+  let patch: ItemMetadataPatch;
   try {
-    const patch = await fetchPatch();
+    patch = await fetchPatch();
+  } catch (error) {
+    // 'failed'를 남기는 건 여기뿐입니다. AI 보강 자체가 실패한 경우입니다.
+    console.error('[Enrich] 메타데이터 보강 실패, 기본 저장 유지:', error);
+    const failurePatch: ItemMetadataPatch = {
+      aiStatus: 'failed',
+      aiError: error instanceof Error ? error.message : String(error),
+      updatedAt: new Date().toISOString(),
+    };
+    await updateItemMetadataAsync(itemId, failurePatch).catch(() => {});
+    set((state) => ({
+      items: state.items.map((item) => applyMetadataPatch(item, itemId, failurePatch)),
+    }));
+    void runSyncWorker(set, get);
+    return;
+  }
+
+  try {
     await updateItemMetadataAsync(itemId, patch);
 
     const nextItems = get().items.map((item) => applyMetadataPatch(item, itemId, patch));
@@ -495,30 +518,7 @@ async function enrichSavedItemMetadata(
     });
 
     if (itemToQueue) {
-      await queueUpsertItemSyncAsync({
-        id: itemToQueue.id,
-        type: itemToQueue.type,
-        sourceUrl: itemToQueue.sourceUrl,
-        rawInput: itemToQueue.rawInput,
-        title: itemToQueue.title,
-        summary: itemToQueue.summary,
-        content: itemToQueue.content,
-        contentText: itemToQueue.contentText,
-        digest: itemToQueue.digest,
-        aiError: itemToQueue.aiError,
-        userCategory: itemToQueue.userCategory,
-        imageUri: itemToQueue.imageUri,
-        userDeadline: itemToQueue.userDeadline,
-        thumbnailUrl: itemToQueue.thumbnailUrl,
-        aiStatus: itemToQueue.aiStatus,
-        syncStatus: 'queued',
-        userNote: itemToQueue.userNote,
-        extractedUrls: itemToQueue.extractedUrls,
-        sourceType: itemToQueue.sourceType,
-        savedFrom: itemToQueue.savedFrom,
-        createdAt: itemToQueue.createdAt,
-        updatedAt: itemToQueue.updatedAt,
-      });
+      await queueUpsertItemSyncAsync({ ...itemToQueue, syncStatus: 'queued' });
 
       set((state) => ({
         items: state.items.map((item) =>
@@ -533,18 +533,15 @@ async function enrichSavedItemMetadata(
       }));
     }
   } catch (error) {
-    console.error(`[SyncWorker] 메타데이터 보강 실패, 기본 저장 유지:`, error);
-    const patch: ItemMetadataPatch = {
-      aiStatus: 'failed',
-      aiError: error instanceof Error ? error.message : String(error),
-      updatedAt: new Date().toISOString(),
-    };
-    await updateItemMetadataAsync(itemId, patch).catch(() => {});
-    set((state) => ({
-      items: state.items.map((item) => applyMetadataPatch(item, itemId, patch)),
-    }));
+    // 저장이나 큐잉이 실패한 경우입니다. AI는 성공했으므로 aiStatus는 건드리지 않습니다.
+    //
+    // 저장 전에 실패했다면 아이템은 'pending'으로 남고, 다음 실행 때
+    // recoverStalledEnrichAsync가 사유를 적어 'failed'로 회수합니다.
+    // 저장은 됐는데 큐잉만 실패했다면 화면과 DB는 이미 맞고, 저장 시점에 만들어둔
+    // 큐 항목이 남아 있어 동기화는 (조금 오래된 payload로) 계속 진행됩니다.
+    console.error('[Enrich] 보강 결과 저장/큐잉 실패. AI 결과는 유지합니다:', error);
   } finally {
-    console.log('[SyncWorker] 메타데이터 보강 단계 완료. 동기화 워커를 구동합니다.');
+    console.log('[Enrich] 메타데이터 보강 단계 완료. 동기화 워커를 구동합니다.');
     void runSyncWorker(set, get);
   }
 }
