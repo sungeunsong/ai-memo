@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { Alert } from 'react-native';
 
 import {
+  getNextSyncRetryAtAsync,
   getSavedItemsAsync,
   getSyncQueueSummaryAsync,
   initializeDatabase,
@@ -26,11 +27,30 @@ import {
 import {
   ItemMetadataPatch,
   SavedItem,
+  SyncWorkerResult,
 } from '@/features/items/types';
 import { runSyncQueueOnce } from '@/sync/worker';
 
 let initializationPromise: Promise<void> | null = null;
 let syncWorkerPromise: Promise<void> | null = null;
+let syncWakeupTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * 남은 일감을 이어서 처리하기까지의 간격.
+ * 워커는 한 번에 5건만 처리하므로 큐가 길면 여러 번 나눠 돕니다.
+ */
+const SYNC_CONTINUE_DELAY_MS = 1000;
+
+/** 동기화가 미뤄졌을 때(주로 네트워크) 다시 시도하기까지의 간격. */
+const SYNC_DEFERRED_DELAY_MS = 60 * 1000;
+
+/** zustand의 set. 함수 밖으로 뺀 헬퍼들에 그대로 넘겨줍니다. */
+type SetAppState = (
+  partial:
+    | Partial<AppStore>
+    | AppStore
+    | ((state: AppStore) => Partial<AppStore> | AppStore)
+) => void;
 
 type SaveUrlResult = {
   ok: boolean;
@@ -58,6 +78,7 @@ type AppStore = {
   setItemCategory: (itemId: string, category: string | null) => Promise<void>;
   setItemDeadline: (itemId: string, deadline: string | null) => Promise<void>;
   deleteItem: (itemId: string) => Promise<void>;
+  resumeSync: () => Promise<void>;
   clearError: () => void;
 };
 
@@ -446,6 +467,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }));
     }
   },
+  /**
+   * 밀린 동기화를 이어서 돌립니다.
+   *
+   * 앱이 백그라운드에 있는 동안에는 재시도 타이머가 미뤄지거나 죽습니다.
+   * 돌아왔을 때 한 번 깨워주지 않으면, 백오프가 잡아둔 시각이 지났는데도
+   * 다음 저장 때까지 아무 일도 일어나지 않습니다.
+   */
+  async resumeSync() {
+    if (!get().isReady) {
+      return;
+    }
+
+    await runSyncWorker(set, get);
+  },
   clearError() {
     set({
       errorMessage: null,
@@ -482,12 +517,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 async function enrichSavedItemMetadata(
   itemId: string,
   fetchPatch: () => Promise<ItemMetadataPatch>,
-  set: (
-    partial:
-      | Partial<AppStore>
-      | AppStore
-      | ((state: AppStore) => Partial<AppStore> | AppStore)
-  ) => void,
+  set: SetAppState,
   get: () => AppStore
 ) {
   console.log(`[Enrich] 메타데이터 보강을 시작합니다. item: ${itemId}`);
@@ -623,13 +653,65 @@ function buildItemSyncJob(item: SavedItem) {
 
 
 
+/**
+ * 다음 워커 실행을 예약합니다.
+ *
+ * computeNextRetryAt이 30초에서 2시간까지 재시도 시각을 잡아두는데, 정작 그때
+ * 워커를 깨우는 것이 없었습니다. 실행 계기가 전부 사용자 동작(저장·메모 수정·앱 시작)
+ * 뿐이라, 실패한 항목은 다음 저장을 할 때까지 그대로 멈춰 있었습니다.
+ */
+async function scheduleNextSyncRun(
+  result: SyncWorkerResult,
+  pendingCount: number,
+  set: SetAppState,
+  get: () => AppStore
+) {
+  if (result.kind === 'deferred') {
+    scheduleSyncWakeup(SYNC_DEFERRED_DELAY_MS, set, get);
+    return;
+  }
+
+  // 한 번에 5건까지만 처리하므로 큐가 길면 남은 것이 있습니다.
+  // 처리 중 갱신돼 결과를 적지 않은 job도 여기로 잡힙니다.
+  //
+  // 'idle'일 때는 이어가지 않습니다. 실행 대상이 없는데도 대기 건수가 남아 있다는 건
+  // 앱이 꺼지며 'processing'에 갇힌 job이 섞여 있다는 뜻입니다(큐 요약은 그것도 대기로 셉니다).
+  // 그걸 보고 1초마다 깨우면 아무 일도 못 하면서 영원히 돕니다. 그 job은 다음 실행 때 회수됩니다.
+  if (result.kind === 'completed' && pendingCount > 0) {
+    scheduleSyncWakeup(SYNC_CONTINUE_DELAY_MS, set, get);
+    return;
+  }
+
+  const nextRetryAt = await getNextSyncRetryAtAsync().catch(() => null);
+  if (!nextRetryAt) {
+    return;
+  }
+
+  const target = Date.parse(nextRetryAt);
+  if (Number.isNaN(target)) {
+    return;
+  }
+
+  scheduleSyncWakeup(Math.max(SYNC_CONTINUE_DELAY_MS, target - Date.now()), set, get);
+}
+
+function scheduleSyncWakeup(
+  delayMs: number,
+  set: SetAppState,
+  get: () => AppStore
+) {
+  if (syncWakeupTimer) {
+    clearTimeout(syncWakeupTimer);
+  }
+
+  syncWakeupTimer = setTimeout(() => {
+    syncWakeupTimer = null;
+    void runSyncWorker(set, get);
+  }, delayMs);
+}
+
 async function runSyncWorker(
-  set: (
-    partial:
-      | Partial<AppStore>
-      | AppStore
-      | ((state: AppStore) => Partial<AppStore> | AppStore)
-  ) => void,
+  set: SetAppState,
   get: () => AppStore
 ) {
   if (syncWorkerPromise) {
@@ -666,6 +748,8 @@ async function runSyncWorker(
               : state.syncWorkerMessage,
         isSyncWorkerRunning: false,
       }));
+
+      await scheduleNextSyncRun(result, summary.pendingCount, set, get);
     } catch (error) {
       console.error('[SyncWorker] 동기화 수행 중 예외 에러 발생:', error);
       const [items, summary] = await Promise.all([

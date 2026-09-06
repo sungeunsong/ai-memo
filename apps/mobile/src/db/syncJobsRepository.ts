@@ -171,6 +171,21 @@ export async function claimSyncJobAsync(
   return row ? mapSyncJobRow(row) : null;
 }
 
+/**
+ * 아직 때가 되지 않은 재시도 중 가장 이른 시각을 돌려줍니다.
+ * 그 시각에 맞춰 워커를 깨우기 위한 값입니다.
+ */
+export async function getNextSyncRetryAtAsync(db: SQLiteDatabase, nowIso: string) {
+  const row = await db.getFirstAsync<{ next_retry_at: string | null }>(
+    `SELECT MIN(next_retry_at) as next_retry_at
+    FROM sync_jobs
+    WHERE status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at > ?`,
+    nowIso
+  );
+
+  return row?.next_retry_at ?? null;
+}
+
 export async function markSyncJobPendingAsync(
   db: SQLiteDatabase,
   jobId: string,

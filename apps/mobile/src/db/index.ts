@@ -11,6 +11,7 @@ import {
   deleteItemAsync as deleteItemInRepositoryAsync,
 } from '@/db/itemsRepository';
 import {
+  getNextSyncRetryAtAsync as getNextSyncRetryAtInRepositoryAsync,
   getSyncQueueSummaryAsync as getSyncQueueSummaryInRepositoryAsync,
   insertSyncJobAsync,
   listRunnableSyncJobsAsync as listRunnableSyncJobsInRepositoryAsync,
@@ -269,6 +270,26 @@ export async function getSyncQueueSummaryAsync() {
 
   const database = await getDatabaseAsync();
   return getSyncQueueSummaryInRepositoryAsync(database);
+}
+
+/**
+ * 아직 때가 되지 않은 재시도 중 가장 이른 시각. 없으면 null입니다.
+ * 백오프가 잡아둔 시각에 맞춰 워커를 깨우는 데 씁니다.
+ */
+export async function getNextSyncRetryAtAsync(now = Date.now()) {
+  const nowIso = new Date(now).toISOString();
+
+  if (Platform.OS === 'web') {
+    const upcoming = getWebSyncJobs()
+      .filter((job) => job.status === 'failed' && job.nextRetryAt && job.nextRetryAt > nowIso)
+      .map((job) => job.nextRetryAt as string)
+      .sort();
+
+    return upcoming[0] ?? null;
+  }
+
+  const database = await getDatabaseAsync();
+  return getNextSyncRetryAtInRepositoryAsync(database, nowIso);
 }
 
 export async function getRunnableSyncJobsAsync(limit: number) {
