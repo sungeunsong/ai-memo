@@ -42,9 +42,6 @@ export async function initializeDatabase() {
     return null;
   }
 
-  const database = await getDatabaseAsync();
-  await database.execAsync(createTablesStatement);
-
   // 마이그레이션: 기존 테이블에 신규 컬럼이 없을 경우 추가
   const migrations = [
     'ALTER TABLE items ADD COLUMN user_note TEXT;',
@@ -60,15 +57,19 @@ export async function initializeDatabase() {
     'ALTER TABLE items ADD COLUMN user_deadline TEXT;'
   ];
 
-  for (const query of migrations) {
-    try {
-      await database.execAsync(query);
-    } catch {
-      // 이미 컬럼이 존재할 경우 발생하는 에러는 안전하게 무시합니다.
-    }
-  }
+  return runWriteAsync(async (database) => {
+    await database.execAsync(createTablesStatement);
 
-  return database;
+    for (const query of migrations) {
+      try {
+        await database.execAsync(query);
+      } catch {
+        // 이미 컬럼이 존재할 경우 발생하는 에러는 안전하게 무시합니다.
+      }
+    }
+
+    return database;
+  });
 }
 
 const WEB_SETTINGS_KEY_PREFIX = 'ai-memo.setting.';
@@ -104,13 +105,14 @@ export async function setSettingAsync(key: string, value: string): Promise<void>
     return;
   }
 
-  const database = await getDatabaseAsync();
-  await database.runAsync(
-    `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    key,
-    value,
-    new Date().toISOString()
+  await runWriteAsync((database) =>
+    database.runAsync(
+      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      key,
+      value,
+      new Date().toISOString()
+    )
   );
 }
 
@@ -129,8 +131,7 @@ export async function saveUrlItemAsync(item: SaveUrlPayload) {
     return item;
   }
 
-  const database = await getDatabaseAsync();
-  await insertUrlItemAsync(database, item);
+  await runWriteAsync((database) => insertUrlItemAsync(database, item));
   return item;
 }
 
@@ -140,8 +141,7 @@ export async function deleteItemAsync(itemId: string) {
     return;
   }
 
-  const database = await getDatabaseAsync();
-  await deleteItemInRepositoryAsync(database, itemId);
+  await runWriteAsync((database) => deleteItemInRepositoryAsync(database, itemId));
 }
 
 export async function saveUrlItemWithSyncJobAsync(item: SaveUrlPayload, job: CreateSyncJobPayload) {
@@ -151,11 +151,12 @@ export async function saveUrlItemWithSyncJobAsync(item: SaveUrlPayload, job: Cre
     return item;
   }
 
-  const database = await getDatabaseAsync();
-  await database.withTransactionAsync(async () => {
-    await insertUrlItemAsync(database, item);
-    await insertSyncJobAsync(database, job);
-  });
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      await insertUrlItemAsync(database, item);
+      await insertSyncJobAsync(database, job);
+    })
+  );
 
   return item;
 }
@@ -169,11 +170,12 @@ export async function queueUpsertItemSyncAsync(item: SavedItem) {
     return;
   }
 
-  const database = await getDatabaseAsync();
-  await database.withTransactionAsync(async () => {
-    await updateItemSyncStatusInRepositoryAsync(database, item.id, 'queued', item.updatedAt);
-    await upsertSyncJobInRepositoryAsync(database, syncJob);
-  });
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      await updateItemSyncStatusInRepositoryAsync(database, item.id, 'queued', item.updatedAt);
+      await upsertSyncJobInRepositoryAsync(database, syncJob);
+    })
+  );
 }
 
 export async function updateItemMetadataAsync(itemId: string, patch: ItemMetadataPatch) {
@@ -182,8 +184,7 @@ export async function updateItemMetadataAsync(itemId: string, patch: ItemMetadat
     return;
   }
 
-  const database = await getDatabaseAsync();
-  await updateItemMetadataInRepositoryAsync(database, itemId, patch);
+  await runWriteAsync((database) => updateItemMetadataInRepositoryAsync(database, itemId, patch));
 }
 
 export async function updateItemSyncStatusAsync(
@@ -196,8 +197,9 @@ export async function updateItemSyncStatusAsync(
     return;
   }
 
-  const database = await getDatabaseAsync();
-  await updateItemSyncStatusInRepositoryAsync(database, itemId, syncStatus, updatedAt);
+  await runWriteAsync((database) =>
+    updateItemSyncStatusInRepositoryAsync(database, itemId, syncStatus, updatedAt)
+  );
 }
 
 export async function getSyncQueueSummaryAsync() {
@@ -232,8 +234,9 @@ export async function markSyncJobProcessingAsync(
     return;
   }
 
-  const database = await getDatabaseAsync();
-  await markSyncJobProcessingInRepositoryAsync(database, jobId, attemptCount, updatedAt);
+  await runWriteAsync((database) =>
+    markSyncJobProcessingInRepositoryAsync(database, jobId, attemptCount, updatedAt)
+  );
 }
 
 export async function restoreSyncJobPendingAsync(jobId: string, updatedAt: string) {
@@ -245,8 +248,9 @@ export async function restoreSyncJobPendingAsync(jobId: string, updatedAt: strin
     return;
   }
 
-  const database = await getDatabaseAsync();
-  await markSyncJobPendingInRepositoryAsync(database, jobId, updatedAt);
+  await runWriteAsync((database) =>
+    markSyncJobPendingInRepositoryAsync(database, jobId, updatedAt)
+  );
 }
 
 export async function markSyncJobSyncedAsync(jobId: string, itemId: string, updatedAt: string) {
@@ -261,11 +265,12 @@ export async function markSyncJobSyncedAsync(jobId: string, itemId: string, upda
     return;
   }
 
-  const database = await getDatabaseAsync();
-  await database.withTransactionAsync(async () => {
-    await updateItemSyncStatusInRepositoryAsync(database, itemId, 'synced', updatedAt);
-    await markSyncJobCompletedInRepositoryAsync(database, jobId, updatedAt);
-  });
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      await updateItemSyncStatusInRepositoryAsync(database, itemId, 'synced', updatedAt);
+      await markSyncJobCompletedInRepositoryAsync(database, jobId, updatedAt);
+    })
+  );
 }
 
 export async function failSyncJobAttemptAsync(
@@ -288,18 +293,49 @@ export async function failSyncJobAttemptAsync(
     return;
   }
 
-  const database = await getDatabaseAsync();
-  await database.withTransactionAsync(async () => {
-    await updateItemSyncStatusInRepositoryAsync(database, itemId, 'failed', updatedAt);
-    await markSyncJobFailedInRepositoryAsync(
-      database,
-      jobId,
-      attemptCount,
-      lastError,
-      nextRetryAt,
-      updatedAt
-    );
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      await updateItemSyncStatusInRepositoryAsync(database, itemId, 'failed', updatedAt);
+      await markSyncJobFailedInRepositoryAsync(
+        database,
+        jobId,
+        attemptCount,
+        lastError,
+        nextRetryAt,
+        updatedAt
+      );
+    })
+  );
+}
+
+/**
+ * DB 쓰기를 한 줄로 세웁니다.
+ *
+ * expo-sqlite의 withTransactionAsync는 배타적이지 않습니다. 커넥션 하나를 공유하는데
+ * 저장/보강/동기화 워커가 각자 BEGIN을 걸면, 뒤늦은 쪽의 BEGIN이 실패하고
+ * 그 catch가 실행하는 ROLLBACK이 앞선 트랜잭션까지 되돌려 버립니다.
+ * 그러면 앞선 쪽은 COMMIT에서 실패하고, 이어지는 ROLLBACK마저
+ * 'cannot rollback - no transaction is active'로 터집니다. 양쪽 쓰기가 모두 사라집니다.
+ *
+ * 읽기는 BEGIN을 걸지 않아 이 문제를 일으키지 않으므로 줄을 세우지 않습니다.
+ * 목록 조회가 쓰기 뒤에서 기다리면 화면만 느려집니다.
+ */
+let writeLock: Promise<void> = Promise.resolve();
+
+function runWriteAsync<T>(task: (database: SQLiteDatabase) => Promise<T>): Promise<T> {
+  const run = writeLock.then(async () => {
+    const database = await getDatabaseAsync();
+    return task(database);
   });
+
+  // 앞 작업이 실패해도 뒤 작업은 실행돼야 하므로 체인에서는 에러를 흘려보냅니다.
+  // 에러 자체는 run을 통해 호출자에게 그대로 전달됩니다.
+  writeLock = run.then(
+    () => undefined,
+    () => undefined
+  );
+
+  return run;
 }
 
 async function getDatabaseAsync() {
