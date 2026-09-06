@@ -6,6 +6,7 @@ import {
   getSyncQueueSummaryAsync,
   initializeDatabase,
   queueUpsertItemSyncAsync,
+  recoverStalledEnrichAsync,
   saveUrlItemWithSyncJobAsync,
   updateItemMetadataAsync,
   deleteItemAsync,
@@ -89,6 +90,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     initializationPromise = (async () => {
       try {
         await initializeDatabase();
+
+        // 보강은 메모리에서만 돌기 때문에 앱이 꺼지면 그대로 사라지는데,
+        // DB에 적어둔 'pending'은 남습니다. 목록을 읽기 전에 회수해야
+        // '요약 정리 중'이 영원히 도는 항목이 화면에 다시 오르지 않습니다.
+        const recoveredCount = await recoverStalledEnrichAsync();
+        if (recoveredCount > 0) {
+          console.log(`[Init] 중단된 AI 정리 ${recoveredCount}건을 실패로 회수했습니다.`);
+        }
+
         const [items, syncQueueSummary] = await Promise.all([
           getSavedItemsAsync(),
           getSyncQueueSummaryAsync(),

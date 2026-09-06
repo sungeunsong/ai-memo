@@ -5,6 +5,7 @@ import { createTablesStatement } from '@/db/schema';
 import {
   insertUrlItemAsync,
   listItemsAsync,
+  markStalledEnrichAsFailedAsync as markStalledEnrichAsFailedInRepositoryAsync,
   updateItemMetadataAsync as updateItemMetadataInRepositoryAsync,
   updateItemSyncStatusAsync as updateItemSyncStatusInRepositoryAsync,
   deleteItemAsync as deleteItemInRepositoryAsync,
@@ -19,6 +20,10 @@ import {
   markSyncJobProcessingAsync as markSyncJobProcessingInRepositoryAsync,
   upsertSyncJobAsync as upsertSyncJobInRepositoryAsync,
 } from '@/db/syncJobsRepository';
+import {
+  STALLED_ENRICH_MESSAGE,
+  STALLED_ENRICH_THRESHOLD_MS,
+} from '@/features/items/staleEnrich';
 import {
   CreateSyncJobPayload,
   ItemMetadataPatch,
@@ -142,6 +147,38 @@ export async function deleteItemAsync(itemId: string) {
   }
 
   await runWriteAsync((database) => deleteItemInRepositoryAsync(database, itemId));
+}
+
+/**
+ * 앱이 꺼지면서 중단된 AI 보강을 실패로 회수합니다.
+ * 회수한 건수를 돌려줍니다.
+ */
+export async function recoverStalledEnrichAsync(now = Date.now()) {
+  const staleBefore = new Date(now - STALLED_ENRICH_THRESHOLD_MS).toISOString();
+  const updatedAt = new Date(now).toISOString();
+
+  if (Platform.OS === 'web') {
+    const stalled = getWebItems().filter(
+      (item) => item.aiStatus === 'pending' && item.updatedAt <= staleBefore
+    );
+    stalled.forEach((item) =>
+      updateWebItem(item.id, {
+        aiStatus: 'failed',
+        aiError: STALLED_ENRICH_MESSAGE,
+        updatedAt,
+      })
+    );
+    return stalled.length;
+  }
+
+  return runWriteAsync((database) =>
+    markStalledEnrichAsFailedInRepositoryAsync(
+      database,
+      staleBefore,
+      STALLED_ENRICH_MESSAGE,
+      updatedAt
+    )
+  );
 }
 
 export async function saveUrlItemWithSyncJobAsync(item: SaveUrlPayload, job: CreateSyncJobPayload) {

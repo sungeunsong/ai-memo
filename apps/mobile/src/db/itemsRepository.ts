@@ -160,6 +160,31 @@ export async function updateItemSyncStatusAsync(
   );
 }
 
+/**
+ * 끊긴 AI 보강을 실패로 회수합니다.
+ * 진행 중인 보강까지 건드리지 않도록 staleBefore보다 오래된 것만 고릅니다.
+ */
+export async function markStalledEnrichAsFailedAsync(
+  db: SQLiteDatabase,
+  staleBefore: string,
+  aiError: string,
+  updatedAt: string
+) {
+  const result = await db.runAsync(
+    `UPDATE items
+    SET
+      ai_status = 'failed',
+      ai_error = ?,
+      updated_at = ?
+    WHERE ai_status = 'pending' AND updated_at <= ?`,
+    aiError,
+    updatedAt,
+    staleBefore
+  );
+
+  return result.changes;
+}
+
 export async function deleteItemAsync(
   db: SQLiteDatabase,
   itemId: string

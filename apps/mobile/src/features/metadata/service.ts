@@ -571,11 +571,17 @@ async function fetchHtmlMetadata(sourceUrl: string) {
   };
 }
 
-async function fetchWithTimeout(input: string, init?: RequestInit) {
+async function fetchWithTimeout(
+  input: string,
+  init?: RequestInit,
+  /**
+   * Jina AI Reader 등 중량급 헤드리스 브라우저 렌더링(노션 로드 포함)을 고려하여
+   * 네트워크 타임아웃 한계를 5초에서 20초로 넉넉하게 잡았습니다.
+   */
+  timeoutMs = 20000
+) {
   const controller = new AbortController();
-  // Jina AI Reader 등 중량급 헤드리스 브라우저 렌더링(노션 로드 포함)을 고려하여
-  // 네트워크 타임아웃 한계를 5초에서 20초로 넉넉하게 늘립니다.
-  const timeoutId = setTimeout(() => controller.abort(), 20000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     return await fetch(input, {
@@ -965,6 +971,9 @@ const RESPONSE_SCHEMA = {
   required: ['title', 'summary', 'detailedAnalysis', 'category'],
 };
 
+/** Gemini 응답 대기 한계. 재시도 3회를 감안해도 보강 한 건이 2분을 넘지 않습니다. */
+const GEMINI_TIMEOUT_MS = 30000;
+
 async function callGeminiApi(
   title: string,
   rawContent: string,
@@ -1031,7 +1040,9 @@ ${rawContent.slice(0, 8000)}`}
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-      const response = await fetch(url, {
+      // 타임아웃 없이 부르면 응답이 안 올 때 보강이 영원히 매달립니다.
+      // 그러면 아이템은 '요약 정리 중'에 갇히고, 재분석 버튼도 눌리지 않습니다.
+      const response = await fetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1052,8 +1063,8 @@ ${rawContent.slice(0, 8000)}`}
             // 소모돼 무료 할당량을 빠르게 갉아먹습니다. 이 작업은 추출/요약이라 필요 없습니다.
             thinkingConfig: { thinkingBudget: 0 },
           }
-        })
-      });
+        }),
+      }, GEMINI_TIMEOUT_MS);
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => '');

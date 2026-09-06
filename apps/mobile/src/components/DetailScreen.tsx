@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 
 import { SavedItem } from '@/features/items/types';
+import { isEnrichStalled } from '@/features/items/staleEnrich';
 import { StatusPills } from '@/components/StatusBadges';
 import { useAppStore } from '@/store';
 import { getHostname } from '@/features/items/fallback';
@@ -161,6 +162,10 @@ export function DetailContent({
    * 실패했으면 정리본 자리를 비우고, 아래 실패 사유 박스가 이유를 말하게 합니다.
    */
   const aiFailed = selectedItem.aiStatus === 'failed';
+
+  // 'pending'을 곧 '진행 중'으로 읽으면, 앱이 꺼져 끊긴 보강도 진행 중으로 보입니다.
+  // 그 상태에서 재분석까지 막으면 되살릴 방법이 사라집니다.
+  const isEnriching = selectedItem.aiStatus === 'pending' && !isEnrichStalled(selectedItem);
   const summaryBody: string = (
     selectedItem.digest ||
     structured?.detailedAnalysis ||
@@ -320,17 +325,17 @@ export function DetailContent({
         <View style={styles.summaryHeader}>
           <Text style={styles.summaryTitle}>✨ AI 요약</Text>
           <Pressable
-            disabled={isSaving || selectedItem.aiStatus === 'pending'}
+            disabled={isSaving || isEnriching}
             onPress={async () => {
               await retryEnrichMetadata(selectedItem.id);
               setToastMessage('AI 분석을 다시 요청했습니다.');
             }}
             style={({ pressed }) => [
               styles.reanalyzeBtn,
-              (pressed || isSaving || selectedItem.aiStatus === 'pending') && { opacity: 0.5 },
+              (pressed || isSaving || isEnriching) && { opacity: 0.5 },
             ]}
           >
-            {isSaving || selectedItem.aiStatus === 'pending' ? (
+            {isSaving || isEnriching ? (
               <ActivityIndicator size="small" color={palette.accentText} />
             ) : (
               <Text style={styles.reanalyzeBtnText}>재분석 🧪</Text>
