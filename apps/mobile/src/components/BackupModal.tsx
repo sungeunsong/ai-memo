@@ -17,6 +17,7 @@ import {
   importBackupAsync,
   listBackupCandidatesAsync,
 } from '@/features/backup';
+import { ResultToast, ResultToastData } from '@/components/ResultToast';
 import { Palette } from '@/theme/palette';
 import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
@@ -43,7 +44,9 @@ export function BackupModal({ visible, itemCount, onClose, onImported }: Props) 
 
   const [includeImages, setIncludeImages] = useState(false);
   const [busy, setBusy] = useState<'export' | 'import' | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<ResultToastData | null>(null);
+  /** 결과가 아닌 안내(파일이 없다 등). 이건 가운데를 가릴 만한 일이 아닙니다. */
+  const [hint, setHint] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<PickedFile[] | null>(null);
 
   useBackHandler(visible, onClose);
@@ -52,17 +55,28 @@ export function BackupModal({ visible, itemCount, onClose, onImported }: Props) 
 
   async function handleExport() {
     setBusy('export');
-    setMessage(null);
+    setHint(null);
     try {
       const result = await exportBackupAsync(includeImages);
-      setMessage(
-        result.kind === 'cancelled'
-          ? '내보내기를 취소했습니다.'
-          : `${result.fileName}.json 으로 ${result.itemCount}건을 저장했습니다.` +
-              (result.imageCount > 0 ? ` (이미지 ${result.imageCount}장 포함)` : '')
-      );
+
+      // 취소는 사용자가 스스로 한 일입니다. 굳이 가운데를 가려 알릴 것이 아닙니다.
+      if (result.kind === 'cancelled') return;
+
+      setToast({
+        tone: 'success',
+        icon: '📦',
+        title: `${result.itemCount}건을 내보냈습니다`,
+        detail:
+          `${result.fileName}.json` +
+          (result.imageCount > 0 ? `\n이미지 ${result.imageCount}장 포함` : ''),
+      });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '내보내기에 실패했습니다.');
+      setToast({
+        tone: 'error',
+        icon: '⚠️',
+        title: '내보내지 못했습니다',
+        detail: error instanceof Error ? error.message : undefined,
+      });
     } finally {
       setBusy(null);
     }
@@ -70,19 +84,22 @@ export function BackupModal({ visible, itemCount, onClose, onImported }: Props) 
 
   async function handlePickFolder() {
     setBusy('import');
-    setMessage(null);
+    setHint(null);
     try {
       const files = await listBackupCandidatesAsync();
-      if (files === null) {
-        setMessage('가져오기를 취소했습니다.');
-        return;
-      }
+      if (files === null) return;
+
       setCandidates(files);
       if (files.length === 0) {
-        setMessage('그 폴더에 백업 파일(.json)이 없습니다.');
+        setHint('그 폴더에 백업 파일(.json)이 없습니다.');
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '폴더를 읽지 못했습니다.');
+      setToast({
+        tone: 'error',
+        icon: '⚠️',
+        title: '폴더를 읽지 못했습니다',
+        detail: error instanceof Error ? error.message : undefined,
+      });
     } finally {
       setBusy(null);
     }
@@ -90,19 +107,32 @@ export function BackupModal({ visible, itemCount, onClose, onImported }: Props) 
 
   async function handleImport(file: PickedFile) {
     setBusy('import');
-    setMessage(null);
+    setHint(null);
     try {
       const result = await importBackupAsync(file.uri);
-      if (result.kind === 'imported') {
-        setCandidates(null);
-        setMessage(
-          `새로 ${result.added}건, 갱신 ${result.updated}건을 가져왔습니다.` +
-            (result.skipped > 0 ? ` ${result.skipped}건은 이미 최신이라 두었습니다.` : '')
-        );
-        onImported();
-      }
+      if (result.kind !== 'imported') return;
+
+      setCandidates(null);
+      onImported();
+
+      const changed = result.added + result.updated;
+      setToast({
+        tone: 'success',
+        icon: changed > 0 ? '📥' : '👌',
+        title: changed > 0 ? `${changed}건을 가져왔습니다` : '이미 모두 최신입니다',
+        detail:
+          changed > 0
+            ? `새로 ${result.added}건 · 갱신 ${result.updated}건` +
+              (result.skipped > 0 ? `\n${result.skipped}건은 지금 것이 최신이라 두었습니다` : '')
+            : `${result.skipped}건 모두 지금 것이 더 최신입니다`,
+      });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '가져오기에 실패했습니다.');
+      setToast({
+        tone: 'error',
+        icon: '⚠️',
+        title: '가져오지 못했습니다',
+        detail: error instanceof Error ? error.message : undefined,
+      });
     } finally {
       setBusy(null);
     }
@@ -188,9 +218,11 @@ export function BackupModal({ visible, itemCount, onClose, onImported }: Props) 
               </View>
             ) : null}
 
-            {message ? <Text style={styles.message}>{message}</Text> : null}
+            {hint ? <Text style={styles.message}>{hint}</Text> : null}
           </ScrollView>
         </View>
+
+        <ResultToast data={toast} onDismiss={() => setToast(null)} />
       </View>
     </Modal>
   );

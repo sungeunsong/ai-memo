@@ -4,3 +4,4 @@ export { CaptureModal, CaptureFloatingButton } from './CaptureModal';
 export { DetailScreen, DetailContent } from './DetailScreen';
 export { StatusBadge, StatusPills } from './StatusBadges';
 export { BackupModal } from './BackupModal';
+export { ResultToast } from './ResultToast';
