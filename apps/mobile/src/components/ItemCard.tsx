@@ -3,6 +3,7 @@ import { Image, StyleSheet, Text, View } from 'react-native';
 import { SavedItem } from '@/features/items/types';
 import { StatusPills } from '@/components/StatusBadges';
 import {
+  getItemTitle,
   getItemSourceLabel,
   getSourceTheme,
   describeSavedItemShape,
@@ -23,14 +24,13 @@ export function ItemCard({ item }: { item: SavedItem }) {
     item.sourceType === 'instagram';
 
   // 인스타 계열이면서 제목이 단순 플랫폼명이고 사용자의 메모가 있다면, 메모를 제목으로 승격시킵니다.
+  const title = getItemTitle(item);
   const displayTitle =
-    isInstagram && item.userNote && item.title === 'Instagram'
-      ? item.userNote
-      : item.title;
+    isInstagram && item.userNote && title === 'Instagram' ? item.userNote : title;
 
   // 퀵 한 줄 메모가 존재하면 요약보다 우선적으로 노출하며, 제목으로 승격된 경우에는 분류 정보를 표시합니다.
   const displaySummary =
-    isInstagram && item.userNote && item.title === 'Instagram'
+    isInstagram && item.userNote && title === 'Instagram'
       ? `${theme.label} 링크`
       : item.userNote
       ? `✍️ ${item.userNote}`

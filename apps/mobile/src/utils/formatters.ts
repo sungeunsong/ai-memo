@@ -386,6 +386,16 @@ function matchBodyText(text: string | null | undefined, query: string): boolean 
  * (여행으로 분류된 키즈펜션도 육아 탭에 보여야 하는 식)
  * 조합 조건 역시 features/facets가 이 결과 위에 AND로 얹습니다.
  */
+/**
+ * 화면에 보일 제목.
+ *
+ * 사용자가 고친 제목이 있으면 그쪽이 우선입니다. AI 제목은 그대로 두기 때문에
+ * 재분석을 돌려도 사용자가 고친 것이 덮이지 않습니다.
+ */
+export function getItemTitle(item: SavedItem): string {
+  return item.userTitle?.trim() || item.title;
+}
+
 export function filterItems(items: SavedItem[], searchQuery: string): SavedItem[] {
   return items.filter((item) => {
     // 검색어 필터
@@ -393,7 +403,11 @@ export function filterItems(items: SavedItem[], searchQuery: string): SavedItem[
     const query = searchQuery.trim();
 
     // 제목, 메모 검색
-    if (hangulMatch(item.title, query) || (item.userNote && hangulMatch(item.userNote, query))) {
+    // 고친 제목으로도 찾을 수 있어야 합니다. 사용자가 기억하는 건 그쪽입니다.
+    if (
+      hangulMatch(getItemTitle(item), query) ||
+      (item.userNote && hangulMatch(item.userNote, query))
+    ) {
       return true;
     }
 

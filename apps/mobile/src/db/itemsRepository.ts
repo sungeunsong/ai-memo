@@ -13,6 +13,7 @@ type ItemRow = {
   content_text: string | null;
   digest: string | null;
   ai_error: string | null;
+  user_title: string | null;
   user_category: string | null;
   image_uri: string | null;
   user_deadline: string | null;
@@ -30,10 +31,10 @@ type ItemRow = {
 export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayload) {
   await db.runAsync(
     `INSERT INTO items (
-      id, type, source_url, raw_input, title, summary, content, content_text, digest, ai_error, user_category, image_uri, user_deadline,
+      id, type, source_url, raw_input, title, summary, content, content_text, digest, ai_error, user_title, user_category, image_uri, user_deadline,
       thumbnail_url, ai_status, sync_status, user_note, extracted_urls, source_type,
       saved_from, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     item.id,
     item.type,
     item.sourceUrl,
@@ -44,6 +45,7 @@ export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayloa
     item.contentText,
     item.digest,
     item.aiError,
+    item.userTitle,
     item.userCategory,
     item.imageUri,
     item.userDeadline,
@@ -72,6 +74,7 @@ export async function listItemsAsync(db: SQLiteDatabase) {
       content_text,
       digest,
       ai_error,
+      user_title,
       user_category,
       image_uri,
       user_deadline,
@@ -108,6 +111,9 @@ export async function updateItemMetadataAsync(
       ai_error = ?,
       -- COALESCE를 쓰면 null로 지정 해제가 불가능합니다.
       -- patch에 키가 있을 때만 덮어쓰도록 플래그로 구분합니다.
+      -- 사용자가 고친 값은 COALESCE를 못 씁니다. null로 되돌리는(해제) 경우를
+      -- 구분해야 해서 플래그로 씁니다. user_category와 같은 방식입니다.
+      user_title = CASE WHEN ? = 1 THEN ? ELSE user_title END,
       user_category = CASE WHEN ? = 1 THEN ? ELSE user_category END,
       image_uri = COALESCE(?, image_uri),
       user_deadline = CASE WHEN ? = 1 THEN ? ELSE user_deadline END,
@@ -126,6 +132,8 @@ export async function updateItemMetadataAsync(
     patch.contentText ?? null,
     patch.digest ?? null,
     patch.aiError ?? null,
+    patch.userTitle !== undefined ? 1 : 0,
+    patch.userTitle ?? null,
     patch.userCategory !== undefined ? 1 : 0,
     patch.userCategory ?? null,
     patch.imageUri ?? null,
@@ -223,6 +231,7 @@ function mapItemRow(row: ItemRow): SavedItem {
     contentText: row.content_text,
     digest: row.digest,
     aiError: row.ai_error,
+    userTitle: row.user_title,
     userCategory: row.user_category,
     imageUri: row.image_uri,
     userDeadline: row.user_deadline,

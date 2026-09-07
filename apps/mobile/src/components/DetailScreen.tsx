@@ -25,6 +25,7 @@ import {
   getSourceTheme,
   getCategoryLabel,
   getItemCategory,
+  getItemTitle,
   getSyncStatusLabel,
   tryParseStructuredContent,
   truncateMiddle,
@@ -83,7 +84,7 @@ export function DetailScreen({ item, checkedItems, onToggleCheck, onClose, onDel
             <Text style={styles.backBtnText}>←</Text>
           </Pressable>
           <Text style={styles.headerTitle} numberOfLines={1}>
-            {item.title}
+            {getItemTitle(item)}
           </Text>
         </View>
         <ScrollView
@@ -127,6 +128,7 @@ export function DetailContent({
   const updateUserNote = useAppStore((state) => state.updateUserNote);
   const retryEnrichMetadata = useAppStore((state) => state.retryEnrichMetadata);
   const isSaving = useAppStore((state) => state.isSaving);
+  const setItemTitle = useAppStore((state) => state.setItemTitle);
   const setItemCategory = useAppStore((state) => state.setItemCategory);
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
   const [isDeadlineEditorVisible, setIsDeadlineEditorVisible] = useState(false);
@@ -162,6 +164,23 @@ export function DetailContent({
    * 실패했으면 정리본 자리를 비우고, 아래 실패 사유 박스가 이유를 말하게 합니다.
    */
   const aiFailed = selectedItem.aiStatus === 'failed';
+
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+
+  function startEditingTitle() {
+    setTitleDraft(getItemTitle(selectedItem));
+    setIsEditingTitle(true);
+  }
+
+  async function commitTitle() {
+    setIsEditingTitle(false);
+    // 원래 제목 그대로면 굳이 사용자 값으로 고정하지 않습니다.
+    // 그래야 나중에 재분석했을 때 나아진 AI 제목을 다시 받을 수 있습니다.
+    const next = titleDraft.trim();
+    if (next === getItemTitle(selectedItem)) return;
+    await setItemTitle(selectedItem.id, next);
+  }
 
   // 'pending'을 곧 '진행 중'으로 읽으면, 앱이 꺼져 끊긴 보강도 진행 중으로 보입니다.
   // 그 상태에서 재분석까지 막으면 되살릴 방법이 사라집니다.
@@ -217,11 +236,39 @@ export function DetailContent({
       {/* 1. 헤더 히어로 */}
       <View style={[styles.detailHero, { borderColor: theme.border, backgroundColor: theme.bg }]}>
         <View style={styles.detailHeroText}>
-          {/* 이미 저장된 아이템에는 캡션이 통째로 들어간 제목이 남아 있습니다.
-              재분석 전까지는 화면에서라도 막아둡니다. */}
-          <Text style={styles.detailTitle} numberOfLines={3}>
-            {selectedItem.title}
-          </Text>
+          {/* AI 제목이 늘 마음에 들지는 않습니다. 특히 인스타처럼 원제목이
+              쓸모없는 경우가 많아, 직접 고칠 수 있어야 합니다.
+              고친 값은 userTitle에 따로 담기므로 재분석해도 덮이지 않습니다. */}
+          {isEditingTitle ? (
+            <View style={styles.titleEditRow}>
+              <TextInput
+                autoFocus
+                value={titleDraft}
+                onChangeText={setTitleDraft}
+                onSubmitEditing={commitTitle}
+                placeholder="제목을 입력하세요"
+                placeholderTextColor={palette.textMuted}
+                style={styles.titleInput}
+                returnKeyType="done"
+                multiline
+              />
+              <Pressable onPress={commitTitle} hitSlop={8} style={styles.titleEditBtn}>
+                <Text style={styles.titleEditBtnText}>완료</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              onPress={startEditingTitle}
+              style={({ pressed }) => [styles.titleRow, pressed && { opacity: 0.6 }]}
+            >
+              {/* 이미 저장된 아이템에는 캡션이 통째로 들어간 제목이 남아 있습니다.
+                  재분석 전까지는 화면에서라도 막아둡니다. */}
+              <Text style={[styles.detailTitle, styles.titleText]} numberOfLines={3}>
+                {getItemTitle(selectedItem)}
+              </Text>
+              <Text style={styles.titleEditIcon}>✏️</Text>
+            </Pressable>
+          )}
           <Text style={[styles.detailSource, { color: theme.badgeText, fontWeight: '700' }]}>
             {theme.label} · {selectedItem.sourceUrl ? getHostname(selectedItem.sourceUrl) : '로컬'}
           </Text>
@@ -1144,6 +1191,42 @@ const createStyles = (palette: Palette) =>
     color: palette.textSecondary,
     fontSize: 10.5,
     fontWeight: '900',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+  },
+  titleText: {
+    flex: 1,
+  },
+  titleEditIcon: {
+    fontSize: 13,
+    marginTop: 3,
+  },
+  titleEditRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+  },
+  titleInput: {
+    flex: 1,
+    color: palette.textPrimary,
+    fontSize: 19,
+    fontWeight: '900',
+    lineHeight: 26,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.accent,
+    paddingVertical: 0,
+  },
+  titleEditBtn: {
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+  },
+  titleEditBtnText: {
+    color: palette.accentText,
+    fontSize: 12,
+    fontWeight: '800',
   },
   enrichHint: {
     color: palette.textMuted,

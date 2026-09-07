@@ -59,7 +59,9 @@ export async function initializeDatabase() {
     'ALTER TABLE items ADD COLUMN ai_error TEXT;',
     'ALTER TABLE items ADD COLUMN user_category TEXT;',
     'ALTER TABLE items ADD COLUMN image_uri TEXT;',
-    'ALTER TABLE items ADD COLUMN user_deadline TEXT;'
+    'ALTER TABLE items ADD COLUMN user_deadline TEXT;',
+    // 사용자가 고친 제목 (2026-09)
+    'ALTER TABLE items ADD COLUMN user_title TEXT;'
   ];
 
   return runWriteAsync(async (database) => {
@@ -576,6 +578,7 @@ function updateWebItem(itemId: string, patch: ItemMetadataPatch) {
           ...(patch.contentText ? { contentText: patch.contentText } : null),
           ...(patch.digest ? { digest: patch.digest } : null),
           ...(patch.aiError !== undefined ? { aiError: patch.aiError } : null),
+          ...(patch.userTitle !== undefined ? { userTitle: patch.userTitle } : null),
           ...(patch.userCategory !== undefined ? { userCategory: patch.userCategory } : null),
           ...(patch.imageUri ? { imageUri: patch.imageUri } : null),
           ...(patch.userDeadline !== undefined ? { userDeadline: patch.userDeadline } : null),

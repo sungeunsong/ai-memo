@@ -97,6 +97,7 @@ type AppStore = {
   selectItem: (itemId: string) => void;
   updateUserNote: (itemId: string, userNote: string) => Promise<void>;
   retryEnrichMetadata: (itemId: string) => Promise<void>;
+  setItemTitle: (itemId: string, title: string | null) => Promise<void>;
   setItemCategory: (itemId: string, category: string | null) => Promise<void>;
   setItemDeadline: (itemId: string, deadline: string | null) => Promise<void>;
   deleteItem: (itemId: string) => Promise<void>;
@@ -339,6 +340,33 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }));
     }
 
+    void runSyncWorker(set, get);
+  },
+  /**
+   * 사용자가 제목을 직접 고칩니다.
+   * null을 넘기면 고친 것을 지우고 다시 AI 제목을 따릅니다.
+   */
+  async setItemTitle(itemId, title) {
+    if (!get().isReady) {
+      return;
+    }
+
+    const trimmed = title?.trim() ?? '';
+    const patch: ItemMetadataPatch = {
+      // 빈 문자열로 저장하면 제목이 사라진 것처럼 보입니다. 해제로 취급합니다.
+      userTitle: trimmed ? trimmed : null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await updateItemMetadataAsync(itemId, patch);
+
+    const nextItems = get().items.map((item) =>
+      item.id === itemId ? applyMetadataPatch(item, itemId, patch) : item
+    );
+    set({ items: nextItems });
+
+    const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
+    if (itemToQueue) await queueUpsertItemSyncAsync(itemToQueue);
     void runSyncWorker(set, get);
   },
   /**
@@ -718,6 +746,7 @@ function applyMetadataPatch(item: SavedItem, itemId: string, patch: ItemMetadata
     ...(patch.digest ? { digest: patch.digest } : null),
     // 실패 이유는 성공 시 null로 지워져야 하므로 undefined 여부로 판단합니다.
     ...(patch.aiError !== undefined ? { aiError: patch.aiError } : null),
+    ...(patch.userTitle !== undefined ? { userTitle: patch.userTitle } : null),
     ...(patch.userCategory !== undefined ? { userCategory: patch.userCategory } : null),
     ...(patch.imageUri ? { imageUri: patch.imageUri } : null),
     ...(patch.userDeadline !== undefined ? { userDeadline: patch.userDeadline } : null),
@@ -747,6 +776,7 @@ function buildItemSyncJob(item: SavedItem) {
       contentText: item.contentText,
       digest: item.digest,
       aiError: item.aiError,
+      userTitle: item.userTitle,
       userCategory: item.userCategory,
       imageUri: item.imageUri,
       userDeadline: item.userDeadline,
