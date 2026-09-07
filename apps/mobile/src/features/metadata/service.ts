@@ -581,7 +581,13 @@ async function fetchWithTimeout(
   timeoutMs = 20000
 ) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  const startedAt = Date.now();
 
   try {
     return await fetch(input, {
@@ -589,6 +595,18 @@ async function fetchWithTimeout(
       redirect: 'follow',
       signal: controller.signal,
     });
+  } catch (error) {
+    // 중단된 요청은 이유와 상관없이 'Aborted' 한 마디만 남깁니다.
+    // 그 문구가 그대로 화면의 실패 사유가 되면 시한이 모자란 건지, 연결이
+    // 끊긴 건지, 무엇 하나 알 수 없습니다. 어느 쪽인지와 얼마나 걸렸는지를 남깁니다.
+    const elapsed = Date.now() - startedAt;
+
+    if (timedOut) {
+      throw new Error(`응답이 없어 ${Math.round(timeoutMs / 1000)}초 만에 끊었습니다.`);
+    }
+
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${reason} (${elapsed}ms 만에 실패)`);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -971,8 +989,15 @@ const RESPONSE_SCHEMA = {
   required: ['title', 'summary', 'detailedAnalysis', 'category'],
 };
 
-/** Gemini 응답 대기 한계. 재시도 3회를 감안해도 보강 한 건이 2분을 넘지 않습니다. */
-const GEMINI_TIMEOUT_MS = 30000;
+/**
+ * Gemini 응답 대기 한계.
+ *
+ * 성공하는 호출은 실측 5초 안팎입니다. 문제는 폰에서 구글 API로 가는 첫 연결이
+ * 종종 통째로 물린다는 것인데, 재시도하면 대개 곧바로 붙습니다.
+ * 한계를 길게 잡으면 물릴 때마다 그만큼을 버리고 나서야 재시도합니다.
+ * 짧게 끊고 다시 거는 편이 훨씬 빨리 성공합니다.
+ */
+const GEMINI_TIMEOUT_MS = 12000;
 
 async function callGeminiApi(
   title: string,
