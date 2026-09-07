@@ -165,6 +165,53 @@ export async function fetchMetadataPatch(
  * 링크와 달리 원문이 곧 본문이므로 contentText는 채우지 않습니다.
  * 원문은 이미 rawInput에 온전히 남아 있습니다.
  */
+/**
+ * 조각 여러 개를 AI에 넘길 하나의 본문으로 엮습니다.
+ *
+ * 경계를 표시해야 모델이 '같은 대상에 대한 서로 다른 출처'로 읽습니다.
+ * 그냥 이어 붙이면 한 글로 보고 앞뒤가 안 맞는 부분을 억지로 꿰맞춥니다.
+ *
+ * 짧은 조각이 긴 조각에 밀려 잘리지 않도록, 조각마다 같은 몫을 주되
+ * 그보다 짧으면 통째로 넣고 남은 몫은 다른 조각이 씁니다. 릴스 본문은 길고
+ * DM은 짧은데, DM에 제품명과 가격이 들어 있는 것이 이 기능의 요점입니다.
+ */
+export function composeSourcesForAI(
+  sources: Array<{ kind: string; sourceUrl: string | null; rawText: string | null }>
+): string {
+  const usable = sources.filter((source) => (source.rawText ?? '').trim().length > 0);
+  if (usable.length === 0) return '';
+  if (usable.length === 1) {
+    return (usable[0].rawText ?? '').slice(0, MAX_CONTENT_CHARS);
+  }
+
+  // 짧은 조각부터 채워야 남는 몫이 긴 조각으로 흘러갑니다.
+  const ordered = [...usable].sort(
+    (a, b) => (a.rawText ?? '').length - (b.rawText ?? '').length
+  );
+
+  const texts = new Map<typeof usable[number], string>();
+  let remaining = MAX_CONTENT_CHARS;
+  let left = ordered.length;
+
+  for (const source of ordered) {
+    const share = Math.floor(remaining / left);
+    const text = (source.rawText ?? '').trim();
+    const taken = text.length <= share ? text : `${text.slice(0, share)}...`;
+    texts.set(source, taken);
+    remaining -= taken.length;
+    left -= 1;
+  }
+
+  // 출력은 원래 순서대로. 시간 순서가 곧 정보가 쌓인 순서입니다.
+  return usable
+    .map((source, index) => {
+      const header = [`[SOURCE ${index + 1}] type: ${source.kind}`];
+      if (source.sourceUrl) header.push(`url: ${source.sourceUrl}`);
+      return `${header.join('\n')}\n${texts.get(source) ?? ''}`;
+    })
+    .join('\n\n');
+}
+
 export async function fetchTextMetadataPatch(
   rawText: string,
   referenceDate?: string
@@ -1039,6 +1086,19 @@ const RESPONSE_SCHEMA = {
 };
 
 /**
+ * AI에 넘길 본문 길이 상한.
+ *
+ * 모델 입력 한계는 1,048,576 토큰입니다. 이 값은 한계가 아니라 비용을 묶어두려고
+ * 우리가 정한 값입니다. 8,000자가 약 6,166토큰(한계의 0.6%)이라 한참 여유가 있습니다.
+ *
+ * 조각을 여러 개 붙이면 하나를 넘길 때보다 본문이 길어지는데, 8,000자에 묶어두면
+ * 긴 릴스 본문이 앞을 다 먹고 정작 중요한 DM(제품명·가격·링크)이 통째로 잘립니다.
+ * 무료 등급 한도는 토큰이 아니라 요청 건수로 세므로 길게 넣어도 한도 소모는
+ * 똑같이 1건이고, 늘어나는 건 토큰 비용뿐입니다(8,000자 2.7원 → 24,000자 약 7원).
+ */
+const MAX_CONTENT_CHARS = 24000;
+
+/**
  * 사용할 모델.
  *
  * 무료 등급의 하루 한도는 모델별로 따로 셉니다(quotaId가 PerProjectPerModel).
@@ -1140,6 +1200,11 @@ async function callGeminiApi(
 각 필드에는 값만 넣어라. 설명, 판단 근거, 질문, 대안 제시를 필드 안에 쓰지 마라.
 분류가 애매하면 가장 가까운 것 하나를 고르고, 해당 사항이 아예 없으면 빈 문자열로 두어라.
 
+원문에 [SOURCE n] 표시가 여러 개 있으면, 그것들은 모두 같은 하나의 대상에 대한
+서로 다른 출처다. 전체를 종합해서 각 항목을 채워라. 서로 어긋나는 정보가 있으면
+어느 한쪽을 임의로 사실로 확정하지 말고, 더 구체적이고 나중에 온 출처를 따르되
+확신이 없으면 그 항목을 비워라.
+
 출력할 JSON 스키마:
 {
   "title": "12~32자 내외의 핵심 요약형 제목 (과장/클릭베이트 금지)",
@@ -1175,7 +1240,7 @@ ${base64Image
   : `분석할 원문 지식:
 제목: ${title}
 본문:
-${rawContent.slice(0, 8000)}`}
+${rawContent.slice(0, MAX_CONTENT_CHARS)}`}
 `;
 
   const maxAttempts = 3;
