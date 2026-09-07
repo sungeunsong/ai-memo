@@ -435,7 +435,7 @@ async function fetchGenericMetadata(
         let parsedStructure: any = null;
         let aiError: string | null = null;
 
-        // 1. 진짜 AI 요약 API (Gemini 2.5 Flash LLM) 호출 시도
+        // 1. 진짜 AI 요약 API 호출 시도
         const aiResult = await callGeminiApi(title, rawContent, undefined, referenceDate);
         if (aiResult.ok) {
           console.log('[MetadataService] Gemini API를 활용한 실제 AI 요약 및 구조화 파싱에 성공했습니다.');
@@ -1039,6 +1039,18 @@ const RESPONSE_SCHEMA = {
 };
 
 /**
+ * 사용할 모델.
+ *
+ * 무료 등급의 하루 한도는 모델별로 따로 셉니다(quotaId가 PerProjectPerModel).
+ * 이전에 쓰던 gemini-2.5-flash는 하루 20건이라 몇 번 시험하면 동났습니다.
+ *
+ * 이 모델은 같은 요청 형식을 그대로 받고, 실측 응답이 4.8초에서 2.0초로
+ * 빨라졌습니다. 빨라지면 시한 초과로 인한 재시도도 줄어드는데, 실패한 요청도
+ * 할당량은 똑같이 먹기 때문에 그 차이가 작지 않습니다.
+ */
+const GEMINI_MODEL = 'gemini-3.1-flash-lite';
+
+/**
  * Gemini 응답 대기 한계.
  *
  * 성공하는 호출은 실측 5초 안팎입니다. 문제는 폰에서 구글 API로 가는 첫 연결이
@@ -1171,7 +1183,7 @@ ${rawContent.slice(0, 8000)}`}
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
       // 타임아웃 없이 부르면 응답이 안 올 때 보강이 영원히 매달립니다.
       // 그러면 아이템은 '요약 정리 중'에 갇히고, 재분석 버튼도 눌리지 않습니다.
       const response = await fetchWithTimeout(url, {
@@ -1191,8 +1203,10 @@ ${rawContent.slice(0, 8000)}`}
           generationConfig: {
             responseMimeType: 'application/json',
             responseSchema: RESPONSE_SCHEMA,
-            // 2.5 Flash는 기본적으로 '사고' 토큰을 쓰는데, 짧은 입력에도 2000토큰이 넘게
+            // 모델은 기본적으로 '사고' 토큰을 쓰는데, 짧은 입력에도 2000토큰이 넘게
             // 소모돼 무료 할당량을 빠르게 갉아먹습니다. 이 작업은 추출/요약이라 필요 없습니다.
+            // 주의: 3.5 이후 모델은 thinkingBudget 0을 거부합니다(HTTP 400).
+            // 모델을 올릴 때는 이 항목이 받아들여지는지 먼저 확인해야 합니다.
             thinkingConfig: { thinkingBudget: 0 },
           }
         }),
