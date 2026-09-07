@@ -453,7 +453,7 @@ async function fetchGenericMetadata(
           aiError = aiResult.reason;
           // 2. API Key 환경변수가 없거나 에러 발생 시, 로컬 지능형 요약기 및 파서로 폴백
           console.log('[MetadataService] 로컬 지능형 요약기 및 본문 파서를 구동합니다.');
-          summary = generateAISummary(title, rawContent, sourceType);
+          summary = buildExcerptSummary(title, rawContent);
           parsedStructure = {
             ...parseStructuredFromContent(rawContent, sourceType),
             detailedAnalysis: buildExcerptDigest(rawContent),
@@ -507,7 +507,7 @@ async function fetchGenericMetadata(
   if (instagramCaption) {
     const aiResult = await callGeminiApi(htmlMetadata.title, instagramCaption, undefined, referenceDate);
     let title = htmlMetadata.title;
-    let summary = generateAISummary(title, instagramCaption, sourceType);
+    let summary = buildExcerptSummary(title, instagramCaption);
     let parsedStructure: any = {
       ...parseStructuredFromContent(instagramCaption, sourceType),
       detailedAnalysis: buildExcerptDigest(instagramCaption),
@@ -1281,159 +1281,116 @@ ${rawContent.slice(0, 8000)}`}
   return { ok: false, reason: '재시도 횟수를 모두 소진했습니다.' };
 }
 
-function generateAISummary(title: string, rawContent: string, sourceType: string): string {
+/**
+ * AI가 실패했을 때 본문에서 추린 요약.
+ *
+ * 예전에는 이름과 문구가 모두 'AI'를 내세웠습니다. AI를 한 번도 안 부르고
+ * 만든 글에 "🍳 AI 분석 요리 레시피 3줄 요약"이라고 적었으니, 사용자는
+ * 정리가 끝난 줄 알았습니다. 게다가 "바른 자세로 3~4세트 수행을 권장합니다"처럼
+ * 본문에 없는 조언까지 지어 붙였습니다.
+ *
+ * 지금은 본문에 실제로 있는 줄만 추려서 그렇다고 밝히고 보여줍니다.
+ */
+function buildExcerptSummary(title: string, rawContent: string): string {
   if (!rawContent || rawContent.trim().length === 0) {
-    return `✨ "${title}" 링크 지식을 저장했습니다. 본문에 요약할 내용이 부족합니다.`;
+    return `"${title}" 링크를 저장했습니다. 본문에서 추릴 내용이 없습니다.`;
   }
 
-  // 광고글이나 무의미한 줄 필터링
   const lines = rawContent
     .split('\n')
-    .map(line => line.trim())
-    .filter(line => {
-      if (line.length < 12) return false; // 너무 짧은 줄 탈락
-      if (line.includes('http://') || line.includes('https://')) return false; // 링크 탈락
-      if (line.includes('Where teams and agents') || line.includes('collaborative AI workspace')) return false; // 노션 광고 탈락
-      if (line.includes('쿠팡 파트너스') || line.includes('수수료를 제공받을 수')) return false; // 스팸성 광고 탈락
+    .map((line) => line.replace(/[#*`\-_[\]()|]/g, '').trim())
+    .filter((line) => {
+      if (line.length < 12) return false;
+      if (line.includes('http://') || line.includes('https://')) return false;
+      if (line.includes('Where teams and agents') || line.includes('collaborative AI workspace')) return false;
+      if (line.includes('쿠팡 파트너스') || line.includes('수수료를 제공받을 수')) return false;
       return true;
-    });
+    })
+    .slice(0, 3);
 
-  // 특수 마크다운 표식 제거 정제
-  const cleanLines = lines.map(line => 
-    line.replace(/[#*`\-_[\]()|]/g, '').trim()
-  ).filter(line => line.length > 5);
-
-  const mainPoints = cleanLines.slice(0, 3); // 핵심적인 앞 3줄 발췌
-
-  // 도메인별 포맷팅 요약문 생성
-  if (sourceType === 'recipe') {
-    const sampleIngredients = ['감자', '양파', '마늘', '당근', '치즈', '계란', '생크림', '버터', '소금', '후추', '간장', '고기', '파', '참기름'];
-    const matched = sampleIngredients.filter(ing => rawContent.toLowerCase().includes(ing));
-    const ingredientList = matched.length > 0 ? matched.join(', ') : '주요 레시피 재료';
-
-    return `🍳 AI 분석 요리 레시피 3줄 요약:
-1) 메뉴: "${title}" 요리법 정보입니다.
-2) 핵심 재료: ${ingredientList} 등을 준비해야 합니다.
-3) 요리 팁: 본문에 기재된 조리 시간 및 온도를 준수하여 맛있게 조리하세요.`;
+  if (lines.length === 0) {
+    const flat = rawContent.replace(/\s+/g, ' ').trim();
+    return `본문 발췌: ${flat.length > 120 ? `${flat.slice(0, 120)}...` : flat}`;
   }
 
-  if (sourceType === 'workout') {
-    const targetKeywords = ['하체', '상체', '복근', '가슴', '등', '어깨', '허벅지', '엉덩이', '둔근', '코어'];
-    const targets = targetKeywords.filter(t => rawContent.toLowerCase().includes(t));
-    const targetArea = targets.length > 0 ? targets.join(', ') : '전신 근력';
+  const numbered = lines
+    .map((line, index) => `${index + 1}) ${line.length > 70 ? `${line.slice(0, 70)}...` : line}`)
+    .join('\n');
 
-    return `💪 AI 분석 운동 루틴 3줄 요약:
-1) 운동 목표: "${title}" 홈트 코칭입니다.
-2) 자극 부위: 주로 [ ${targetArea} ] 부위에 강한 자극을 유도합니다.
-3) 권장 사항: 본문의 세부 동작 루틴에 따라 바른 자세로 3~4세트 수행을 권장합니다.`;
-  }
-
-  if (sourceType === 'travel') {
-    const cityKeywords = ['서울', '제주', '강릉', '속초', '부산', '경주', '여수', '가평', '인천', '양양'];
-    const foundCity = cityKeywords.find(c => rawContent.includes(c));
-    const location = foundCity ? `${foundCity} 지역` : '인기 여행지';
-
-    return `✈️ AI 분석 여행 코스 3줄 요약:
-1) 테마: "${title}" 호캉스 및 여행 코스 정보입니다.
-2) 추천 위치: ${location} 중심으로 숙소 및 핵심 힐링 스팟을 포함하고 있습니다.
-3) 준비 체크리스트: 숙소 예약 상태를 점검하고 본문의 필수 준비물 리스트를 확인하세요.`;
-  }
-
-  // 4. 일반 웹/Notion 요약
-  if (mainPoints.length >= 2) {
-    const p1 = mainPoints[0] || '본문 분석 완료';
-    const p2 = mainPoints[1] || '핵심 주제 확인';
-    const p3 = mainPoints[2] || '추가 세부 사항 기재됨';
-    return `✨ AI 핵심 요약 정리:
-1) ${p1.slice(0, 70)}${p1.length > 70 ? '...' : ''}
-2) ${p2.slice(0, 70)}${p2.length > 70 ? '...' : ''}
-3) ${p3.slice(0, 70)}${p3.length > 70 ? '...' : ''}`;
-  }
-
-  // Fallback (본문이 매우 짧은 경우 등)
-  const fallbackSummary = rawContent.length > 120 
-    ? rawContent.slice(0, 120).replace(/\s+/g, ' ').trim() + '...' 
-    : rawContent.replace(/\s+/g, ' ').trim();
-  return `✨ AI 정리: "${title}" 링크 지식입니다.\n${fallbackSummary}`;
+  return `본문 발췌 (AI 정리 전):\n${numbered}`;
 }
+
 
 function parseStructuredFromContent(rawContent: string, sourceType: string): any {
   const lowerContent = rawContent.toLowerCase();
+  const found: Record<string, unknown> = {};
+
+  const pickLines = (test: (line: string) => boolean, limit: number) =>
+    rawContent
+      .split('\n')
+      .map((line) => line.trim().replace(/[#*⭐□\[\]-]/g, '').trim())
+      .filter((line) => line.length > 5 && test(line))
+      .slice(0, limit);
 
   if (sourceType === 'recipe') {
     const ingredientKeywords = ['감자', '양파', '마늘', '당근', '소금', '후추', '치즈', '계란', '생크림', '버터', '베이컨', '대파', '고기', '닭고기', '돼지고기', '소고기', '설탕', '간장', '참기름', '식초', '고추장', '고춧가루', '통깨', '올리브유'];
-    const matchedIngredients = ingredientKeywords.filter(ing => lowerContent.includes(ing));
-    
-    let cookTime = '15분';
-    const timeMatch = rawContent.match(/(\d+\s*분)/);
-    if (timeMatch) {
-      cookTime = timeMatch[1];
-    }
+    const matched = ingredientKeywords.filter((ing) => lowerContent.includes(ing));
+    if (matched.length > 0) found.ingredients = matched;
 
-    return {
-      cookTime,
-      difficulty: lowerContent.includes('어려') ? '어려움' : lowerContent.includes('보통') ? '보통' : '쉬움',
-      ingredients: matchedIngredients.length > 0 ? matchedIngredients : ['소금', '후추', '주재료'],
-    };
+    const timeMatch = rawContent.match(/(\d+\s*분)/);
+    if (timeMatch) found.cookTime = timeMatch[1];
+
+    // 본문이 난이도를 말한 경우에만 적습니다. 안 적혀 있으면 모르는 것입니다.
+    if (lowerContent.includes('어려')) found.difficulty = '어려움';
+    else if (lowerContent.includes('보통')) found.difficulty = '보통';
+    else if (lowerContent.includes('쉬운') || lowerContent.includes('쉬움')) found.difficulty = '쉬움';
   }
 
   if (sourceType === 'workout') {
     const targetKeywords = ['하체', '상체', '복근', '가슴', '등', '어깨', '팔', '허벅지', '엉덩이', '둔근', '코어', '이두', '삼두', '전신'];
-    const targetMuscles = targetKeywords.filter(t => lowerContent.includes(t));
+    const targets = targetKeywords.filter((t) => lowerContent.includes(t));
+    if (targets.length > 0) found.targetMuscles = targets;
 
     const equipmentKeywords = ['덤벨', '바벨', '맨몸', '매트', '밴드', '철봉', '케틀벨', '폼롤러'];
-    const equipments = equipmentKeywords.filter(e => lowerContent.includes(e));
+    const equipments = equipmentKeywords.filter((e) => lowerContent.includes(e));
+    if (equipments.length > 0) found.equipments = equipments;
 
-    // 숫자로 시작하거나 '세트', '회'가 들어간 홈트 루틴 추출 시도
-    const routineLines = rawContent.split('\n')
-      .map(line => line.trim().replace(/[#*]/g, ''))
-      .filter(line => line.length > 4 && (line.match(/^\d/) || line.includes('세트') || line.includes('회') || line.includes('Hold') || line.includes('초')))
-      .slice(0, 5);
-
-    return {
-      targetMuscles: targetMuscles.length > 0 ? targetMuscles : ['전신'],
-      equipments: equipments.length > 0 ? equipments : ['맨몸'],
-      routine: routineLines.length > 0 ? routineLines : ['맨몸 스트레칭 : 5분', '스쿼트 : 15회 x 3세트', '플랭크 Hold : 1분 x 3세트'],
-    };
+    const routine = pickLines(
+      (line) => /\d+\s*(회|세트|분|초)/.test(line),
+      5
+    );
+    if (routine.length > 0) found.routine = routine;
   }
 
   if (sourceType === 'travel') {
-    let budget = '15만 ~ 25만원대';
-    const budgetMatch = rawContent.match(/(\d+\s*만\s*원)/) || rawContent.match(/(\d+원)/);
-    if (budgetMatch) {
-      budget = budgetMatch[1];
-    }
+    const budgetMatch = rawContent.match(/(\d+\s*만\s*원)/) || rawContent.match(/(\d[\d,]*원)/);
+    if (budgetMatch) found.budget = budgetMatch[1];
 
-    let location = '국내 명소';
-    const locMatch = rawContent.match(/(?:위치|주소|위치 정보)[:\s]+([^\n]+)/i);
+    const locMatch = rawContent.match(/(?:위치|주소)[:\s]+([^\n]+)/i);
     if (locMatch) {
-      location = locMatch[1].trim().replace(/[#*]/g, '');
+      found.location = locMatch[1].trim().replace(/[#*]/g, '');
     } else {
       const cityKeywords = ['서울', '제주', '강릉', '속초', '부산', '경주', '여수', '가평', '인천', '양양', '춘천', '평창'];
-      const foundCity = cityKeywords.find(c => rawContent.includes(c));
-      if (foundCity) {
-        location = foundCity;
-      }
+      const foundCity = cityKeywords.find((c) => rawContent.includes(c));
+      if (foundCity) found.location = foundCity;
     }
 
-    const highlights = rawContent.split('\n')
-      .map(line => line.trim().replace(/[#*⭐]/g, '').trim())
-      .filter(line => line.length > 5 && (line.includes('추천') || line.includes('스팟') || line.includes('맛집') || line.includes('카페') || line.includes('전경') || line.includes('오션뷰')))
-      .slice(0, 3);
+    // 테마까지는 짐작하지 않습니다. 국내인지 해외인지만 근거가 있을 때 적습니다.
+    if (lowerContent.includes('해외')) found.travelTheme = '해외';
+    else if (found.location) found.travelTheme = '국내';
 
-    const checklist = rawContent.split('\n')
-      .map(line => line.trim().replace(/[#*□\[\]\-]/g, '').trim())
-      .filter(line => line.length > 3 && (line.includes('준비') || line.includes('체크') || line.includes('예약') || line.includes('티켓') || line.includes('발권') || line.includes('등록')))
-      .slice(0, 5);
+    const highlights = pickLines(
+      (line) => ['추천', '스팟', '맛집', '카페', '전경', '오션뷰'].some((k) => line.includes(k)),
+      3
+    );
+    if (highlights.length > 0) found.highlights = highlights;
 
-    return {
-      travelTheme: lowerContent.includes('해외') ? '해외 여행' : lowerContent.includes('온천') ? '국내 / 힐링 온천' : '국내 여행 / 호캉스',
-      location,
-      budget,
-      highlights: highlights.length > 0 ? highlights : ['바다 전망 호텔 라운지', '호텔 루프탑 수영장', '인근 로컬 맛집 탐방'],
-      checklist: checklist.length > 0 ? checklist : ['호텔 숙소 예약 확인 및 바우처', '대중교통 기차/항공권 예매', '계절 여벌 옷 및 수영복 챙기기', '신분증/여권 지참', '상비약 및 세면도구 세트'],
-    };
+    const checklist = pickLines(
+      (line) => ['준비', '체크', '예약', '티켓', '발권', '등록'].some((k) => line.includes(k)),
+      5
+    );
+    if (checklist.length > 0) found.checklist = checklist;
   }
 
-  return null;
+  return Object.keys(found).length > 0 ? found : null;
 }
