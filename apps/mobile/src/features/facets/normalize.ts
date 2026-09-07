@@ -36,6 +36,19 @@ const UNITS = [
 
 const UNIT_PATTERN = UNITS.join('|');
 
+/**
+ * 숫자 대신 한글로 적힌 수량. '두부 반 모', '달걀 두 개', '김 한 장'처럼 들어옵니다.
+ *
+ * 숫자 수량과 달리 이쪽은 낱말 단위로만 지워야 합니다. 그냥 치환하면
+ * '반죽'이 '죽'이 되고 '한우'가 '우'가 됩니다.
+ * 긴 것이 먼저 매칭되도록 길이 내림차순으로 둡니다.
+ */
+const QUANTITY_WORDS = [
+  '다섯', '여섯', '일곱', '여덟', '아홉', '반', '한', '두', '세', '네',
+].sort((a, b) => b.length - a.length);
+
+const QUANTITY_PATTERN = QUANTITY_WORDS.join('|');
+
 /** 재료명에 흔히 붙는 수량/수식 표현. 검색에 방해만 되므로 제거합니다. */
 const MEASURE_NOISE = [
   '약간', '한꼬집', '한 꼬집', '적당량', '조금', '넉넉히', '취향껏',
@@ -174,6 +187,14 @@ export function canonicalize(raw: string): string {
   // 수량 표현 제거: '감자 2개' -> '감자'
   // 단위 뒤에 분수(1/2)나 물결(2~3)이 붙는 경우까지 함께 걷어냅니다.
   value = value.replace(new RegExp(`[\\d./~]+\\s*(${UNIT_PATTERN})?`, 'g'), ' ');
+
+  // 한글로 적힌 수량은 뒤따르는 단위까지 한 번에 걷어냅니다.
+  // '두부 반 모' -> '두부', '달걀 두 개' -> '달걀', '두부 반모' -> '두부'
+  // 낱말 경계를 두는 이유는 '반죽'의 '반'을 지우지 않기 위해서입니다.
+  value = value.replace(
+    new RegExp(`(^|\\s)(${QUANTITY_PATTERN})\\s*(${UNIT_PATTERN})?(?=\\s|$)`, 'g'),
+    ' '
+  );
 
   // 수량이 사라지고 단위만 남는 경우가 많습니다: '베이컨 2줄' -> '베이컨 줄' -> '베이컨'
   value = value.replace(new RegExp(`(^|\\s)(${UNIT_PATTERN})(?=\\s|$)`, 'g'), ' ');
