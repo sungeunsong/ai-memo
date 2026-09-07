@@ -103,6 +103,7 @@ type AppStore = {
   deleteItem: (itemId: string) => Promise<void>;
   resumeSync: () => Promise<void>;
   resumeEnrich: () => Promise<void>;
+  reloadItems: () => Promise<void>;
   clearError: () => void;
 };
 
@@ -476,6 +477,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
    * 끊기는 일이 잦은데, 실행할 때 한 번만 확인하면 그 세션 내내 '요약 정리 중'인
    * 채로 아무것도 하지 않는 항목이 남습니다. 사용자는 되고 있다고 믿습니다.
    */
+  /**
+   * DB를 다시 읽어 화면을 맞춥니다.
+   * 백업 가져오기처럼 스토어를 거치지 않고 DB가 바뀐 뒤에 부릅니다.
+   */
+  async reloadItems() {
+    if (!get().isReady) {
+      return;
+    }
+
+    const [items, summary] = await Promise.all([
+      getSavedItemsAsync(),
+      getSyncQueueSummaryAsync(),
+    ]);
+
+    set({
+      items,
+      syncQueuePendingCount: summary.pendingCount,
+      syncQueueFailedCount: summary.failedCount,
+    });
+  },
   async resumeEnrich() {
     if (!get().isReady) {
       return;

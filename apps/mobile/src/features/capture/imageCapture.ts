@@ -64,6 +64,41 @@ export async function readImageForAnalysis(uri: string): Promise<string | null> 
 }
 
 /** 아이템을 지울 때 보관 이미지도 함께 정리합니다. */
+/** 저장해둔 이미지를 그대로 base64로 읽습니다. 백업에 담을 때 씁니다. */
+export async function readImageForBackup(uri: string): Promise<string | null> {
+  try {
+    return await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+  } catch (error) {
+    console.log('[Image] 백업용 이미지 읽기 실패:', error);
+    return null;
+  }
+}
+
+/**
+ * 백업에서 꺼낸 이미지를 앱 폴더에 되살립니다.
+ *
+ * 이미지 경로는 기기마다 다릅니다. 백업에 적힌 경로를 그대로 쓰면 열리지 않으므로,
+ * 내용을 새로 쓰고 그 경로를 돌려줍니다.
+ */
+export async function restoreImageFromBackup(
+  base64: string,
+  itemId: string
+): Promise<string | null> {
+  try {
+    await ensureDirectory();
+    const target = `${IMAGE_DIR}${itemId}.jpg`;
+    await FileSystem.writeAsStringAsync(target, base64, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return target;
+  } catch (error) {
+    console.log('[Image] 백업 이미지 복원 실패:', error);
+    return null;
+  }
+}
+
 export async function deletePersistedImage(uri: string | null) {
   if (!uri || !uri.startsWith(IMAGE_DIR)) return;
   try {

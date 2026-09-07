@@ -202,6 +202,26 @@ export async function markStalledEnrichAsFailedAsync(
   return result.changes;
 }
 
+/**
+ * 가져오기로 덮어쓸 때 쓰는 아이템 단독 삭제.
+ *
+ * deleteItemAsync와 달리 sync_jobs는 건드리지 않습니다. 이 삭제는 곧바로
+ * 이어지는 INSERT와 한 트랜잭션 안에서 짝을 이루는 '교체'의 일부라,
+ * 전송 큐까지 함께 지울 이유가 없습니다.
+ */
+export async function deleteItemRowAsync(db: SQLiteDatabase, itemId: string) {
+  await db.runAsync(`DELETE FROM items WHERE id = ?`, itemId);
+}
+
+/** 아이템별 최종 수정 시각. 가져올 때 어느 쪽이 최신인지 가리는 데 씁니다. */
+export async function listItemUpdatedAtAsync(db: SQLiteDatabase) {
+  const rows = await db.getAllAsync<{ id: string; updated_at: string }>(
+    `SELECT id, updated_at FROM items`
+  );
+
+  return new Map(rows.map((row) => [row.id, row.updated_at]));
+}
+
 export async function deleteItemAsync(
   db: SQLiteDatabase,
   itemId: string

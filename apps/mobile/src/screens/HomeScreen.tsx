@@ -33,6 +33,7 @@ import { spacing } from '@/theme/spacing';
 import { ItemCard } from '@/components/ItemCard';
 import { SearchFilterBar } from '@/components/SearchFilterBar';
 import { EmptyResultGuide } from '@/components/EmptyResultGuide';
+import { BackupModal } from '@/components/BackupModal';
 import { PantryModal } from '@/components/PantryModal';
 import {
   availableFacets,
@@ -99,6 +100,7 @@ export function HomeScreen() {
   const deleteItem = useAppStore((s) => s.deleteItem);
   const resumeSync = useAppStore((s) => s.resumeSync);
   const resumeEnrich = useAppStore((s) => s.resumeEnrich);
+  const reloadItems = useAppStore((s) => s.reloadItems);
 
   // Share intent
   const { hasShareIntent, shareIntent, resetShareIntent, error: shareIntentError } =
@@ -111,6 +113,7 @@ export function HomeScreen() {
   const [selectedFacets, setSelectedFacets] = useState<string[]>([]);
   const [isCaptureVisible, setIsCaptureVisible] = useState(false);
   const [isPantryVisible, setIsPantryVisible] = useState(false);
+  const [isBackupVisible, setIsBackupVisible] = useState(false);
   const [pantryOwned, setPantryOwned] = useState<string[]>([]);
 
   // 냉장고 재료는 매번 다시 입력하게 하면 기능 자체를 안 쓰게 되므로 저장해둡니다.
@@ -613,6 +616,17 @@ export function HomeScreen() {
           <Text style={styles.headerLogo}>시렁</Text>
         </View>
         <View style={styles.headerRight}>
+          {/* 계정이 없어서 이 기기가 유일한 보관처입니다. 백업 창구를 눈에 띄는 곳에 둡니다. */}
+          <Pressable
+            onPress={() => setIsBackupVisible(true)}
+            accessibilityLabel="백업"
+            style={({ pressed }) => [
+              styles.themeToggle,
+              { transform: [{ scale: pressed ? 0.9 : 1 }] },
+            ]}
+          >
+            <Text style={styles.themeToggleIcon}>📦</Text>
+          </Pressable>
           <Pressable
             onPress={cyclePreference}
             accessibilityLabel={`테마 전환 (현재 ${THEME_LABELS[preference]})`}
@@ -826,6 +840,14 @@ export function HomeScreen() {
         onSave={handleSaveFromCapture}
         isSaving={isSaving}
         initialValue={captureInitialValue}
+      />
+
+      {/* 백업 (내보내기 / 가져오기) */}
+      <BackupModal
+        visible={isBackupVisible}
+        itemCount={items.length}
+        onClose={() => setIsBackupVisible(false)}
+        onImported={() => void reloadItems()}
       />
 
       {/* 냉장고 털기 (보유 재료 -> 만들 수 있는 것) */}

@@ -3,7 +3,9 @@ import { openDatabaseAsync, SQLiteDatabase } from 'expo-sqlite';
 
 import { createTablesStatement } from '@/db/schema';
 import {
+  deleteItemRowAsync as deleteItemRowInRepositoryAsync,
   insertUrlItemAsync,
+  listItemUpdatedAtAsync as listItemUpdatedAtInRepositoryAsync,
   listItemsAsync,
   markStalledEnrichAsFailedAsync as markStalledEnrichAsFailedInRepositoryAsync,
   updateItemMetadataAsync as updateItemMetadataInRepositoryAsync,
@@ -120,6 +122,70 @@ export async function setSettingAsync(key: string, value: string): Promise<void>
       value,
       new Date().toISOString()
     )
+  );
+}
+
+/** 설정 전부. 백업에 담기 위한 통짜 조회입니다. */
+export async function getAllSettingsAsync(): Promise<Record<string, string>> {
+  if (Platform.OS === 'web') {
+    if (typeof globalThis.localStorage === 'undefined') {
+      return Object.fromEntries(memorySettings);
+    }
+
+    const result: Record<string, string> = {};
+    for (let i = 0; i < globalThis.localStorage.length; i += 1) {
+      const key = globalThis.localStorage.key(i);
+      if (!key || !key.startsWith(WEB_SETTINGS_KEY_PREFIX)) continue;
+      const value = globalThis.localStorage.getItem(key);
+      if (value !== null) result[key.slice(WEB_SETTINGS_KEY_PREFIX.length)] = value;
+    }
+    return result;
+  }
+
+  const database = await getDatabaseAsync();
+  const rows = await database.getAllAsync<{ key: string; value: string }>(
+    `SELECT key, value FROM app_settings`
+  );
+
+  return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+}
+
+/** 아이템별 최종 수정 시각. 가져올 때 어느 쪽이 최신인지 가리는 데 씁니다. */
+export async function getItemUpdatedAtMapAsync(): Promise<Map<string, string>> {
+  if (Platform.OS === 'web') {
+    return new Map(getWebItems().map((item) => [item.id, item.updatedAt]));
+  }
+
+  const database = await getDatabaseAsync();
+  return listItemUpdatedAtInRepositoryAsync(database);
+}
+
+/**
+ * 가져온 아이템들을 한 트랜잭션으로 씁니다.
+ *
+ * 수백 건을 건건이 쓰면 그때마다 쓰기 락을 잡습니다. 무엇보다 중간에 실패하면
+ * 절반만 들어간 상태로 남는데, 백업 복원에서 그건 가장 나쁜 결과입니다.
+ * 통째로 성공하거나 통째로 없던 일이 되어야 합니다.
+ *
+ * 이미 있는 id는 지우고 다시 넣습니다. 컬럼이 스물세 개라 거대한 upsert 문을
+ * 쓰는 것보다, 같은 트랜잭션 안의 삭제-삽입 한 쌍이 읽기 쉽습니다.
+ */
+export async function importItemsAsync(items: SaveUrlPayload[]) {
+  if (Platform.OS === 'web') {
+    for (const item of items) {
+      deleteWebItem(item.id);
+      saveWebItem(item as SavedItem);
+    }
+    return;
+  }
+
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      for (const item of items) {
+        await deleteItemRowInRepositoryAsync(database, item.id);
+        await insertUrlItemAsync(database, item);
+      }
+    })
   );
 }
 
