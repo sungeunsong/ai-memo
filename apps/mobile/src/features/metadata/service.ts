@@ -21,7 +21,7 @@
  *      - routine (세부 루틴): 루틴별 종목과 권장 세트수를 쪼개어 배열 형태로 구조화할 것.
  * 
  *    - [여행/호캉스 (travel)]
- *      - travelTheme (여행 테마칩): '국내 / 호캉스', '해외 / 배낭여행', '국내 / 온천' 등 분류.
+ *      - travelTheme (여행 테마칩): '국내' 또는 '해외' + ' / ' + 테마 한 단어. 예: '국내 / 호캉스', '해외 / 배낭여행'.
  *      - location (정확한 위치): 도, 시, 군, 구 또는 숙소명 등을 발췌.
  *      - budget (숙박 예산): 1박 기준 혹은 총 예상 예산 정보를 명확하게 발췌.
  *      - highlights (핵심 명소/스팟): ['오션뷰 인피니티풀', '강문해변 솔밭 숲길'] 등 발췌.
@@ -1048,6 +1048,61 @@ const RESPONSE_SCHEMA = {
  */
 const GEMINI_TIMEOUT_MS = 12000;
 
+/**
+ * 값만 들어와야 하는 분류·발췌 필드들.
+ * 검색 facet과 화면의 칩이 이 값들을 그대로 씁니다.
+ */
+const SHORT_VALUE_FIELDS = [
+  'cookTime',
+  'difficulty',
+  'travelTheme',
+  'location',
+  'budget',
+  'productType',
+  'seller',
+  'purchaseType',
+  'deadline',
+  'price',
+  'babyAgeMonths',
+  'parentingTopic',
+  'roomType',
+  'interiorStyle',
+] as const;
+
+/** 이 길이를 넘는 분류 값은 값이 아니라 모델의 군말입니다. */
+const MAX_SHORT_VALUE_LENGTH = 40;
+
+/**
+ * 분류 필드에 섞여 들어온 모델의 혼잣말을 걷어냅니다.
+ *
+ * 사고 토큰을 꺼두면 모델은 판단이 필요할 때 답변 필드 안에서 고민합니다.
+ * 실제로 travelTheme에 "2개만 넣겠습니다... 지침이 필요합니다" 같은 문단이
+ * 통째로 들어온 적이 있습니다. 화면이 지저분해지는 것으로 끝나지 않고,
+ * travelTheme과 location은 쪼개져 검색 facet의 축이 되기 때문에
+ * 그대로 두면 조합 검색이 오염됩니다.
+ *
+ * 프롬프트로 줄일 수는 있어도 없앨 수는 없으므로 저장 전에 한 번 더 거릅니다.
+ * 배열 필드는 건드리지 않습니다. 긴 항목이 정상인 경우(highlights 등)가 있어
+ * 같은 잣대를 대면 멀쩡한 값을 지웁니다.
+ */
+function dropRamblingValues(data: any): any {
+  if (!data || typeof data !== 'object') {
+    return data;
+  }
+
+  for (const field of SHORT_VALUE_FIELDS) {
+    const value = data[field];
+    if (typeof value === 'string' && value.trim().length > MAX_SHORT_VALUE_LENGTH) {
+      console.log(
+        `[GeminiAPI] ${field}에 값 대신 설명이 들어와 버립니다 (${value.trim().length}자)`
+      );
+      data[field] = '';
+    }
+  }
+
+  return data;
+}
+
 async function callGeminiApi(
   title: string,
   rawContent: string,
@@ -1070,6 +1125,9 @@ async function callGeminiApi(
 너는 입력된 원문 지식에서 핵심적인 정보만을 고도로 구조화된 형태로 요약 및 추출하는 AI 에이전트이다.
 다음 지침에 따라 반드시 JSON 형식으로만 응답해라. 백틱( \`\`\`json )이나 기타 텍스트는 일절 출력하지 마라.
 
+각 필드에는 값만 넣어라. 설명, 판단 근거, 질문, 대안 제시를 필드 안에 쓰지 마라.
+분류가 애매하면 가장 가까운 것 하나를 고르고, 해당 사항이 아예 없으면 빈 문자열로 두어라.
+
 출력할 JSON 스키마:
 {
   "title": "12~32자 내외의 핵심 요약형 제목 (과장/클릭베이트 금지)",
@@ -1082,7 +1140,7 @@ async function callGeminiApi(
   "targetMuscles": ["부위1", "부위2"],
   "equipments": ["도구1", "도구2"],
   "routine": ["루틴동작 1", "루틴동작 2"],
-  "travelTheme": "여행 테마 (예: '국내 / 호캉스')",
+  "travelTheme": "'국내' 또는 '해외' 뒤에 ' / '와 테마 한 단어. 예: '국내 / 호캉스', '해외 / 배낭여행'. 정확히 이 형태로만 쓰고 다른 말을 덧붙이지 마라",
   "location": "위치 및 숙소명",
   "budget": "예상 예산 정보",
   "highlights": ["추천 명소/특장점 1", "2"],
@@ -1179,7 +1237,10 @@ ${rawContent.slice(0, 8000)}`}
 
         try {
           const data = JSON.parse(cleaned);
-          return { ok: true, data: normalizeDeadlineYear(data, rawContent, referenceDate) };
+          return {
+            ok: true,
+            data: dropRamblingValues(normalizeDeadlineYear(data, rawContent, referenceDate)),
+          };
         } catch (parseErr) {
           const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
           console.log(`[GeminiAPI] JSON 파싱 실패 (시도 ${attempt}/${maxAttempts}):`, message);
