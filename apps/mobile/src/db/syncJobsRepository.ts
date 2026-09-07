@@ -20,24 +20,6 @@ type SyncJobRow = {
   updated_at: string;
 };
 
-export async function insertSyncJobAsync(db: SQLiteDatabase, job: CreateSyncJobPayload) {
-  await db.runAsync(
-    `INSERT INTO sync_jobs (
-      id, item_id, operation, payload_json, status, attempt_count,
-      last_error, next_retry_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    job.id,
-    job.itemId,
-    job.operation,
-    job.payloadJson,
-    job.status,
-    job.attemptCount,
-    job.lastError,
-    job.nextRetryAt,
-    job.createdAt,
-    job.updatedAt
-  );
-}
 
 export async function upsertSyncJobAsync(db: SQLiteDatabase, job: CreateSyncJobPayload) {
   await db.runAsync(

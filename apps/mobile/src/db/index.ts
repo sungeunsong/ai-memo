@@ -15,7 +15,6 @@ import {
 import {
   getNextSyncRetryAtAsync as getNextSyncRetryAtInRepositoryAsync,
   getSyncQueueSummaryAsync as getSyncQueueSummaryInRepositoryAsync,
-  insertSyncJobAsync,
   listRunnableSyncJobsAsync as listRunnableSyncJobsInRepositoryAsync,
   markSyncJobCompletedAsync as markSyncJobCompletedInRepositoryAsync,
   markSyncJobFailedAsync as markSyncJobFailedInRepositoryAsync,
@@ -280,7 +279,10 @@ export async function saveUrlItemWithSyncJobAsync(item: SaveUrlPayload, job: Cre
   await runWriteAsync((database) =>
     database.withTransactionAsync(async () => {
       await insertUrlItemAsync(database, item);
-      await insertSyncJobAsync(database, job);
+      // job id가 sync_<itemId>로 고정이라 INSERT는 같은 아이템에 두 번 부르면
+      // UNIQUE 위반으로 저장 전체를 되돌립니다. 지금은 그럴 경로가 없지만,
+      // 큐를 다시 거는 쪽과 같은 함수를 쓰면 그 위험 자체가 없어집니다.
+      await upsertSyncJobInRepositoryAsync(database, job);
     })
   );
 
