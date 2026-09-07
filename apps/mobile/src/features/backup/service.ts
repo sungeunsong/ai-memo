@@ -6,7 +6,7 @@ import {
   setSettingAsync,
 } from '@/db';
 import { readImageForBackup, restoreImageFromBackup } from '@/features/capture/imageCapture';
-import { SaveUrlPayload } from '@/features/items/types';
+import { ItemSource, ItemSourceKind, SavedItem } from '@/features/items/types';
 
 import {
   BackupItem,
@@ -91,7 +91,7 @@ export async function importBackupAsync(fileUri: string): Promise<ImportResult> 
 
   const existing = await getItemUpdatedAtMapAsync();
 
-  const toWrite: SaveUrlPayload[] = [];
+  const toWrite: SavedItem[] = [];
   let added = 0;
   let updated = 0;
   let skipped = 0;
@@ -145,7 +145,28 @@ export async function importBackupAsync(fileUri: string): Promise<ImportResult> 
  * 없는 항목은 기본값으로 채우고, 모르는 항목은 버립니다.
  * id와 수정 시각만은 없으면 손댈 수 없으니 그 건은 건너뜁니다.
  */
-function normalizeImportedItem(raw: any): SaveUrlPayload | null {
+const SOURCE_KINDS: ItemSourceKind[] = [
+  'instagram_reel', 'instagram_dm', 'url', 'youtube', 'notion',
+  'text', 'screenshot', 'memo', 'other',
+];
+
+/** 백업에 담긴 조각들. 형이 어긋난 것은 버립니다. */
+function normalizeImportedSources(raw: any, itemId: string): ItemSource[] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .filter((entry) => entry && typeof entry === 'object' && typeof entry.id === 'string')
+    .map((entry) => ({
+      id: entry.id as string,
+      itemId,
+      kind: SOURCE_KINDS.includes(entry.kind) ? (entry.kind as ItemSourceKind) : 'other',
+      sourceUrl: typeof entry.sourceUrl === 'string' ? entry.sourceUrl : null,
+      rawText: typeof entry.rawText === 'string' ? entry.rawText : null,
+      createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : new Date(0).toISOString(),
+    }));
+}
+
+function normalizeImportedItem(raw: any): SavedItem | null {
   if (!raw || typeof raw !== 'object') return null;
   if (typeof raw.id !== 'string' || !raw.id) return null;
   if (typeof raw.updatedAt !== 'string' || !raw.updatedAt) return null;
@@ -182,5 +203,6 @@ function normalizeImportedItem(raw: any): SaveUrlPayload | null {
     savedFrom: text(raw.savedFrom, 'import'),
     createdAt: text(raw.createdAt, raw.updatedAt),
     updatedAt: raw.updatedAt,
+    sources: normalizeImportedSources(raw.sources, raw.id),
   };
 }

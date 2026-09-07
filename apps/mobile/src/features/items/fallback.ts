@@ -1,4 +1,4 @@
-import { SaveUrlPayload } from '@/features/items/types';
+import { SavedItem } from '@/features/items/types';
 import { extractAllUrls, classifySourceType } from '@/features/capture/normalizeSharedInput';
 
 const HOST_LABELS: Record<string, string> = {
@@ -7,7 +7,7 @@ const HOST_LABELS: Record<string, string> = {
   'instagram.com': '인스타그램 링크',
 };
 
-export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): SaveUrlPayload {
+export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): SavedItem {
   const timestamp = new Date().toISOString();
   const extractedUrls = extractAllUrls(rawInput);
   const primaryUrl = extractedUrls[0] ?? null;
@@ -54,6 +54,7 @@ export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): SaveU
     contentText: null,
     digest: null,
     aiError: null,
+    sources: [],
     userTitle: null,
     userCategory: null,
     imageUri: null,
@@ -74,7 +75,7 @@ export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): SaveU
  * 이미지로 저장할 때의 초기 아이템.
  * AI가 읽기 전이라 제목과 요약은 자리만 잡아둡니다.
  */
-export function buildFallbackImageItem(imageUri: string, savedFrom = 'manual'): SaveUrlPayload {
+export function buildFallbackImageItem(imageUri: string, savedFrom = 'manual'): SavedItem {
   const timestamp = new Date().toISOString();
 
   return {
@@ -88,6 +89,7 @@ export function buildFallbackImageItem(imageUri: string, savedFrom = 'manual'): 
     contentText: null,
     digest: null,
     aiError: null,
+    sources: [],
     userTitle: null,
     userCategory: null,
     imageUri,
@@ -105,7 +107,7 @@ export function buildFallbackImageItem(imageUri: string, savedFrom = 'manual'): 
 }
 
 // 하위 호환성 유지용 래퍼
-export function buildFallbackUrlItem(normalizedUrl: string, rawInput = normalizedUrl): SaveUrlPayload {
+export function buildFallbackUrlItem(normalizedUrl: string, rawInput = normalizedUrl): SavedItem {
   return buildFallbackItem(rawInput, 'manual');
 }
 

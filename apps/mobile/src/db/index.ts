@@ -23,12 +23,21 @@ import {
   recoverStalledSyncJobsAsync as recoverStalledSyncJobsInRepositoryAsync,
   upsertSyncJobAsync as upsertSyncJobInRepositoryAsync,
 } from '@/db/syncJobsRepository';
+import {
+  deleteItemSourceAsync as deleteItemSourceInRepositoryAsync,
+  deleteItemSourcesByItemAsync as deleteItemSourcesByItemInRepositoryAsync,
+  hasSameItemSourceAsync as hasSameItemSourceInRepositoryAsync,
+  updateItemSourceTextAsync as updateItemSourceTextInRepositoryAsync,
+  insertItemSourceAsync as insertItemSourceInRepositoryAsync,
+  listItemSourcesAsync as listItemSourcesInRepositoryAsync,
+} from '@/db/sourcesRepository';
 import { applyItemPatch } from '@/features/items/patch';
 import { STALLED_ENRICH_MESSAGE } from '@/features/items/staleEnrich';
 import { STALLED_SYNC_JOB_THRESHOLD_MS } from '@/sync/retryPolicy';
 import {
   CreateSyncJobPayload,
   ItemMetadataPatch,
+  ItemSource,
   SaveUrlPayload,
   SavedItem,
   SyncJob,
@@ -170,11 +179,11 @@ export async function getItemUpdatedAtMapAsync(): Promise<Map<string, string>> {
  * 이미 있는 id는 지우고 다시 넣습니다. 컬럼이 스물세 개라 거대한 upsert 문을
  * 쓰는 것보다, 같은 트랜잭션 안의 삭제-삽입 한 쌍이 읽기 쉽습니다.
  */
-export async function importItemsAsync(items: SaveUrlPayload[]) {
+export async function importItemsAsync(items: SavedItem[]) {
   if (Platform.OS === 'web') {
     for (const item of items) {
       deleteWebItem(item.id);
-      saveWebItem(item as SavedItem);
+      saveWebItem(item);
     }
     return;
   }
@@ -182,25 +191,101 @@ export async function importItemsAsync(items: SaveUrlPayload[]) {
   await runWriteAsync((database) =>
     database.withTransactionAsync(async () => {
       for (const item of items) {
+        // 조각도 함께 교체합니다. 아이템만 갈아끼우면 옛 조각이 남아
+        // 복원한 내용과 뒤섞입니다.
+        await deleteItemSourcesByItemInRepositoryAsync(database, item.id);
         await deleteItemRowInRepositoryAsync(database, item.id);
         await insertUrlItemAsync(database, item);
+        for (const source of item.sources) {
+          await insertItemSourceInRepositoryAsync(database, source);
+        }
       }
     })
   );
 }
 
-export async function getSavedItemsAsync() {
+export async function getSavedItemsAsync(): Promise<SavedItem[]> {
   if (Platform.OS === 'web') {
     return getWebItems();
   }
 
   const database = await getDatabaseAsync();
-  return listItemsAsync(database);
+  // Source는 별도 테이블이라 함께 읽어 붙입니다. 아이템마다 따로 물으면
+  // 건수만큼 질의가 나가므로 한 번에 읽어 묶습니다.
+  const [items, sourcesByItem] = await Promise.all([
+    listItemsAsync(database),
+    listItemSourcesInRepositoryAsync(database),
+  ]);
+
+  return items.map((item) => ({ ...item, sources: sourcesByItem.get(item.id) ?? [] }));
+}
+
+export async function addItemSourceAsync(source: ItemSource) {
+  if (Platform.OS === 'web') {
+    const items = getWebItems().map((item) =>
+      item.id === source.itemId ? { ...item, sources: [...item.sources, source] } : item
+    );
+    saveWebItems(items);
+    return;
+  }
+
+  await runWriteAsync((database) => insertItemSourceInRepositoryAsync(database, source));
+}
+
+export async function updateItemSourceTextAsync(sourceId: string, rawText: string | null) {
+  if (Platform.OS === 'web') {
+    const items = getWebItems().map((item) => ({
+      ...item,
+      sources: item.sources.map((source) =>
+        source.id === sourceId ? { ...source, rawText } : source
+      ),
+    }));
+    saveWebItems(items);
+    return;
+  }
+
+  await runWriteAsync((database) =>
+    updateItemSourceTextInRepositoryAsync(database, sourceId, rawText)
+  );
+}
+
+export async function removeItemSourceAsync(sourceId: string) {
+  if (Platform.OS === 'web') {
+    const items = getWebItems().map((item) => ({
+      ...item,
+      sources: item.sources.filter((source) => source.id !== sourceId),
+    }));
+    saveWebItems(items);
+    return;
+  }
+
+  await runWriteAsync((database) => deleteItemSourceInRepositoryAsync(database, sourceId));
+}
+
+/** 같은 조각이 이미 붙어 있는지. 같은 DM을 두 번 읽히지 않기 위한 검사입니다. */
+export async function hasSameItemSourceAsync(
+  itemId: string,
+  sourceUrl: string | null,
+  rawText: string | null
+) {
+  if (Platform.OS === 'web') {
+    const item = getWebItems().find((entry) => entry.id === itemId);
+    if (!item) return false;
+    const trimmed = rawText?.trim();
+    return item.sources.some(
+      (source) =>
+        (sourceUrl && source.sourceUrl === sourceUrl) ||
+        (trimmed && source.rawText?.trim() === trimmed)
+    );
+  }
+
+  const database = await getDatabaseAsync();
+  return hasSameItemSourceInRepositoryAsync(database, itemId, sourceUrl, rawText);
 }
 
 export async function saveUrlItemAsync(item: SaveUrlPayload) {
   if (Platform.OS === 'web') {
-    saveWebItem(item);
+    saveWebItem({ ...item, sources: [] });
     return item;
   }
 
@@ -214,7 +299,12 @@ export async function deleteItemAsync(itemId: string) {
     return;
   }
 
-  await runWriteAsync((database) => deleteItemInRepositoryAsync(database, itemId));
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      await deleteItemSourcesByItemInRepositoryAsync(database, itemId);
+      await deleteItemInRepositoryAsync(database, itemId);
+    })
+  );
 }
 
 /**
@@ -271,7 +361,7 @@ export async function recoverStalledSyncJobsAsync(now = Date.now()) {
 
 export async function saveUrlItemWithSyncJobAsync(item: SaveUrlPayload, job: CreateSyncJobPayload) {
   if (Platform.OS === 'web') {
-    saveWebItem(item);
+    saveWebItem({ ...item, sources: [] } as SavedItem);
     saveWebSyncJob(job);
     return item;
   }
@@ -572,6 +662,16 @@ function getWebItems() {
     globalThis.localStorage.removeItem(WEB_STORAGE_KEY);
     return [];
   }
+}
+
+/** 웹 저장소 통째 쓰기. Source처럼 여러 아이템을 한 번에 고칠 때 씁니다. */
+function saveWebItems(items: SavedItem[]) {
+  if (typeof globalThis.localStorage === 'undefined') {
+    memoryItems = items;
+    return;
+  }
+
+  globalThis.localStorage.setItem(WEB_STORAGE_KEY, JSON.stringify(items));
 }
 
 function saveWebItem(item: SavedItem) {

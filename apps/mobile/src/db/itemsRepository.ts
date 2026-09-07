@@ -244,5 +244,7 @@ function mapItemRow(row: ItemRow): SavedItem {
     savedFrom: row.saved_from,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // Source는 별도 테이블이라 여기서는 비워둡니다. 목록을 읽는 쪽에서 채웁니다.
+    sources: [],
   };
 }

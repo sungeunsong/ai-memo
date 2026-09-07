@@ -25,6 +25,17 @@ CREATE TABLE IF NOT EXISTS items (
   updated_at TEXT NOT NULL
 );
 
+-- 저장물을 이루는 정보 조각들.
+-- 릴스에 나중에 받은 DM을 붙이는 식으로, 한 저장물이 여러 조각을 가집니다.
+CREATE TABLE IF NOT EXISTS item_sources (
+  id TEXT PRIMARY KEY NOT NULL,
+  item_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  source_url TEXT,
+  raw_text TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS folders (
   id TEXT PRIMARY KEY NOT NULL,
   name TEXT NOT NULL,
@@ -53,6 +64,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_item_sources_item_id ON item_sources(item_id);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_item_id ON sync_jobs(item_id);
 `;
