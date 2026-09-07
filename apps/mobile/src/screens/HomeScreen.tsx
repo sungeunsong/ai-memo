@@ -112,6 +112,7 @@ export function HomeScreen() {
   const resumeEnrich = useAppStore((s) => s.resumeEnrich);
   const reloadItems = useAppStore((s) => s.reloadItems);
   const attachSourceToItem = useAppStore((s) => s.attachSourceToItem);
+  const attachScreenshotToItem = useAppStore((s) => s.attachScreenshotToItem);
   const resolveAwaitingInput = useAppStore((s) => s.resolveAwaitingInput);
 
   // Share intent
@@ -435,11 +436,13 @@ export function HomeScreen() {
       clearError();
 
       void (async () => {
-        const result = await saveImage(sharedImagePath, 'share');
+        // 스크린샷도 링크와 같은 길로 보냅니다. 인스타 DM은 복사도 전달도 안 되어
+        // 화면을 찍는 것이 유일한 통로인데, 여기서 곧바로 새 항목을 만들어버리면
+        // 릴스와 DM이 또 둘로 쪼개집니다.
+        const result = await saveImage(sharedImagePath, 'share', { deferEnrich: true });
         if (result.ok) {
           const nextId = useAppStore.getState().selectedItemId;
-          setToastMessage('이미지를 저장했습니다. 내용을 읽는 중입니다.');
-          if (nextId) setHighlightedItemId(nextId);
+          if (nextId) setSaveTargetItemId(nextId);
         }
         resetShareIntent();
       })();
@@ -896,7 +899,9 @@ export function HomeScreen() {
           setSaveTargetItemId(null);
           if (!source) return;
           void (async () => {
-            const merged = await attachSourceToItem(targetItemId, source.rawInput);
+            const merged = source.imageUri
+              ? await attachScreenshotToItem(targetItemId, source.imageUri)
+              : await attachSourceToItem(targetItemId, source.rawInput);
             if (merged.ok) {
               // 합쳤으니 방금 만든 임시 항목은 남길 이유가 없습니다.
               await deleteItem(source.id);

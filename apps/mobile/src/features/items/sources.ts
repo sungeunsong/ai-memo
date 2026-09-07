@@ -23,6 +23,7 @@ export function buildItemSource(
   kind: ItemSourceKind,
   sourceUrl: string | null,
   rawText: string | null,
+  imageUri: string | null = null,
   createdAt = new Date().toISOString()
 ): ItemSource {
   return {
@@ -31,6 +32,7 @@ export function buildItemSource(
     kind,
     sourceUrl,
     rawText,
+    imageUri,
     createdAt,
   };
 }
@@ -43,6 +45,7 @@ export function buildInitialSource(item: SavedItem): ItemSource {
     item.sourceUrl,
     // 링크는 아직 본문을 안 긁었습니다. 보강이 끝나면 그때 채웁니다.
     item.sourceUrl ? null : item.rawInput,
+    item.imageUri,
     item.createdAt
   );
 }

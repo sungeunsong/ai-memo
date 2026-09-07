@@ -162,6 +162,8 @@ function normalizeImportedSources(raw: any, itemId: string): ItemSource[] {
       kind: SOURCE_KINDS.includes(entry.kind) ? (entry.kind as ItemSourceKind) : 'other',
       sourceUrl: typeof entry.sourceUrl === 'string' ? entry.sourceUrl : null,
       rawText: typeof entry.rawText === 'string' ? entry.rawText : null,
+      // 스크린샷 경로는 기기마다 다릅니다. 파일까지 복원하는 건 다음 일이라 비웁니다.
+      imageUri: null,
       createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : new Date(0).toISOString(),
     }));
 }

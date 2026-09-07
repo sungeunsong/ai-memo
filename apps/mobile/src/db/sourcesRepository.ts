@@ -8,18 +8,20 @@ type ItemSourceRow = {
   kind: string;
   source_url: string | null;
   raw_text: string | null;
+  image_uri: string | null;
   created_at: string;
 };
 
 export async function insertItemSourceAsync(db: SQLiteDatabase, source: ItemSource) {
   await db.runAsync(
-    `INSERT INTO item_sources (id, item_id, kind, source_url, raw_text, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO item_sources (id, item_id, kind, source_url, raw_text, image_uri, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     source.id,
     source.itemId,
     source.kind,
     source.sourceUrl,
     source.rawText,
+    source.imageUri,
     source.createdAt
   );
 }
@@ -32,7 +34,7 @@ export async function insertItemSourceAsync(db: SQLiteDatabase, source: ItemSour
  */
 export async function listItemSourcesAsync(db: SQLiteDatabase) {
   const rows = await db.getAllAsync<ItemSourceRow>(
-    `SELECT id, item_id, kind, source_url, raw_text, created_at
+    `SELECT id, item_id, kind, source_url, raw_text, image_uri, created_at
      FROM item_sources
      ORDER BY created_at ASC`
   );
@@ -106,6 +108,7 @@ function mapItemSourceRow(row: ItemSourceRow): ItemSource {
     kind: row.kind as ItemSourceKind,
     sourceUrl: row.source_url,
     rawText: row.raw_text,
+    imageUri: row.image_uri,
     createdAt: row.created_at,
   };
 }

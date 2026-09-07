@@ -72,7 +72,9 @@ export async function initializeDatabase() {
     'ALTER TABLE items ADD COLUMN image_uri TEXT;',
     'ALTER TABLE items ADD COLUMN user_deadline TEXT;',
     // 사용자가 고친 제목 (2026-09)
-    'ALTER TABLE items ADD COLUMN user_title TEXT;'
+    'ALTER TABLE items ADD COLUMN user_title TEXT;',
+    // 조각이 스크린샷을 담게 (2026-09)
+    'ALTER TABLE item_sources ADD COLUMN image_uri TEXT;'
   ];
 
   return runWriteAsync(async (database) => {

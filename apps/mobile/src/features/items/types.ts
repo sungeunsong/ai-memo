@@ -39,7 +39,16 @@ export type ItemSource = {
   itemId: string;
   kind: ItemSourceKind;
   sourceUrl: string | null;
+  /**
+   * 조각의 글.
+   *
+   * 스크린샷 조각은 이미지에서 읽어낸 글자가 여기 들어갑니다.
+   * 인스타 DM은 복사도 전달도 안 되어서 스크린샷이 유일한 통로인데,
+   * 글자를 남겨두지 않으면 그 안의 제품명이나 전화번호로 검색할 수 없습니다.
+   */
   rawText: string | null;
+  /** 스크린샷 원본 경로. 나중에 원본을 다시 볼 수 있어야 합니다. */
+  imageUri: string | null;
   createdAt: string;
 };
 

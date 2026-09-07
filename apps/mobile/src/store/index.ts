@@ -106,13 +106,25 @@ type AppStore = {
     savedFrom?: string,
     options?: { deferEnrich?: boolean }
   ) => Promise<SaveUrlResult>;
-  saveImage: (sourceUri: string, savedFrom?: string) => Promise<SaveUrlResult>;
+  saveImage: (
+    sourceUri: string,
+    savedFrom?: string,
+    options?: { deferEnrich?: boolean }
+  ) => Promise<SaveUrlResult>;
   selectItem: (itemId: string) => void;
   updateUserNote: (itemId: string, userNote: string) => Promise<void>;
   retryEnrichMetadata: (itemId: string) => Promise<void>;
   setItemTitle: (itemId: string, title: string | null) => Promise<void>;
   /** 기존 저장물에 정보 조각을 붙이고 AI 정리를 다시 돌립니다. */
   attachSourceToItem: (itemId: string, input: string) => Promise<{ ok: boolean; message?: string }>;
+  /**
+   * 스크린샷을 조각으로 붙입니다.
+   * 인스타 DM은 복사도 전달도 안 되어서, 화면을 찍는 것이 유일한 통로입니다.
+   */
+  attachScreenshotToItem: (
+    itemId: string,
+    imageUri: string
+  ) => Promise<{ ok: boolean; message?: string }>;
   /** 잘못 붙인 조각을 떼고 남은 것 기준으로 다시 정리합니다. */
   detachSourceFromItem: (sourceId: string) => Promise<void>;
   /** 추가 입력 대기를 끝냅니다. input이 있으면 붙이고, 없으면 있는 대로 정리합니다. */
@@ -263,7 +275,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
    * 공유로 넘어온 URI는 임시 경로라 앱 폴더로 옮겨두지 않으면 나중에 못 엽니다.
    * 그래서 저장 시점에 리사이즈해서 복사한 뒤, 그 경로를 원본으로 삼습니다.
    */
-  async saveImage(sourceUri, savedFrom = 'manual') {
+  async saveImage(sourceUri, savedFrom = 'manual', options) {
     if (!get().isReady) {
       await get().initialize();
     }
@@ -283,6 +295,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         imageUri: storedUri,
         thumbnailUrl: storedUri,
         syncStatus: 'queued' as const,
+        // 스크린샷도 어디에 담을지 고르는 동안에는 AI를 돌리지 않습니다.
+        aiStatus: options?.deferEnrich ? 'awaiting_input' : draft.aiStatus,
         sources: [],
       };
       const firstSource = buildInitialSource(fallbackItem);
@@ -300,15 +314,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
         syncWorkerMessage: null,
       }));
 
-      void enrichSavedItemMetadata(
-        fallbackItem.id,
-        async () => {
-          const base64 = await readImageForAnalysis(storedUri);
-          return fetchImageMetadataPatch(base64 ?? '');
-        },
-        set,
-        get
-      );
+      if (!options?.deferEnrich) {
+        void enrichSavedItemMetadata(
+          fallbackItem.id,
+          async () => {
+            const base64 = await readImageForAnalysis(storedUri);
+            return fetchImageMetadataPatch(base64 ?? '');
+          },
+          set,
+          get
+        );
+      }
       void runSyncWorker(set, get);
 
       return { ok: true };
@@ -443,6 +459,48 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return { ok: false, message };
     }
   },
+  async attachScreenshotToItem(itemId, imageUri) {
+    if (!get().isReady) {
+      return { ok: false, message: '로컬 저장소가 아직 준비되지 않았습니다.' };
+    }
+
+    const item = get().items.find((entry) => entry.id === itemId);
+    if (!item) {
+      return { ok: false, message: '붙일 저장물을 찾지 못했습니다.' };
+    }
+
+    try {
+      // 공유로 받은 경로는 임시라 앱 폴더로 옮겨두지 않으면 나중에 못 엽니다.
+      const storedUri = await persistImage(imageUri, `${itemId}_${Date.now()}`);
+
+      // 이미지에서 글자를 먼저 읽습니다. 조각에 글이 남아야 검색에 잡힙니다.
+      // DM에만 있는 전화번호나 제품명으로 찾을 수 있어야 하기 때문입니다.
+      const base64 = await readImageForAnalysis(storedUri);
+      const ocr = base64 ? await fetchImageMetadataPatch(base64, item.createdAt) : null;
+      const extracted = ocr?.contentText?.trim() ?? '';
+
+      const source = buildItemSource(
+        itemId,
+        'screenshot',
+        null,
+        extracted || null,
+        storedUri
+      );
+
+      await addItemSourceAsync(source);
+      set((state) => ({
+        items: state.items.map((entry) =>
+          entry.id === itemId ? { ...entry, sources: [...entry.sources, source] } : entry
+        ),
+      }));
+
+      await reenrichFromSources(itemId, set, get);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '스크린샷을 붙이지 못했습니다.';
+      return { ok: false, message };
+    }
+  },
   async detachSourceFromItem(sourceId) {
     if (!get().isReady) {
       return;
@@ -453,6 +511,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     );
     if (!owner) {
       return;
+    }
+
+    // 스크린샷 조각이면 파일도 지웁니다. 안 지우면 앱 폴더에 남아 용량만 먹습니다.
+    const removed = owner.sources.find((source) => source.id === sourceId);
+    if (removed?.imageUri) {
+      await deletePersistedImage(removed.imageUri).catch(() => {});
     }
 
     await removeItemSourceAsync(sourceId);

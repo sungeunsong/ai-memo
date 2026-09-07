@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS item_sources (
   kind TEXT NOT NULL,
   source_url TEXT,
   raw_text TEXT,
+  image_uri TEXT,
   created_at TEXT NOT NULL
 );
 

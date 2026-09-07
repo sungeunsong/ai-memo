@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 
 import { SavedItem } from '@/features/items/types';
 import { isEnrichStalled } from '@/features/items/staleEnrich';
@@ -132,6 +133,7 @@ export function DetailContent({
   const isSaving = useAppStore((state) => state.isSaving);
   const setItemTitle = useAppStore((state) => state.setItemTitle);
   const attachSourceToItem = useAppStore((state) => state.attachSourceToItem);
+  const attachScreenshotToItem = useAppStore((state) => state.attachScreenshotToItem);
   const detachSourceFromItem = useAppStore((state) => state.detachSourceFromItem);
   const resolveAwaitingInput = useAppStore((state) => state.resolveAwaitingInput);
   const setItemCategory = useAppStore((state) => state.setItemCategory);
@@ -199,6 +201,38 @@ export function DetailContent({
         },
       ]
     );
+  }
+
+  /**
+   * 스크린샷을 골라 붙입니다.
+   *
+   * 인스타 DM은 길게 눌러도 복사·전달이 없습니다. 화면을 찍는 것이 유일한 통로라
+   * 이 버튼이 사실상 DM을 담는 기본 경로입니다.
+   */
+  async function pickScreenshot() {
+    if (isAttaching) return;
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setToastMessage('사진 접근 권한이 필요합니다.');
+      return;
+    }
+
+    const picked = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+    });
+    if (picked.canceled || !picked.assets?.[0]?.uri) return;
+
+    setIsAttaching(true);
+    try {
+      const result = await attachScreenshotToItem(selectedItem.id, picked.assets[0].uri);
+      setToastMessage(
+        result.ok ? '스크린샷을 읽어 함께 정리합니다' : result.message ?? '붙이지 못했습니다'
+      );
+    } finally {
+      setIsAttaching(false);
+    }
   }
 
   async function commitSource() {
@@ -434,6 +468,9 @@ export function DetailContent({
 
         {selectedItem.sources.map((source) => (
           <View key={source.id} style={styles.sourceRow}>
+            {source.imageUri ? (
+              <Image source={{ uri: source.imageUri }} style={styles.sourceThumb as any} />
+            ) : null}
             <View style={styles.sourceRowText}>
               <Text style={styles.sourceKind}>
                 {SOURCE_KIND_LABELS[source.kind] ?? source.kind}
@@ -458,7 +495,7 @@ export function DetailContent({
         <TextInput
           value={sourceDraft}
           onChangeText={setSourceDraft}
-          placeholder="받은 DM이나 링크를 붙여넣으세요"
+          placeholder="링크나 메모를 붙여넣으세요 (인스타 DM은 스크린샷으로)"
           placeholderTextColor={palette.textMuted}
           style={styles.sourceInput}
           multiline
@@ -467,6 +504,16 @@ export function DetailContent({
         />
 
         <View style={styles.sourceActions}>
+          <Pressable
+            disabled={isAttaching}
+            onPress={pickScreenshot}
+            style={({ pressed }) => [
+              styles.sourceSkipBtn,
+              (pressed || isAttaching) && { opacity: 0.6 },
+            ]}
+          >
+            <Text style={styles.sourceSkipText}>스크린샷 📷</Text>
+          </Pressable>
           {isAwaitingInput ? (
             <Pressable
               onPress={() => void resolveAwaitingInput(selectedItem.id)}
@@ -1353,6 +1400,12 @@ const createStyles = (palette: Palette) =>
     paddingVertical: spacing[2],
   },
   sourceRowText: { flex: 1, gap: 2 },
+  sourceThumb: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: palette.surface,
+  },
   sourceKind: { color: palette.textSecondary, fontSize: 11, fontWeight: '900' },
   sourceExcerpt: { color: palette.textMuted, fontSize: 11, fontWeight: '600', lineHeight: 15 },
   sourceRemove: { paddingHorizontal: spacing[2], paddingVertical: 2 },
