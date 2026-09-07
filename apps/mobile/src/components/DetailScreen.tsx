@@ -217,7 +217,11 @@ export function DetailContent({
       {/* 1. 헤더 히어로 */}
       <View style={[styles.detailHero, { borderColor: theme.border, backgroundColor: theme.bg }]}>
         <View style={styles.detailHeroText}>
-          <Text style={styles.detailTitle}>{selectedItem.title}</Text>
+          {/* 이미 저장된 아이템에는 캡션이 통째로 들어간 제목이 남아 있습니다.
+              재분석 전까지는 화면에서라도 막아둡니다. */}
+          <Text style={styles.detailTitle} numberOfLines={3}>
+            {selectedItem.title}
+          </Text>
           <Text style={[styles.detailSource, { color: theme.badgeText, fontWeight: '700' }]}>
             {theme.label} · {selectedItem.sourceUrl ? getHostname(selectedItem.sourceUrl) : '로컬'}
           </Text>

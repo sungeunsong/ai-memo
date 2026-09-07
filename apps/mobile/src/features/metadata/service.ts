@@ -60,6 +60,53 @@ type YouTubeOEmbedResponse = {
   thumbnail_url?: string;
 };
 
+/**
+ * 제목 길이 상한.
+ *
+ * 인스타그램 og:title은 '<계정> on Instagram: "<캡션 전체>"' 형태라 700자가 넘습니다.
+ * 목록에서 훑어보라고 있는 자리에 본문을 통째로 넣을 수는 없습니다.
+ */
+const MAX_TITLE_LENGTH = 60;
+
+/**
+ * 화면에 올릴 제목을 정합니다.
+ *
+ * AI가 지어준 제목이 가장 좋지만, 실패했다고 해서 캡션 전체를 제목이라고
+ * 내놓을 수는 없습니다. 그럴 때는 본문 첫 줄에서 뽑고, 그마저 없으면
+ * 원래 제목을 잘라서라도 길이는 지킵니다.
+ */
+function resolveTitle(title: string, content: string | null, sourceUrl: string): string {
+  if (!isUninformativeTitle(title, sourceUrl)) {
+    return clampTitle(title);
+  }
+
+  const derived = deriveTitleFromContent(content);
+  return clampTitle(derived || title);
+}
+
+function clampTitle(title: string): string {
+  const trimmed = title.trim();
+  if (trimmed.length <= MAX_TITLE_LENGTH) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, MAX_TITLE_LENGTH).trimEnd()}…`;
+}
+
+/** 본문 첫 줄을 제목으로 씁니다. 대개 무엇에 관한 글인지는 첫 줄이 말해줍니다. */
+function deriveTitleFromContent(content: string | null): string | null {
+  if (!content) {
+    return null;
+  }
+
+  const firstMeaningfulLine = content
+    .split('\n')
+    .map((line) => line.replace(/[#*`>]/g, '').trim())
+    .find((line) => line.replace(/[^가-힣a-zA-Z0-9]/g, '').length >= 3);
+
+  return firstMeaningfulLine ?? null;
+}
+
 export async function fetchMetadataPatch(
   sourceUrl: string,
   referenceDate?: string
@@ -74,7 +121,9 @@ export async function fetchMetadataPatch(
 
     return {
       sourceUrl: metadata.sourceUrl,
-      title: metadata.title,
+      // 경로가 여럿(YouTube·Jina·og 태그)이라 각자 자르게 두면 반드시 빠뜨립니다.
+      // patch를 만드는 이 한 곳에서 정리합니다.
+      title: resolveTitle(metadata.title, metadata.contentText ?? metadata.summary, metadata.sourceUrl),
       summary: metadata.summary,
       content: metadata.content,
       contentText: metadata.contentText,
