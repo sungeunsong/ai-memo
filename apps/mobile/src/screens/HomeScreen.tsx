@@ -76,6 +76,15 @@ const IGNORED_CLIPBOARD_KEY = 'clipboard.ignored';
 /** 헤더 버튼은 한 번 누를 때마다 다크 → 라이트 → 시스템으로 돕니다. */
 const THEME_ICONS: Record<string, string> = { dark: '🌙', light: '☀️', system: '🌗' };
 const THEME_LABELS: Record<string, string> = { dark: '다크', light: '라이트', system: '시스템' };
+/**
+ * 아이콘만으로는 무엇이 바뀌었는지 알 수 없습니다. 특히 🌗(시스템)은
+ * 처음 보면 무슨 모드인지 짐작이 안 갑니다. 이름 대신 하는 일을 적습니다.
+ */
+const THEME_TOASTS: Record<string, string> = {
+  dark: '🌙 항상 어둡게',
+  light: '☀️ 항상 밝게',
+  system: '🌗 기기 설정을 따릅니다',
+};
 
 export function HomeScreen() {
   const { palette, mode, preference, cyclePreference } = useTheme();
@@ -628,7 +637,7 @@ export function HomeScreen() {
             <Text style={styles.themeToggleIcon}>📦</Text>
           </Pressable>
           <Pressable
-            onPress={cyclePreference}
+            onPress={() => setToastMessage(THEME_TOASTS[cyclePreference()])}
             accessibilityLabel={`테마 전환 (현재 ${THEME_LABELS[preference]})`}
             style={({ pressed }) => [
               styles.themeToggle,

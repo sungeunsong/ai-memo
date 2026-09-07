@@ -24,8 +24,11 @@ type ThemeContextValue = {
   mode: ThemeMode;
   preference: ThemePreference;
   setPreference: (next: ThemePreference) => void;
-  /** 다크 → 라이트 → 시스템 순으로 돌립니다. */
-  cyclePreference: () => void;
+  /**
+   * 다크 → 라이트 → 시스템 순으로 돌리고, 바뀐 값을 돌려줍니다.
+   * 부르는 쪽이 무엇으로 바뀌었는지 알려줘야 해서 값을 반환합니다.
+   */
+  cyclePreference: () => ThemePreference;
 };
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -76,7 +79,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     preference === 'system' ? (systemScheme === 'light' ? 'light' : 'dark') : preference;
 
   const cyclePreference = useCallback(() => {
-    setPreference(preference === 'dark' ? 'light' : preference === 'light' ? 'system' : 'dark');
+    const next: ThemePreference =
+      preference === 'dark' ? 'light' : preference === 'light' ? 'system' : 'dark';
+    setPreference(next);
+    return next;
   }, [preference, setPreference]);
 
   const value = useMemo<ThemeContextValue>(
