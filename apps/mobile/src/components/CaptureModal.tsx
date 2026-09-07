@@ -8,10 +8,13 @@ import {
   View,
 } from 'react-native';
 
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { Palette } from '@/theme/palette';
 import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 import { useBackHandler } from '@/hooks/useBackHandler';
+import { useKeyboardHeight } from '@/hooks/useKeyboardHeight';
 
 type Props = {
   visible: boolean;
@@ -32,6 +35,8 @@ export function CaptureModal({
 }: Props) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const insets = useSafeAreaInsets();
+  const keyboardHeight = useKeyboardHeight();
   const [input, setInput] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,9 +57,16 @@ export function CaptureModal({
   }
 
   return (
-    <View style={styles.backdrop}>
+    // 키보드가 올라오면 그 높이만큼 시트를 띄웁니다.
+    <View style={[styles.backdrop, { paddingBottom: keyboardHeight }]}>
       <Pressable style={styles.backdropTap} onPress={onClose} />
-      <View style={styles.sheet}>
+      <View
+        style={[
+          styles.sheet,
+          // 키보드가 올라와 있으면 시트 아래는 키보드라 내비게이션 바 몫이 필요 없습니다.
+          { paddingBottom: keyboardHeight > 0 ? 0 : insets.bottom },
+        ]}
+      >
         <View style={styles.sheetHeader}>
           <View style={styles.handle} />
         </View>
@@ -129,11 +141,16 @@ export function CaptureModal({
 
 export function CaptureFloatingButton({ onPress }: { onPress: () => void }) {
   const styles = useThemedStyles(createStyles);
+  // 안드로이드 내비게이션 바(뒤로·홈)가 화면 위에 겹쳐 그려집니다.
+  // 그 높이만큼 올리지 않으면 버튼이 뒤로가기와 붙어 누르기 어렵습니다.
+  const insets = useSafeAreaInsets();
+
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [
         styles.fab,
+        { bottom: insets.bottom + spacing[5] },
         { transform: [{ scale: pressed ? 0.9 : 1 }] },
       ]}
     >
@@ -267,7 +284,7 @@ const createStyles = (palette: Palette) =>
   fab: {
     position: 'absolute',
     right: 20,
-    bottom: 28,
+    // bottom은 안전영역을 더해 컴포넌트에서 지정합니다.
     width: 56,
     height: 56,
     borderRadius: 28,

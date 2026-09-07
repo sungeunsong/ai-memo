@@ -589,8 +589,11 @@ export function HomeScreen() {
   // ==========================================
   // 렌더링
   // ==========================================
+  // 아래쪽 안전영역은 여기서 주지 않습니다. 여기서 밀어두면 화면 바닥에 붙는
+  // 것들(FAB, 바텀시트)이 이미 밀려난 자리를 기준으로 또 밀려나, 얼마나 띄워야
+  // 하는지 각자 계산할 수 없게 됩니다. 필요한 쪽이 직접 안전영역을 씁니다.
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       {/* 에러 배너 (상단 고정) */}
       {runtimeErrorMessage ? (
         <View style={styles.errorBanner}>

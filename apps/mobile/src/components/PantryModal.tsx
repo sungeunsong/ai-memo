@@ -12,6 +12,9 @@ import {
 import { SavedItem } from '@/features/items/types';
 import { matchPantry, summarizeShoppingWins } from '@/features/facets/pantry';
 import { facetEmoji } from '@/features/facets/labels';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { useKeyboardHeight } from '@/hooks/useKeyboardHeight';
 import { Palette } from '@/theme/palette';
 import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
@@ -42,6 +45,8 @@ export function PantryModal({
 }: Props) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const insets = useSafeAreaInsets();
+  const keyboardHeight = useKeyboardHeight();
   const [draft, setDraft] = useState('');
 
   const matches = useMemo(() => matchPantry(items, owned), [items, owned]);
@@ -73,8 +78,16 @@ export function PantryModal({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+      {/* 키보드가 올라오면 그 높이만큼 시트를 띄웁니다.
+          그러지 않으면 방금 누른 입력칸이 키보드 뒤로 숨습니다. */}
+      <View style={[styles.backdrop, { paddingBottom: keyboardHeight }]}>
+        <View
+          style={[
+            styles.sheet,
+            // 키보드가 올라와 있으면 시트 아래는 키보드라 내비게이션 바 몫이 필요 없습니다.
+            { paddingBottom: keyboardHeight > 0 ? spacing[5] : spacing[8] + insets.bottom },
+          ]}
+        >
           <View style={styles.header}>
             <Text style={styles.headerTitle}>🧺 냉장고 털기</Text>
             <Pressable onPress={onClose} hitSlop={10}>
