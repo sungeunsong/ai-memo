@@ -51,7 +51,13 @@ export function StatusPills({
       <StatusBadge label={getSaveStatusLabel(item)} tone="saved" compact={compact} />
       <StatusBadge
         label={getAiStatusLabel(item)}
-        tone={item.aiStatus === 'failed' ? 'failed' : item.aiStatus === 'completed' ? 'saved' : 'pending'}
+        tone={
+          item.aiStatus === 'failed'
+            ? 'failed'
+            : item.aiStatus === 'completed'
+              ? 'saved'
+              : 'pending'
+        }
         compact={compact}
       />
     </View>

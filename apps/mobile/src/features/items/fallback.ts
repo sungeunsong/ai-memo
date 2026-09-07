@@ -32,7 +32,9 @@ export function buildFallbackItem(rawInput: string, savedFrom = 'manual'): Saved
       title = buildFallbackTitle(hostname);
     }
 
-    summary = `${hostname} 링크를 저장했습니다. AI 요약과 파싱이 비동기로 진행됩니다.`;
+    // "비동기로 진행됩니다"라고 적으면 가만 둬도 끝나는 줄 압니다.
+    // 덧붙일 내용을 기다리는 동안에는 아무것도 진행되지 않습니다.
+    summary = `${hostname} 링크를 저장했습니다.`;
     content = primaryUrl;
   } else {
     // 텍스트 메모인 경우

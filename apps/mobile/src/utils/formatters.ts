@@ -88,8 +88,31 @@ export function getAiStatusLabel(item: SavedItem) {
     return '정리 실패';
   }
 
+  // 이건 진행 중이 아니라 사용자를 기다리는 상태입니다.
+  // '요약 정리 중'이라고 적으면 가만 놔둬도 알아서 끝나는 줄 압니다.
+  if (item.aiStatus === 'awaiting_input') {
+    return '추가 입력 대기';
+  }
+
   return '요약 정리 중';
 }
+
+/** 조각이 여럿이면 몇 개인지 알려줍니다. 하나뿐이면 굳이 말할 것이 없습니다. */
+export function getSourceCountLabel(item: SavedItem): string | null {
+  return item.sources.length > 1 ? `출처 ${item.sources.length}개` : null;
+}
+
+export const SOURCE_KIND_LABELS: Record<string, string> = {
+  instagram_reel: 'Instagram 릴스',
+  instagram_dm: 'Instagram DM',
+  url: '링크',
+  youtube: 'YouTube',
+  notion: 'Notion',
+  text: '텍스트',
+  screenshot: '스크린샷',
+  memo: '메모',
+  other: '기타',
+};
 
 export function getSyncStatusLabel(syncStatus: SavedItem['syncStatus']) {
   if (syncStatus === 'queued') {

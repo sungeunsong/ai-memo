@@ -34,6 +34,7 @@ import { ItemCard } from '@/components/ItemCard';
 import { SearchFilterBar } from '@/components/SearchFilterBar';
 import { EmptyResultGuide } from '@/components/EmptyResultGuide';
 import { BackupModal } from '@/components/BackupModal';
+import { SaveTargetModal } from '@/components/SaveTargetModal';
 import { PantryModal } from '@/components/PantryModal';
 import {
   availableFacets,
@@ -110,6 +111,8 @@ export function HomeScreen() {
   const resumeSync = useAppStore((s) => s.resumeSync);
   const resumeEnrich = useAppStore((s) => s.resumeEnrich);
   const reloadItems = useAppStore((s) => s.reloadItems);
+  const attachSourceToItem = useAppStore((s) => s.attachSourceToItem);
+  const resolveAwaitingInput = useAppStore((s) => s.resolveAwaitingInput);
 
   // Share intent
   const { hasShareIntent, shareIntent, resetShareIntent, error: shareIntentError } =
@@ -123,6 +126,8 @@ export function HomeScreen() {
   const [isCaptureVisible, setIsCaptureVisible] = useState(false);
   const [isPantryVisible, setIsPantryVisible] = useState(false);
   const [isBackupVisible, setIsBackupVisible] = useState(false);
+  /** 공유가 들어와 저장을 마친 뒤, 어떻게 담을지 고르는 중인 항목 */
+  const [saveTargetItemId, setSaveTargetItemId] = useState<string | null>(null);
   const [pantryOwned, setPantryOwned] = useState<string[]>([]);
 
   // 냉장고 재료는 매번 다시 입력하게 하면 기능 자체를 안 쓰게 되므로 저장해둡니다.
@@ -272,6 +277,10 @@ export function HomeScreen() {
   const ignoredClipboardLoadedRef = useRef(false);
 
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0] ?? null;
+
+  const saveTargetItem = items.find((item) => item.id === saveTargetItemId) ?? null;
+  // 인스타는 "댓글 남기면 DM 드려요"가 붙는 일이 잦아, 뒤따라올 내용이 있을 확률이 높습니다.
+  const expectsFollowUp = Boolean(saveTargetItem?.sourceType.startsWith('instagram'));
   const runtimeErrorMessage = errorMessage ?? shareIntentError ?? null;
 
   // ==========================================
@@ -453,13 +462,14 @@ export function HomeScreen() {
 
     // 공유 인텐트가 오면 자동으로 저장
     void (async () => {
-      const result = await saveUrl(sharedInput);
+      // 저장을 먼저 끝냅니다. 이어지는 선택 화면에서 뒤로 가거나 앱이 죽어도
+      // 공유한 내용이 사라지면 안 됩니다.
+      const result = await saveUrl(sharedInput, 'share', { deferEnrich: true });
       if (result.ok) {
+        // 여기서 '저장됨'을 알리지 않습니다. 아직 확정 전이고, 닫으면 취소됩니다.
+        // 선택이 끝난 뒤에 그 결과를 알립니다.
         const nextId = useAppStore.getState().selectedItemId;
-        const savedItem = useAppStore.getState().items.find((i) => i.id === nextId) ?? null;
-        setToastMessage('수집함에 저장됨');
-        setCaptureNotice(buildCaptureNotice(savedItem, sharedInput, 'share'));
-        if (nextId) setHighlightedItemId(nextId);
+        if (nextId) setSaveTargetItemId(nextId);
       }
       resetShareIntent();
     })();
@@ -849,6 +859,55 @@ export function HomeScreen() {
         onSave={handleSaveFromCapture}
         isSaving={isSaving}
         initialValue={captureInitialValue}
+      />
+
+      {/* 공유 직후: 새로 저장할지, 기존에 합칠지, 덧붙일 내용을 기다릴지 */}
+      <SaveTargetModal
+        visible={saveTargetItem !== null}
+        savedItemId={saveTargetItem?.id ?? null}
+        items={items}
+        expectsFollowUp={expectsFollowUp}
+        onKeepAsNew={() => {
+          const target = saveTargetItem;
+          setSaveTargetItemId(null);
+          if (!target) return;
+          setHighlightedItemId(target.id);
+          setToastMessage('수집함에 저장됨');
+          void resolveAwaitingInput(target.id);
+        }}
+        onCancel={() => {
+          const target = saveTargetItem;
+          setSaveTargetItemId(null);
+          if (!target) return;
+          // 시트가 뜨기 전에 이미 저장해뒀습니다. 그래야 보는 도중 앱이 죽어도
+          // 공유한 내용이 사라지지 않습니다. 취소는 그걸 되돌리는 일입니다.
+          void deleteItem(target.id);
+          setToastMessage('저장하지 않았습니다');
+        }}
+        onWaitForMore={() => {
+          // 저장은 이미 awaiting_input 상태입니다. 그대로 두면 됩니다.
+          const target = saveTargetItem;
+          setSaveTargetItemId(null);
+          if (target) setHighlightedItemId(target.id);
+          setToastMessage('내용을 붙일 때까지 정리를 미룹니다');
+        }}
+        onMergeInto={(targetItemId) => {
+          const source = saveTargetItem;
+          setSaveTargetItemId(null);
+          if (!source) return;
+          void (async () => {
+            const merged = await attachSourceToItem(targetItemId, source.rawInput);
+            if (merged.ok) {
+              // 합쳤으니 방금 만든 임시 항목은 남길 이유가 없습니다.
+              await deleteItem(source.id);
+              setToastMessage('기존 저장물에 합쳤습니다');
+              setHighlightedItemId(targetItemId);
+            } else {
+              setToastMessage(merged.message ?? '합치지 못했습니다');
+              void resolveAwaitingInput(source.id);
+            }
+          })();
+        }}
       />
 
       {/* 백업 (내보내기 / 가져오기) */}

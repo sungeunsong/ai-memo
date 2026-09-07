@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Image,
   Linking,
@@ -25,6 +26,7 @@ import {
   getSourceTheme,
   getCategoryLabel,
   getItemCategory,
+  SOURCE_KIND_LABELS,
   getItemTitle,
   getSyncStatusLabel,
   tryParseStructuredContent,
@@ -129,6 +131,9 @@ export function DetailContent({
   const retryEnrichMetadata = useAppStore((state) => state.retryEnrichMetadata);
   const isSaving = useAppStore((state) => state.isSaving);
   const setItemTitle = useAppStore((state) => state.setItemTitle);
+  const attachSourceToItem = useAppStore((state) => state.attachSourceToItem);
+  const detachSourceFromItem = useAppStore((state) => state.detachSourceFromItem);
+  const resolveAwaitingInput = useAppStore((state) => state.resolveAwaitingInput);
   const setItemCategory = useAppStore((state) => state.setItemCategory);
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
   const [isDeadlineEditorVisible, setIsDeadlineEditorVisible] = useState(false);
@@ -167,6 +172,52 @@ export function DetailContent({
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [sourceDraft, setSourceDraft] = useState('');
+  const [isAttaching, setIsAttaching] = useState(false);
+
+  const isAwaitingInput = selectedItem.aiStatus === 'awaiting_input';
+
+  /**
+   * 조각을 뗄지 확인받습니다.
+   *
+   * 떼면 남은 것 기준으로 AI 정리가 곧바로 다시 돌아갑니다. 되돌릴 수 없고
+   * AI 호출도 한 번 나가므로, 누르자마자 진행되면 놀랍니다.
+   */
+  function confirmDetachSource(sourceId: string) {
+    Alert.alert(
+      '출처 떼기',
+      '이 내용을 떼면 남은 내용만으로 정리를 다시 만듭니다. 계속할까요?',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '떼고 다시 정리',
+          style: 'destructive',
+          onPress: () => {
+            void detachSourceFromItem(sourceId);
+            setToastMessage('출처를 떼고 다시 정리합니다');
+          },
+        },
+      ]
+    );
+  }
+
+  async function commitSource() {
+    const text = sourceDraft.trim();
+    if (!text || isAttaching) return;
+
+    setIsAttaching(true);
+    try {
+      const result = await attachSourceToItem(selectedItem.id, text);
+      if (result.ok) {
+        setSourceDraft('');
+        setToastMessage('내용을 붙이고 다시 정리합니다');
+      } else {
+        setToastMessage(result.message ?? '붙이지 못했습니다');
+      }
+    } finally {
+      setIsAttaching(false);
+    }
+  }
 
   function startEditingTitle() {
     setTitleDraft(getItemTitle(selectedItem));
@@ -367,6 +418,82 @@ export function DetailContent({
         </View>
       </View>
 
+      {/* 2.5. 출처(조각) — 릴스에 나중에 받은 DM을 붙이는 자리 */}
+      <View style={styles.sourceCard}>
+        <View style={styles.summaryHeader}>
+          <Text style={styles.summaryTitle}>
+            🧩 출처 {selectedItem.sources.length > 0 ? selectedItem.sources.length : 1}개
+          </Text>
+        </View>
+
+        {isAwaitingInput ? (
+          <Text style={styles.awaitingHint}>
+            덧붙일 내용을 기다리는 중입니다. 아래에 붙여넣으면 함께 정리합니다.
+          </Text>
+        ) : null}
+
+        {selectedItem.sources.map((source) => (
+          <View key={source.id} style={styles.sourceRow}>
+            <View style={styles.sourceRowText}>
+              <Text style={styles.sourceKind}>
+                {SOURCE_KIND_LABELS[source.kind] ?? source.kind}
+              </Text>
+              <Text style={styles.sourceExcerpt} numberOfLines={2}>
+                {source.rawText?.trim() || source.sourceUrl || '내용 없음'}
+              </Text>
+            </View>
+            {/* 조각이 하나뿐이면 뗄 수 없습니다. 그건 저장물 자체를 지우는 일입니다. */}
+            {selectedItem.sources.length > 1 ? (
+              <Pressable
+                onPress={() => confirmDetachSource(source.id)}
+                hitSlop={8}
+                style={({ pressed }) => [styles.sourceRemove, pressed && { opacity: 0.5 }]}
+              >
+                <Text style={styles.sourceRemoveText}>떼기</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ))}
+
+        <TextInput
+          value={sourceDraft}
+          onChangeText={setSourceDraft}
+          placeholder="받은 DM이나 링크를 붙여넣으세요"
+          placeholderTextColor={palette.textMuted}
+          style={styles.sourceInput}
+          multiline
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
+        <View style={styles.sourceActions}>
+          {isAwaitingInput ? (
+            <Pressable
+              onPress={() => void resolveAwaitingInput(selectedItem.id)}
+              style={({ pressed }) => [styles.sourceSkipBtn, pressed && { opacity: 0.6 }]}
+            >
+              <Text style={styles.sourceSkipText}>그냥 정리하기</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            disabled={!sourceDraft.trim() || isAttaching}
+            onPress={commitSource}
+            style={({ pressed }) => [
+              styles.sourceAddBtn,
+              (pressed || !sourceDraft.trim() || isAttaching) && { opacity: 0.5 },
+            ]}
+          >
+            {isAttaching ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Text style={styles.sourceAddText}>
+              {isAwaitingInput ? '붙이고 정리' : '붙이고 다시 정리'}
+            </Text>
+            )}
+          </Pressable>
+        </View>
+      </View>
+
       {/* 3. AI 요약
           예전에는 인스타그램 본문을 긁지 못해 이 카드를 통째로 숨겼습니다.
           지금은 Jina로 캡션을 가져오고 정리본도 만들어지므로 숨길 이유가 없습니다.
@@ -389,7 +516,11 @@ export function DetailContent({
             {isSaving || isEnriching ? (
               <ActivityIndicator size="small" color={palette.accentText} />
             ) : (
-              <Text style={styles.reanalyzeBtnText}>재분석 🧪</Text>
+              // 아직 한 번도 정리하지 않았는데 '재분석'이라고 하면
+              // 이미 정리가 끝난 줄로 읽힙니다.
+              <Text style={styles.reanalyzeBtnText}>
+                {isAwaitingInput ? '정리하기 ✨' : '재분석 🧪'}
+              </Text>
             )}
           </Pressable>
         </View>
@@ -397,7 +528,12 @@ export function DetailContent({
             structured.detailedAnalysis는 digest 컬럼 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
             소제목·불릿을 써서 오라고 프롬프트에 적어놓고 정작 <Text> 하나에 밀어넣고 있었습니다.
             마크다운으로 렌더링해야 그 구조가 화면에 나타납니다. */}
-        {summaryBody ? (
+        {isAwaitingInput ? (
+          <Text style={styles.summaryValue}>
+            아직 정리하지 않았습니다. 위에 덧붙일 내용을 넣고 "붙이고 정리"를 누르거나,
+            "그냥 정리하기"를 누르면 지금 있는 내용만으로 정리합니다.
+          </Text>
+        ) : summaryBody ? (
           <MarkdownViewer markdown={summaryBody} />
         ) : (
           <Text style={styles.summaryValue}>
@@ -1192,6 +1328,66 @@ const createStyles = (palette: Palette) =>
     fontSize: 10.5,
     fontWeight: '900',
   },
+  sourceCard: {
+    backgroundColor: palette.surface,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: palette.border,
+    padding: spacing[4],
+    marginTop: spacing[3],
+    gap: spacing[2],
+  },
+  awaitingHint: {
+    color: palette.warnText,
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  sourceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 12,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+  },
+  sourceRowText: { flex: 1, gap: 2 },
+  sourceKind: { color: palette.textSecondary, fontSize: 11, fontWeight: '900' },
+  sourceExcerpt: { color: palette.textMuted, fontSize: 11, fontWeight: '600', lineHeight: 15 },
+  sourceRemove: { paddingHorizontal: spacing[2], paddingVertical: 2 },
+  sourceRemoveText: { color: palette.dangerText, fontSize: 11, fontWeight: '800' },
+  sourceInput: {
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.border,
+    color: palette.textPrimary,
+    fontSize: 12,
+    minHeight: 60,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[3],
+    textAlignVertical: 'top',
+  },
+  sourceActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[2] },
+  sourceSkipBtn: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+  },
+  sourceSkipText: { color: palette.textSecondary, fontSize: 12, fontWeight: '800' },
+  sourceAddBtn: {
+    backgroundColor: palette.accent,
+    borderRadius: 12,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+    minWidth: 110,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sourceAddText: { color: '#ffffff', fontSize: 12, fontWeight: '900' },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
