@@ -423,8 +423,11 @@ export function filterItems(items: SavedItem[], searchQuery: string): SavedItem[
       }
     }
 
-    // 요약 검색
-    if (item.summary && hangulMatch(item.summary, query)) return true;
+    // 요약도 본문과 같은 규칙으로 봅니다.
+    // 세 줄 요약은 짧지 않아서, 자소 순서 매칭을 켜두면 '감자'나 '고기' 같은
+    // 흔한 낱말이 관련 없는 요약에 전부 걸립니다. 검색이 아무것도 걸러주지
+    // 못하는 것처럼 보이던 원인이었습니다.
+    if (matchBodyText(item.summary, query)) return true;
 
     // 원문/정리본/본문/URL 폴백 검색
     // AI 분류나 구조화 추출이 실패한 아이템도 반드시 다시 찾을 수 있어야 하므로,

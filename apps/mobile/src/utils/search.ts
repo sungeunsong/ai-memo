@@ -72,6 +72,15 @@ export function isChoseongOnly(query: string): boolean {
  *   ('인피니티풀이 있는 오션뷰 숙소'가 '풀빌라'에 매칭되는 식)
  *   그래서 긴 텍스트를 검색할 때는 꺼서 씁니다.
  */
+/**
+ * 자소 순서 매칭을 허용할 대상 길이의 상한.
+ *
+ * 순서만 맞으면 걸리는 규칙이라, 대상이 길수록 아무 글에나 매칭됩니다.
+ * 실제로 '감자'나 '고기'로 검색하면 관련 없는 세 줄 요약이 전부 걸렸습니다.
+ * 재료명이나 지역명 정도의 짧은 값에서만 켭니다.
+ */
+const FUZZY_TARGET_LENGTH_LIMIT = 12;
+
 export function hangulMatch(
   target: string,
   query: string,
@@ -99,7 +108,8 @@ export function hangulMatch(
   if (disassembledTarget.includes(disassembledQuery)) return true;
 
   // 4. 자소 단위 순서 매칭 (퍼지 검색: 'ㄹ시피' -> '레시피' / 'ㄹㅅㅣㅍㅣ' -> 'ㄹㅔㅅㅣㅍㅣ')
-  if (!fuzzy) {
+  // 부르는 쪽이 켜뒀더라도 대상이 길면 쓰지 않습니다. 오탐이 검색을 무의미하게 만듭니다.
+  if (!fuzzy || cleanTarget.length > FUZZY_TARGET_LENGTH_LIMIT) {
     return false;
   }
 
