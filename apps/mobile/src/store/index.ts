@@ -30,6 +30,7 @@ import {
   SyncWorkerResult,
 } from '@/features/items/types';
 import { STALLED_ENRICH_MESSAGE } from '@/features/items/staleEnrich';
+import { applyItemPatch } from '@/features/items/patch';
 import { runSyncQueueOnce } from '@/sync/worker';
 
 let initializationPromise: Promise<void> | null = null;
@@ -757,28 +758,7 @@ function applyMetadataPatch(item: SavedItem, itemId: string, patch: ItemMetadata
     return item;
   }
 
-  return {
-    ...item,
-    ...(patch.sourceUrl !== undefined && patch.sourceUrl ? { sourceUrl: patch.sourceUrl } : null),
-    ...(patch.title ? { title: patch.title } : null),
-    ...(patch.summary ? { summary: patch.summary } : null),
-    ...(patch.content ? { content: patch.content } : null),
-    ...(patch.contentText ? { contentText: patch.contentText } : null),
-    ...(patch.digest ? { digest: patch.digest } : null),
-    // 실패 이유는 성공 시 null로 지워져야 하므로 undefined 여부로 판단합니다.
-    ...(patch.aiError !== undefined ? { aiError: patch.aiError } : null),
-    ...(patch.userTitle !== undefined ? { userTitle: patch.userTitle } : null),
-    ...(patch.userCategory !== undefined ? { userCategory: patch.userCategory } : null),
-    ...(patch.imageUri ? { imageUri: patch.imageUri } : null),
-    ...(patch.userDeadline !== undefined ? { userDeadline: patch.userDeadline } : null),
-    ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
-    ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
-    ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),
-    ...(patch.extractedUrls !== undefined ? { extractedUrls: patch.extractedUrls } : null),
-    ...(patch.sourceType ? { sourceType: patch.sourceType } : null),
-    ...(patch.savedFrom ? { savedFrom: patch.savedFrom } : null),
-    updatedAt: patch.updatedAt,
-  };
+  return applyItemPatch(item, patch);
 }
 
 function buildItemSyncJob(item: SavedItem) {

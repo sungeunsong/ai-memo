@@ -1,5 +1,11 @@
 import { SQLiteDatabase } from 'expo-sqlite';
 
+import {
+  ITEM_PATCH_COLUMNS,
+  ITEM_PATCH_FIELDS,
+  serializeItemPatchValue,
+} from '@/features/items/patch';
+
 import { ItemMetadataPatch, SaveUrlPayload, SavedItem } from '@/features/items/types';
 
 type ItemRow = {
@@ -99,53 +105,27 @@ export async function updateItemMetadataAsync(
   itemId: string,
   patch: ItemMetadataPatch
 ) {
+  // 바꿀 항목만 골라 SET 절을 만듭니다.
+  //
+  // 예전에는 컬럼을 전부 나열하고 COALESCE로 걸렀는데, 그러면 null을 넘겨도
+  // 값이 남습니다. 화면 쪽은 null을 '지우기'로 읽고 있어서 둘이 어긋났습니다.
+  // 여기에 없는 항목은 아예 건드리지 않으므로 두 해석이 같아집니다.
+  const assignments: string[] = [];
+  const values: (string | null)[] = [];
+
+  for (const field of ITEM_PATCH_FIELDS) {
+    const value = patch[field];
+    if (value === undefined) continue;
+    assignments.push(`${ITEM_PATCH_COLUMNS[field]} = ?`);
+    values.push(serializeItemPatchValue(field, value));
+  }
+
+  assignments.push('updated_at = ?');
+  values.push(patch.updatedAt);
+
   await db.runAsync(
-    `UPDATE items
-    SET
-      source_url = COALESCE(?, source_url),
-      title = COALESCE(?, title),
-      summary = COALESCE(?, summary),
-      content = COALESCE(?, content),
-      content_text = COALESCE(?, content_text),
-      digest = COALESCE(?, digest),
-      ai_error = ?,
-      -- COALESCE를 쓰면 null로 지정 해제가 불가능합니다.
-      -- patch에 키가 있을 때만 덮어쓰도록 플래그로 구분합니다.
-      -- 사용자가 고친 값은 COALESCE를 못 씁니다. null로 되돌리는(해제) 경우를
-      -- 구분해야 해서 플래그로 씁니다. user_category와 같은 방식입니다.
-      user_title = CASE WHEN ? = 1 THEN ? ELSE user_title END,
-      user_category = CASE WHEN ? = 1 THEN ? ELSE user_category END,
-      image_uri = COALESCE(?, image_uri),
-      user_deadline = CASE WHEN ? = 1 THEN ? ELSE user_deadline END,
-      thumbnail_url = COALESCE(?, thumbnail_url),
-      ai_status = COALESCE(?, ai_status),
-      user_note = COALESCE(?, user_note),
-      extracted_urls = COALESCE(?, extracted_urls),
-      source_type = COALESCE(?, source_type),
-      saved_from = COALESCE(?, saved_from),
-      updated_at = ?
-    WHERE id = ?`,
-    patch.sourceUrl ?? null,
-    patch.title ?? null,
-    patch.summary ?? null,
-    patch.content ?? null,
-    patch.contentText ?? null,
-    patch.digest ?? null,
-    patch.aiError ?? null,
-    patch.userTitle !== undefined ? 1 : 0,
-    patch.userTitle ?? null,
-    patch.userCategory !== undefined ? 1 : 0,
-    patch.userCategory ?? null,
-    patch.imageUri ?? null,
-    patch.userDeadline !== undefined ? 1 : 0,
-    patch.userDeadline ?? null,
-    patch.thumbnailUrl ?? null,
-    patch.aiStatus ?? null,
-    patch.userNote ?? null,
-    patch.extractedUrls ? JSON.stringify(patch.extractedUrls) : null,
-    patch.sourceType ?? null,
-    patch.savedFrom ?? null,
-    patch.updatedAt,
+    `UPDATE items SET ${assignments.join(', ')} WHERE id = ?`,
+    ...values,
     itemId
   );
 }

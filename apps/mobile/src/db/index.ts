@@ -24,6 +24,7 @@ import {
   recoverStalledSyncJobsAsync as recoverStalledSyncJobsInRepositoryAsync,
   upsertSyncJobAsync as upsertSyncJobInRepositoryAsync,
 } from '@/db/syncJobsRepository';
+import { applyItemPatch } from '@/features/items/patch';
 import { STALLED_ENRICH_MESSAGE } from '@/features/items/staleEnrich';
 import { STALLED_SYNC_JOB_THRESHOLD_MS } from '@/sync/retryPolicy';
 import {
@@ -634,29 +635,7 @@ function updateWebSyncJob(
 
 function updateWebItem(itemId: string, patch: ItemMetadataPatch) {
   const nextItems = getWebItems().map((item) =>
-    item.id === itemId
-      ? {
-          ...item,
-          ...(patch.sourceUrl !== undefined ? { sourceUrl: patch.sourceUrl } : null),
-          ...(patch.title ? { title: patch.title } : null),
-          ...(patch.summary ? { summary: patch.summary } : null),
-          ...(patch.content ? { content: patch.content } : null),
-          ...(patch.contentText ? { contentText: patch.contentText } : null),
-          ...(patch.digest ? { digest: patch.digest } : null),
-          ...(patch.aiError !== undefined ? { aiError: patch.aiError } : null),
-          ...(patch.userTitle !== undefined ? { userTitle: patch.userTitle } : null),
-          ...(patch.userCategory !== undefined ? { userCategory: patch.userCategory } : null),
-          ...(patch.imageUri ? { imageUri: patch.imageUri } : null),
-          ...(patch.userDeadline !== undefined ? { userDeadline: patch.userDeadline } : null),
-          ...(patch.thumbnailUrl !== undefined ? { thumbnailUrl: patch.thumbnailUrl } : null),
-          ...(patch.aiStatus ? { aiStatus: patch.aiStatus } : null),
-          ...(patch.userNote !== undefined ? { userNote: patch.userNote } : null),
-          ...(patch.extractedUrls !== undefined ? { extractedUrls: patch.extractedUrls } : null),
-          ...(patch.sourceType ? { sourceType: patch.sourceType } : null),
-          ...(patch.savedFrom ? { savedFrom: patch.savedFrom } : null),
-          updatedAt: patch.updatedAt,
-        }
-      : item
+    item.id === itemId ? applyItemPatch(item, patch) : item
   );
 
   if (typeof globalThis.localStorage === 'undefined') {
