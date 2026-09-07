@@ -454,6 +454,15 @@ export function filterItems(items: SavedItem[], searchQuery: string): SavedItem[
     if (structured && typeof structured.detailedAnalysis === 'string' && matchBodyText(structured.detailedAnalysis, query)) return true;
     if (matchBodyText(item.sourceUrl, query)) return true;
 
+    // 나중에 붙인 조각(주로 인스타 DM)도 원문 검색에 들어가야 합니다.
+    //
+    // 원문 검색은 AI가 놓친 것을 건지는 마지막 그물망입니다. DM에만 있는
+    // 제품명이 요약에 안 들어갔을 때, 여기가 없으면 그 단어로는 영영 못 찾습니다.
+    for (const source of item.sources) {
+      if (matchBodyText(source.rawText, query)) return true;
+      if (matchBodyText(source.sourceUrl, query)) return true;
+    }
+
     return false;
   });
 }

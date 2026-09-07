@@ -2,18 +2,23 @@ import { create } from 'zustand';
 import { Alert } from 'react-native';
 
 import {
+  addItemSourceAsync,
   getNextSyncRetryAtAsync,
   getSavedItemsAsync,
   getSyncQueueSummaryAsync,
   initializeDatabase,
   queueUpsertItemSyncAsync,
+  hasSameItemSourceAsync,
   recoverStalledEnrichAsync,
   recoverStalledSyncJobsAsync,
+  removeItemSourceAsync,
+  updateItemSourceTextAsync,
   saveUrlItemWithSyncJobAsync,
   updateItemMetadataAsync,
   deleteItemAsync,
 } from '@/db';
 import {
+  composeSourcesForAI,
   fetchMetadataPatch,
   fetchTextMetadataPatch,
   fetchImageMetadataPatch,
@@ -26,11 +31,14 @@ import {
 } from '@/features/capture/imageCapture';
 import {
   ItemMetadataPatch,
+  ItemSource,
   SavedItem,
   SyncWorkerResult,
 } from '@/features/items/types';
 import { STALLED_ENRICH_MESSAGE } from '@/features/items/staleEnrich';
 import { applyItemPatch } from '@/features/items/patch';
+import { classifySourceType } from '@/features/capture/normalizeSharedInput';
+import { buildInitialSource, buildItemSource, toSourceKind } from '@/features/items/sources';
 import { runSyncQueueOnce } from '@/sync/worker';
 
 let initializationPromise: Promise<void> | null = null;
@@ -93,12 +101,22 @@ type AppStore = {
   syncWorkerMessage: string | null;
   isSyncWorkerRunning: boolean;
   initialize: () => Promise<void>;
-  saveUrl: (input: string, savedFrom?: string) => Promise<SaveUrlResult>;
+  saveUrl: (
+    input: string,
+    savedFrom?: string,
+    options?: { deferEnrich?: boolean }
+  ) => Promise<SaveUrlResult>;
   saveImage: (sourceUri: string, savedFrom?: string) => Promise<SaveUrlResult>;
   selectItem: (itemId: string) => void;
   updateUserNote: (itemId: string, userNote: string) => Promise<void>;
   retryEnrichMetadata: (itemId: string) => Promise<void>;
   setItemTitle: (itemId: string, title: string | null) => Promise<void>;
+  /** 기존 저장물에 정보 조각을 붙이고 AI 정리를 다시 돌립니다. */
+  attachSourceToItem: (itemId: string, input: string) => Promise<{ ok: boolean; message?: string }>;
+  /** 잘못 붙인 조각을 떼고 남은 것 기준으로 다시 정리합니다. */
+  detachSourceFromItem: (sourceId: string) => Promise<void>;
+  /** 추가 입력 대기를 끝냅니다. input이 있으면 붙이고, 없으면 있는 대로 정리합니다. */
+  resolveAwaitingInput: (itemId: string, input?: string) => Promise<void>;
   setItemCategory: (itemId: string, category: string | null) => Promise<void>;
   setItemDeadline: (itemId: string, deadline: string | null) => Promise<void>;
   deleteItem: (itemId: string) => Promise<void>;
@@ -177,7 +195,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     return initializationPromise;
   },
-  async saveUrl(input, savedFrom = 'manual') {
+  async saveUrl(input, savedFrom = 'manual', options) {
     if (!get().isReady) {
       await get().initialize();
     }
@@ -196,12 +214,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
         throw new Error('저장할 내용을 입력해 주세요.');
       }
 
-      const fallbackItem = {
-        ...buildFallbackItem(input, savedFrom),
+      const base = buildFallbackItem(input, savedFrom);
+      const firstSource = buildInitialSource(base);
+      const fallbackItem: SavedItem = {
+        ...base,
         syncStatus: 'queued' as const,
+        // 덧붙일 내용을 기다리는 동안에는 AI를 돌리지 않습니다.
+        // 'pending'으로 두면 회수 로직이 '앱이 죽어 끊긴 것'으로 보고 낚아챕니다.
+        aiStatus: options?.deferEnrich ? 'awaiting_input' : base.aiStatus,
+        sources: [firstSource],
       };
+
       const syncJob = buildItemSyncJob(fallbackItem);
       await saveUrlItemWithSyncJobAsync(fallbackItem, syncJob);
+      await addItemSourceAsync(firstSource);
 
       set((state) => ({
         isSaving: false,
@@ -211,17 +237,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         syncWorkerMessage: null,
       }));
 
-      if (fallbackItem.type === 'url' && fallbackItem.sourceUrl) {
-        const sourceUrl = fallbackItem.sourceUrl;
-        void enrichSavedItemMetadata(fallbackItem.id, () => fetchMetadataPatch(sourceUrl), set, get);
-      } else {
-        // 링크 없이 저장된 텍스트(인스타 DM 원문 등)도 요약·정리본·키워드를 뽑습니다.
-        void enrichSavedItemMetadata(
-          fallbackItem.id,
-          () => fetchTextMetadataPatch(fallbackItem.rawInput),
-          set,
-          get
-        );
+      if (!options?.deferEnrich) {
+        void runEnrichForItem(fallbackItem, set, get);
       }
       void runSyncWorker(set, get);
 
@@ -261,15 +278,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const draft = buildFallbackImageItem('', savedFrom);
       const storedUri = await persistImage(sourceUri, draft.id);
 
-      const fallbackItem = {
+      const fallbackItem: SavedItem = {
         ...draft,
         imageUri: storedUri,
         thumbnailUrl: storedUri,
         syncStatus: 'queued' as const,
+        sources: [],
       };
+      const firstSource = buildInitialSource(fallbackItem);
+      fallbackItem.sources = [firstSource];
 
       const syncJob = buildItemSyncJob(fallbackItem);
       await saveUrlItemWithSyncJobAsync(fallbackItem, syncJob);
+      await addItemSourceAsync(firstSource);
 
       set((state) => ({
         isSaving: false,
@@ -370,6 +391,103 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
     if (itemToQueue) await queueUpsertItemSyncAsync(itemToQueue);
     void runSyncWorker(set, get);
+  },
+  /**
+   * 기존 저장물에 정보 조각을 붙입니다.
+   *
+   * 릴스에는 정보가 일부만 있고 나머지는 나중에 DM으로 옵니다. 따로 저장하면
+   * 하나의 정보가 둘로 쪼개져 검색이 무너지므로, 원래 저장물에 이어 붙입니다.
+   */
+  async attachSourceToItem(itemId, input) {
+    if (!get().isReady) {
+      return { ok: false, message: '로컬 저장소가 아직 준비되지 않았습니다.' };
+    }
+
+    const item = get().items.find((entry) => entry.id === itemId);
+    if (!item) {
+      return { ok: false, message: '붙일 저장물을 찾지 못했습니다.' };
+    }
+
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return { ok: false, message: '붙일 내용이 비어 있습니다.' };
+    }
+
+    try {
+      const extractedUrl = trimmed.match(/https?:\/\/[^\s]+/)?.[0] ?? null;
+
+      // 같은 DM을 두 번 붙이면 AI가 같은 말을 두 번 읽고 정리 비용도 헛되이 나갑니다.
+      const duplicate = await hasSameItemSourceAsync(itemId, extractedUrl, trimmed);
+      if (duplicate) {
+        return { ok: false, message: '이미 붙어 있는 내용입니다.' };
+      }
+
+      const source = buildItemSource(
+        itemId,
+        toSourceKind(classifySourceType(extractedUrl, trimmed), Boolean(extractedUrl)),
+        extractedUrl,
+        trimmed
+      );
+
+      await addItemSourceAsync(source);
+      set((state) => ({
+        items: state.items.map((entry) =>
+          entry.id === itemId ? { ...entry, sources: [...entry.sources, source] } : entry
+        ),
+      }));
+
+      await reenrichFromSources(itemId, set, get);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '내용을 붙이지 못했습니다.';
+      return { ok: false, message };
+    }
+  },
+  async detachSourceFromItem(sourceId) {
+    if (!get().isReady) {
+      return;
+    }
+
+    const owner = get().items.find((item) =>
+      item.sources.some((source) => source.id === sourceId)
+    );
+    if (!owner) {
+      return;
+    }
+
+    await removeItemSourceAsync(sourceId);
+    set((state) => ({
+      items: state.items.map((item) =>
+        item.id === owner.id
+          ? { ...item, sources: item.sources.filter((source) => source.id !== sourceId) }
+          : item
+      ),
+    }));
+
+    // 떼어낸 내용이 요약에 남아 있으면 안 됩니다. 남은 것 기준으로 다시 만듭니다.
+    await reenrichFromSources(owner.id, set, get);
+  },
+  /**
+   * 추가 입력 대기를 끝냅니다.
+   *
+   * 붙일 내용이 있으면 붙인 뒤 한 번만 정리합니다. 붙이고 나서 따로 정리를
+   * 돌리면 AI 호출이 두 번 나갑니다.
+   */
+  async resolveAwaitingInput(itemId, input) {
+    if (!get().isReady) {
+      return;
+    }
+
+    const trimmed = input?.trim();
+    if (trimmed) {
+      await get().attachSourceToItem(itemId, trimmed);
+      return;
+    }
+
+    const item = get().items.find((entry) => entry.id === itemId);
+    if (item) {
+      await runEnrichForItem(item, set, get);
+    }
   },
   /**
    * 사용자가 카테고리를 직접 바꿉니다.
@@ -599,6 +717,65 @@ async function resumeStalledEnrich(set: SetAppState, get: () => AppStore) {
 }
 
 /**
+ * 링크에서 긁어온 본문을 첫 조각에 넣어둡니다.
+ *
+ * 링크 조각은 저장 시점에 주소만 있고 본문이 없습니다. 나중에 조각이 늘어
+ * 다시 정리할 때, 이 본문이 없으면 링크를 또 긁어와야 합니다.
+ * 한 번 긁은 글을 조각에 담아두면 재정리가 네트워크 없이 됩니다.
+ */
+async function cacheFetchedBodyIntoSource(
+  itemId: string,
+  patch: ItemMetadataPatch,
+  get: () => AppStore
+) {
+  const body = patch.contentText?.trim();
+  if (!body) return;
+
+  const item = get().items.find((entry) => entry.id === itemId);
+  const target = item?.sources.find((source) => source.sourceUrl && !source.rawText?.trim());
+  if (!target) return;
+
+  await updateItemSourceTextAsync(target.id, body).catch((error) => {
+    // 캐시가 실패해도 보강 자체는 성공한 것입니다. 다음 재정리 때 다시 긁으면 됩니다.
+    console.log('[Enrich] 조각 본문 캐시 실패:', error);
+  });
+}
+
+/**
+ * 붙어 있는 조각 전체를 종합해 AI 정리를 다시 만듭니다.
+ *
+ * 기존 요약에 새 내용을 이어 붙이는 대신 원본 조각들로 다시 만듭니다.
+ * 이어 붙이면 "가격: 알 수 없음" 같은 옛 문장이 남은 채 새 문장이 덧대어져,
+ * 읽는 사람이 어느 쪽이 맞는지 알 수 없게 됩니다.
+ *
+ * 사용자가 고친 값(userTitle 등)은 AI가 건드리지 않는 별도 컬럼이라 그대로 남습니다.
+ */
+async function reenrichFromSources(itemId: string, set: SetAppState, get: () => AppStore) {
+  const item = get().items.find((entry) => entry.id === itemId);
+  if (!item) return;
+
+  // 조각이 하나뿐이면 예전과 똑같이 처리합니다. 굳이 다른 길로 갈 이유가 없습니다.
+  if (item.sources.length <= 1) {
+    await runEnrichForItem(item, set, get);
+    return;
+  }
+
+  const composed = composeSourcesForAI(item.sources);
+  if (!composed) {
+    await runEnrichForItem(item, set, get);
+    return;
+  }
+
+  await enrichSavedItemMetadata(
+    itemId,
+    // 날짜 해석의 기준은 지금이 아니라 저장한 때입니다.
+    () => fetchTextMetadataPatch(composed, item.createdAt),
+    set,
+    get
+  );
+}
+
+/**
  * 아이템 하나를 다시 보강합니다.
  *
  * 종류마다 AI에 넘길 재료가 달라서 여기서 갈래를 정합니다.
@@ -714,6 +891,7 @@ async function enrichSavedItemMetadata(
 
   try {
     await updateItemMetadataAsync(itemId, patch);
+    await cacheFetchedBodyIntoSource(itemId, patch, get);
 
     const nextItems = get().items.map((item) => applyMetadataPatch(item, itemId, patch));
     const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
