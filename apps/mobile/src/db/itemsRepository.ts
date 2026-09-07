@@ -162,24 +162,33 @@ export async function updateItemSyncStatusAsync(
 
 /**
  * 끊긴 AI 보강을 실패로 회수합니다.
- * 진행 중인 보강까지 건드리지 않도록 staleBefore보다 오래된 것만 고릅니다.
+ *
+ * 보강은 앱 프로세스 안에서만 살아 있으므로, 지금 돌리고 있는 것이 무엇인지는
+ * 앱이 정확히 압니다. 'pending인데 돌리고 있지 않다'면 시간과 무관하게 죽은 것입니다.
+ * activeItemIds가 비어 있다면(앱을 막 켠 경우) 남아 있는 pending은 모두 죽은 것입니다.
  */
 export async function markStalledEnrichAsFailedAsync(
   db: SQLiteDatabase,
-  staleBefore: string,
+  activeItemIds: string[],
   aiError: string,
   updatedAt: string
 ) {
+  // NOT IN ()은 SQL 문법 오류라 목록이 비면 조건 자체를 뺍니다.
+  const exclusion =
+    activeItemIds.length > 0
+      ? ` AND id NOT IN (${activeItemIds.map(() => '?').join(', ')})`
+      : '';
+
   const result = await db.runAsync(
     `UPDATE items
     SET
       ai_status = 'failed',
       ai_error = ?,
       updated_at = ?
-    WHERE ai_status = 'pending' AND updated_at <= ?`,
+    WHERE ai_status = 'pending'${exclusion}`,
     aiError,
     updatedAt,
-    staleBefore
+    ...activeItemIds
   );
 
   return result.changes;

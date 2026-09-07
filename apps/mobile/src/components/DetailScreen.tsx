@@ -363,6 +363,14 @@ export function DetailContent({
         {/* 실패했으면 이유를 그대로 보여줍니다.
             폰에서 도는 앱이라 콘솔을 열기 어렵고, 사용자 입장에서도
             "요약이 왜 없지"에 답이 있어야 재분석을 눌러볼 수 있습니다. */}
+        {/* 정리는 앱이 떠 있는 동안만 진행됩니다.
+            돌아오면 이어서 하지만, 그 사실을 모르면 나갔다 와서 왜 그대로인지 알 수 없습니다. */}
+        {isEnriching ? (
+          <Text style={styles.enrichHint}>
+            앱을 벗어나면 정리가 멈춥니다. 돌아오면 이어서 진행합니다.
+          </Text>
+        ) : null}
+
         {selectedItem.aiStatus === 'failed' && selectedItem.aiError ? (
           <View style={styles.aiErrorBox}>
             <Text style={styles.aiErrorLabel}>AI 요약 실패</Text>
@@ -1136,6 +1144,12 @@ const createStyles = (palette: Palette) =>
     color: palette.textSecondary,
     fontSize: 10.5,
     fontWeight: '900',
+  },
+  enrichHint: {
+    color: palette.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: spacing[2],
   },
   aiErrorBox: {
     marginTop: spacing[3],

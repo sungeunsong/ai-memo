@@ -29,11 +29,23 @@ import {
   SavedItem,
   SyncWorkerResult,
 } from '@/features/items/types';
+import { STALLED_ENRICH_MESSAGE } from '@/features/items/staleEnrich';
 import { runSyncQueueOnce } from '@/sync/worker';
 
 let initializationPromise: Promise<void> | null = null;
 let syncWorkerPromise: Promise<void> | null = null;
 let syncWakeupTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * 지금 보강을 돌리고 있는 아이템들.
+ *
+ * 보강은 이 프로세스 안에서만 살아 있습니다. 앱이 꺼지면 같이 죽고, 이 집합도
+ * 함께 비워집니다. 그래서 'pending인데 여기 없다'는 건 시간과 무관하게 죽었다는
+ * 뜻입니다. 예전에는 이걸 "5분 넘었으면 죽었겠지"라고 시간으로 짐작했는데,
+ * 그 탓에 공유하고 1분 만에 돌아오면 끊긴 항목이 '요약 정리 중'인 채로
+ * 아무것도 하지 않으면서 그 세션 내내 남아 있었습니다.
+ */
+const enrichingItemIds = new Set<string>();
 
 /**
  * 남은 일감을 이어서 처리하기까지의 간격.
@@ -43,6 +55,16 @@ const SYNC_CONTINUE_DELAY_MS = 1000;
 
 /** 동기화가 미뤄졌을 때(주로 네트워크) 다시 시도하기까지의 간격. */
 const SYNC_DEFERRED_DELAY_MS = 60 * 1000;
+
+/**
+ * 앱을 한 번 켤 때 이어서 돌릴 정리의 최대 건수.
+ *
+ * 대개는 한두 건입니다. 공유하고 인스타로 돌아가다 앱이 회수된 경우니까요.
+ * 다만 밀린 것이 스무 건씩 쌓여 있을 때 그걸 다 돌리면 무료 할당량만 축내고,
+ * 정작 사용자는 오래된 항목에 관심이 없을 수 있습니다. 남은 것은 다음 실행에
+ * 이어서 하거나 사용자가 직접 재분석하면 됩니다.
+ */
+const MAX_AUTO_RESUME_PER_LAUNCH = 5;
 
 /** zustand의 set. 함수 밖으로 뺀 헬퍼들에 그대로 넘겨줍니다. */
 type SetAppState = (
@@ -79,6 +101,7 @@ type AppStore = {
   setItemDeadline: (itemId: string, deadline: string | null) => Promise<void>;
   deleteItem: (itemId: string) => Promise<void>;
   resumeSync: () => Promise<void>;
+  resumeEnrich: () => Promise<void>;
   clearError: () => void;
 };
 
@@ -113,15 +136,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       try {
         await initializeDatabase();
 
-        // 보강은 메모리에서만 돌기 때문에 앱이 꺼지면 그대로 사라지는데,
-        // DB에 적어둔 'pending'은 남습니다. 목록을 읽기 전에 회수해야
-        // '요약 정리 중'이 영원히 도는 항목이 화면에 다시 오르지 않습니다.
-        const recoveredCount = await recoverStalledEnrichAsync();
-        if (recoveredCount > 0) {
-          console.log(`[Init] 중단된 AI 정리 ${recoveredCount}건을 실패로 회수했습니다.`);
-        }
-
-        // 동기화 job도 같은 이유로 'processing'에 갇힙니다.
+        // 동기화 job은 앱이 꺼지면 'processing'에 갇힙니다.
         // 이쪽은 되돌려두면 아래 워커가 곧바로 다시 집어갑니다.
         const recoveredJobCount = await recoverStalledSyncJobsAsync();
         if (recoveredJobCount > 0) {
@@ -143,6 +158,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         });
 
         void runSyncWorker(set, get);
+
+        // 끊겼던 정리는 사용자가 찾아 눌러주지 않아도 이어서 돌립니다.
+        void recoverAndResumeStalledEnrich(set, get);
       } catch (error) {
         set({
           isReady: false,
@@ -387,65 +405,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
 
     try {
-      const initialPatch: ItemMetadataPatch = {
-        aiStatus: 'pending',
-        updatedAt: new Date().toISOString(),
-      };
-      await updateItemMetadataAsync(itemId, initialPatch);
-      set((state) => ({
-        items: state.items.map((i) => applyMetadataPatch(i, itemId, initialPatch)),
-      }));
-
-      // 지능형 URL 복구 파이프라인:
-      // 과거 데이터 수집 오류 등으로 인해 item.sourceUrl이 '없음' 상태이더라도,
-      // 원문(rawInput)에서 정규식으로 다시 링크를 추출하여 복구 시도를 지원합니다.
-      const urlRegex = /(https?:\/\/[^\s]+)/g;
-      const extractedUrls = item.rawInput.match(urlRegex);
-      const activeUrl = item.sourceUrl || (extractedUrls && extractedUrls[0]) || null;
-
-      if (item.type === 'image' && item.imageUri) {
-        const imageUri = item.imageUri;
-        await enrichSavedItemMetadata(
-          itemId,
-          async () => {
-            const base64 = await readImageForAnalysis(imageUri);
-            return fetchImageMetadataPatch(base64 ?? '', item.createdAt);
-          },
-          set,
-          get
-        );
-      } else if (item.type === 'url' || activeUrl) {
-        // 복원된 URL을 DB 및 Zustand 스토어에 바인딩
-        if (activeUrl && !item.sourceUrl) {
-          const urlPatch: ItemMetadataPatch = {
-            sourceUrl: activeUrl,
-            updatedAt: new Date().toISOString(),
-          };
-          await updateItemMetadataAsync(itemId, urlPatch);
-          set((state) => ({
-            items: state.items.map((i) => applyMetadataPatch(i, itemId, urlPatch)),
-          }));
-        }
-
-        const targetUrl = activeUrl || item.sourceUrl!;
-        // 재분석해도 날짜 해석의 기준은 '지금'이 아니라 '저장한 때'입니다.
-        // 2026년에 저장한 공구를 2027년에 재분석하면 마감일이 밀려버립니다.
-        await enrichSavedItemMetadata(
-          itemId,
-          () => fetchMetadataPatch(targetUrl, item.createdAt),
-          set,
-          get
-        );
-      } else {
-        // 링크가 없는 텍스트도 재분석 대상입니다.
-        await enrichSavedItemMetadata(
-          itemId,
-          () => fetchTextMetadataPatch(item.rawInput, item.createdAt),
-          set,
-          get
-        );
-      }
-
+      await runEnrichForItem(item, set, get);
       set({ isSaving: false });
     } catch (error) {
       console.error('[Retry] 에러 발생:', error);
@@ -481,6 +441,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     await runSyncWorker(set, get);
   },
+  /**
+   * 끊겼던 정리를 회수하고 이어서 돌립니다.
+   *
+   * 앱으로 돌아올 때마다 부릅니다. 공유하고 원래 앱으로 넘어가는 사이에 보강이
+   * 끊기는 일이 잦은데, 실행할 때 한 번만 확인하면 그 세션 내내 '요약 정리 중'인
+   * 채로 아무것도 하지 않는 항목이 남습니다. 사용자는 되고 있다고 믿습니다.
+   */
+  async resumeEnrich() {
+    if (!get().isReady) {
+      return;
+    }
+
+    await recoverAndResumeStalledEnrich(set, get);
+  },
   clearError() {
     set({
       errorMessage: null,
@@ -510,6 +484,145 @@ export const useAppStore = create<AppStore>((set, get) => ({
 }));
 
 /**
+ * 끊긴 정리를 가려내고, 이어서 돌립니다.
+ *
+ * 가려내는 기준은 시간이 아니라 '지금 돌리고 있는가'입니다. 보강은 이 프로세스
+ * 안에서만 살아 있으므로 그 판단은 정확합니다. 앱을 막 켠 참이면 돌리고 있는 것이
+ * 하나도 없으니, 남아 있는 pending은 전부 죽은 것입니다.
+ */
+async function recoverAndResumeStalledEnrich(set: SetAppState, get: () => AppStore) {
+  const recoveredCount = await recoverStalledEnrichAsync([...enrichingItemIds]);
+
+  if (recoveredCount > 0) {
+    console.log(`[Enrich] 중단된 AI 정리 ${recoveredCount}건을 회수했습니다.`);
+    const items = await getSavedItemsAsync().catch(() => get().items);
+    set({ items });
+  }
+
+  await resumeStalledEnrich(set, get);
+}
+
+/**
+ * 앱이 꺼지며 끊겼던 정리를 이어서 돌립니다.
+ *
+ * 끊긴 원인은 "앱을 껐다"인데 그 뒷수습까지 사용자가 하는 건 이상합니다.
+ * 공유하고 원래 앱으로 돌아가는 것이 이 앱의 정상적인 사용 흐름이라, 보강이
+ * 끊기는 일은 사고가 아니라 자주 일어나는 일입니다.
+ *
+ * 대상은 '끊겨서' 실패한 것뿐입니다. 회수할 때 남긴 문구로 가려냅니다.
+ * 할당량 초과나 응답 없음으로 실패한 건은 다시 걸어도 같은 이유로 실패할
+ * 가능성이 높아, 켤 때마다 헛된 호출을 반복하게 됩니다.
+ *
+ * 한 건씩 차례로 돕니다. 한꺼번에 쏘면 무료 할당량의 분당 한도에 걸려
+ * 살릴 수 있었던 것까지 연달아 실패합니다.
+ *
+ * 여기서 실패하면 aiError가 그 실패 사유로 바뀌므로, 다음 실행에서는 대상이
+ * 아닙니다. 같은 항목을 켤 때마다 다시 시도하는 일은 생기지 않습니다.
+ */
+async function resumeStalledEnrich(set: SetAppState, get: () => AppStore) {
+  // items는 최신순이라 방금 저장한 것부터 살립니다. 오래된 것일수록 덜 급합니다.
+  const targets = get()
+    .items.filter(
+      (item) =>
+        item.aiStatus === 'failed' &&
+        item.aiError === STALLED_ENRICH_MESSAGE &&
+        // 복귀 때마다 부르므로, 앞서 시작한 것이 아직 돌고 있으면 또 걸지 않습니다.
+        !enrichingItemIds.has(item.id)
+    )
+    .slice(0, MAX_AUTO_RESUME_PER_LAUNCH);
+
+  if (targets.length === 0) {
+    return;
+  }
+
+  console.log(`[Init] 끊겼던 AI 정리 ${targets.length}건을 이어서 돌립니다.`);
+
+  for (const item of targets) {
+    try {
+      await runEnrichForItem(item, set, get);
+    } catch (error) {
+      // 한 건이 실패해도 나머지는 계속합니다.
+      // 실패 사유는 enrichSavedItemMetadata가 이미 아이템에 적어둡니다.
+      console.error(`[Init] 이어서 돌린 정리가 실패했습니다. item: ${item.id}`, error);
+    }
+  }
+}
+
+/**
+ * 아이템 하나를 다시 보강합니다.
+ *
+ * 종류마다 AI에 넘길 재료가 달라서 여기서 갈래를 정합니다.
+ * 사용자가 재분석을 누른 경우와 앱이 스스로 이어서 돌리는 경우가 이 함수를 공유합니다.
+ * 화면에 어떻게 알릴지는(저장 중 표시, 실패 팝업) 부르는 쪽 사정이라 여기 두지 않습니다.
+ */
+async function runEnrichForItem(item: SavedItem, set: SetAppState, get: () => AppStore) {
+  const itemId = item.id;
+
+  const initialPatch: ItemMetadataPatch = {
+    aiStatus: 'pending',
+    updatedAt: new Date().toISOString(),
+  };
+  await updateItemMetadataAsync(itemId, initialPatch);
+  set((state) => ({
+    items: state.items.map((i) => applyMetadataPatch(i, itemId, initialPatch)),
+  }));
+
+  // 지능형 URL 복구 파이프라인:
+  // 과거 데이터 수집 오류 등으로 인해 item.sourceUrl이 '없음' 상태이더라도,
+  // 원문(rawInput)에서 정규식으로 다시 링크를 추출하여 복구 시도를 지원합니다.
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const extractedUrls = item.rawInput.match(urlRegex);
+  const activeUrl = item.sourceUrl || (extractedUrls && extractedUrls[0]) || null;
+
+  if (item.type === 'image' && item.imageUri) {
+    const imageUri = item.imageUri;
+    await enrichSavedItemMetadata(
+      itemId,
+      async () => {
+        const base64 = await readImageForAnalysis(imageUri);
+        return fetchImageMetadataPatch(base64 ?? '', item.createdAt);
+      },
+      set,
+      get
+    );
+    return;
+  }
+
+  if (item.type === 'url' || activeUrl) {
+    // 복원된 URL을 DB 및 Zustand 스토어에 바인딩
+    if (activeUrl && !item.sourceUrl) {
+      const urlPatch: ItemMetadataPatch = {
+        sourceUrl: activeUrl,
+        updatedAt: new Date().toISOString(),
+      };
+      await updateItemMetadataAsync(itemId, urlPatch);
+      set((state) => ({
+        items: state.items.map((i) => applyMetadataPatch(i, itemId, urlPatch)),
+      }));
+    }
+
+    const targetUrl = activeUrl || item.sourceUrl!;
+    // 재분석해도 날짜 해석의 기준은 '지금'이 아니라 '저장한 때'입니다.
+    // 2026년에 저장한 공구를 2027년에 재분석하면 마감일이 밀려버립니다.
+    await enrichSavedItemMetadata(
+      itemId,
+      () => fetchMetadataPatch(targetUrl, item.createdAt),
+      set,
+      get
+    );
+    return;
+  }
+
+  // 링크가 없는 텍스트도 재분석 대상입니다.
+  await enrichSavedItemMetadata(
+    itemId,
+    () => fetchTextMetadataPatch(item.rawInput, item.createdAt),
+    set,
+    get
+  );
+}
+
+/**
  * 아이템 하나를 AI로 보강합니다.
  * 링크든 텍스트든 이후 처리(저장·스토어 반영·동기화 큐잉·실패 처리)가 동일해서
  * patch를 만드는 방법만 주입받습니다.
@@ -521,6 +634,7 @@ async function enrichSavedItemMetadata(
   get: () => AppStore
 ) {
   console.log(`[Enrich] 메타데이터 보강을 시작합니다. item: ${itemId}`);
+  enrichingItemIds.add(itemId);
 
   // AI 단계와 저장·큐잉 단계를 나눠서 감쌉니다.
   // 예전에는 한 try가 셋을 다 덮고 있어서, 동기화 큐 쓰기가 실패하면
@@ -541,6 +655,9 @@ async function enrichSavedItemMetadata(
     set((state) => ({
       items: state.items.map((item) => applyMetadataPatch(item, itemId, failurePatch)),
     }));
+    // 아래 try의 finally를 거치지 않고 빠져나가는 길이라 여기서도 지웁니다.
+    // 남겨두면 그 아이템은 영원히 '돌리는 중'으로 취급돼 회수 대상에서 빠집니다.
+    enrichingItemIds.delete(itemId);
     void runSyncWorker(set, get);
     return;
   }
@@ -579,6 +696,7 @@ async function enrichSavedItemMetadata(
     // 큐 항목이 남아 있어 동기화는 (조금 오래된 payload로) 계속 진행됩니다.
     console.error('[Enrich] 보강 결과 저장/큐잉 실패. AI 결과는 유지합니다:', error);
   } finally {
+    enrichingItemIds.delete(itemId);
     console.log('[Enrich] 메타데이터 보강 단계 완료. 동기화 워커를 구동합니다.');
     void runSyncWorker(set, get);
   }

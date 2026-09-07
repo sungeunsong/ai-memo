@@ -98,6 +98,7 @@ export function HomeScreen() {
   const clearError = useAppStore((s) => s.clearError);
   const deleteItem = useAppStore((s) => s.deleteItem);
   const resumeSync = useAppStore((s) => s.resumeSync);
+  const resumeEnrich = useAppStore((s) => s.resumeEnrich);
 
   // Share intent
   const { hasShareIntent, shareIntent, resetShareIntent, error: shareIntentError } =
@@ -357,14 +358,16 @@ export function HomeScreen() {
     return () => sub.remove();
   }, [items]);
 
-  // 백그라운드에 있는 동안에는 재시도 타이머가 미뤄지거나 죽습니다.
-  // 돌아왔을 때 한 번 깨워야 밀린 동기화가 이어집니다.
+  // 백그라운드에 있는 동안에는 재시도 타이머가 미뤄지거나 죽고, AI 보강은
+  // 아예 프로세스와 함께 사라집니다. 돌아왔을 때 양쪽 다 이어가야 합니다.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
-      if (nextState === 'active') void resumeSync();
+      if (nextState !== 'active') return;
+      void resumeSync();
+      void resumeEnrich();
     });
     return () => sub.remove();
-  }, [resumeSync]);
+  }, [resumeEnrich, resumeSync]);
 
   async function checkClipboard() {
     // 무시 기록을 읽기 전에 검사하면 이미 거절한 내용이 잠깐 다시 뜹니다.

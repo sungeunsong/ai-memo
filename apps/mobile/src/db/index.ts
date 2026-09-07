@@ -22,10 +22,7 @@ import {
   recoverStalledSyncJobsAsync as recoverStalledSyncJobsInRepositoryAsync,
   upsertSyncJobAsync as upsertSyncJobInRepositoryAsync,
 } from '@/db/syncJobsRepository';
-import {
-  STALLED_ENRICH_MESSAGE,
-  STALLED_ENRICH_THRESHOLD_MS,
-} from '@/features/items/staleEnrich';
+import { STALLED_ENRICH_MESSAGE } from '@/features/items/staleEnrich';
 import { STALLED_SYNC_JOB_THRESHOLD_MS } from '@/sync/retryPolicy';
 import {
   CreateSyncJobPayload,
@@ -156,13 +153,12 @@ export async function deleteItemAsync(itemId: string) {
  * 앱이 꺼지면서 중단된 AI 보강을 실패로 회수합니다.
  * 회수한 건수를 돌려줍니다.
  */
-export async function recoverStalledEnrichAsync(now = Date.now()) {
-  const staleBefore = new Date(now - STALLED_ENRICH_THRESHOLD_MS).toISOString();
+export async function recoverStalledEnrichAsync(activeItemIds: string[], now = Date.now()) {
   const updatedAt = new Date(now).toISOString();
 
   if (Platform.OS === 'web') {
     const stalled = getWebItems().filter(
-      (item) => item.aiStatus === 'pending' && item.updatedAt <= staleBefore
+      (item) => item.aiStatus === 'pending' && !activeItemIds.includes(item.id)
     );
     stalled.forEach((item) =>
       updateWebItem(item.id, {
@@ -177,7 +173,7 @@ export async function recoverStalledEnrichAsync(now = Date.now()) {
   return runWriteAsync((database) =>
     markStalledEnrichAsFailedInRepositoryAsync(
       database,
-      staleBefore,
+      activeItemIds,
       STALLED_ENRICH_MESSAGE,
       updatedAt
     )

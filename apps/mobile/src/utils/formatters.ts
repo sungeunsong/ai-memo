@@ -459,11 +459,16 @@ export function buildCaptureNotice(
   rawInput: string,
   source: CaptureNotice['source']
 ): CaptureNotice {
+  const shape = item ? describeSavedItemShape(item) : describeInputCandidate(rawInput);
+  const isEnriching = !item || item.aiStatus === 'pending';
+
   return {
     itemId: item?.id ?? null,
     source,
     title: item ? '수집함에 저장됨' : '저장 요청 완료',
-    description: item ? describeSavedItemShape(item) : describeInputCandidate(rawInput),
+    // 정리는 앱이 떠 있는 동안만 진행됩니다. 공유하고 원래 앱으로 바로 넘어가는
+    // 것이 보통이라, 말해주지 않으면 다 된 줄 알고 나갑니다.
+    description: isEnriching ? `${shape} · 앱을 벗어나면 정리가 멈춥니다` : shape,
     preview: rawInput.trim().replace(/\s+/g, ' '),
     stateLabel: item ? getAiStatusLabel(item) : '요약 정리 중',
   };
