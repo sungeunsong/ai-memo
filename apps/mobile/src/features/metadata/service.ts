@@ -1188,6 +1188,33 @@ const SHORT_VALUE_FIELDS = [
 const MAX_SHORT_VALUE_LENGTH = 40;
 
 /**
+ * 짧아도 값이 아닌 것들.
+ *
+ * 길이만으로는 못 거릅니다. 레시피 글에 travelTheme으로
+ * '국내 / 맛집 탐방에 준함(레시피 관련 없음)'이 들어온 적이 있는데 25자입니다.
+ * 값을 적는 대신 왜 그렇게 적었는지, 혹은 해당 없다는 말을 적은 것이라
+ * 그대로 두면 레시피 항목에 여행 카드가 뜹니다.
+ */
+const NON_VALUE_MARKERS = [
+  '해당 없',
+  '관련 없',
+  '정보 없',
+  '알 수 없',
+  '없음',
+  '준함',
+  '추정',
+  '판단',
+  '것으로 보',
+  '듯',
+];
+
+function looksLikeExplanation(value: string): boolean {
+  // 괄호로 덧붙인 설명은 값이 아닙니다. '국내 / 호캉스'에는 괄호가 없습니다.
+  if (/[(（]/.test(value)) return true;
+  return NON_VALUE_MARKERS.some((marker) => value.includes(marker));
+}
+
+/**
  * 분류 필드에 섞여 들어온 모델의 혼잣말을 걷어냅니다.
  *
  * 사고 토큰을 꺼두면 모델은 판단이 필요할 때 답변 필드 안에서 고민합니다.
@@ -1207,10 +1234,19 @@ function dropRamblingValues(data: any): any {
 
   for (const field of SHORT_VALUE_FIELDS) {
     const value = data[field];
-    if (typeof value === 'string' && value.trim().length > MAX_SHORT_VALUE_LENGTH) {
-      console.log(
-        `[GeminiAPI] ${field}에 값 대신 설명이 들어와 버립니다 (${value.trim().length}자)`
-      );
+    if (typeof value !== 'string') continue;
+
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+
+    if (trimmed.length > MAX_SHORT_VALUE_LENGTH) {
+      console.log(`[GeminiAPI] ${field}에 값 대신 설명이 들어와 버립니다 (${trimmed.length}자)`);
+      data[field] = '';
+      continue;
+    }
+
+    if (looksLikeExplanation(trimmed)) {
+      console.log(`[GeminiAPI] ${field}가 값이 아니라 설명이라 버립니다: ${trimmed}`);
       data[field] = '';
     }
   }
