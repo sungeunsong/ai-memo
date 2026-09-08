@@ -835,6 +835,22 @@ async function cacheFetchedBodyIntoSource(
 }
 
 /**
+ * 이 조각이 본문을 긁어와야 하는지.
+ *
+ * 비어 있는 경우뿐 아니라 주소만 담긴 경우도 본문이 없는 것입니다. 조각 붙이기를
+ * 고치기 전에는 붙여넣은 글자를 그대로 담아서, 링크만 붙이면 본문이 "https://..."
+ * 한 줄이었습니다. 그 조각들은 비어 있지 않다고 판단돼 영영 채워지지 않습니다.
+ */
+function needsBodyFetch(source: ItemSource): boolean {
+  if (!source.sourceUrl) return false;
+
+  const text = source.rawText?.trim() ?? '';
+  if (!text) return true;
+
+  return text.replace(source.sourceUrl, '').trim().length === 0;
+}
+
+/**
  * 본문이 없는 링크 조각을 채웁니다.
  *
  * 링크 조각은 주소만 갖고 만들어집니다. 저장할 때 만든 첫 조각도, 나중에 붙인
@@ -853,9 +869,9 @@ async function fillMissingSourceTexts(
   if (!item) return;
 
   for (const source of item.sources) {
-    if (source.rawText?.trim() || !source.sourceUrl) continue;
+    if (!needsBodyFetch(source)) continue;
 
-    const body = await fetchSourceBodyText(source.sourceUrl).catch(() => null);
+    const body = await fetchSourceBodyText(source.sourceUrl!).catch(() => null);
     if (!body) continue;
 
     await updateItemSourceTextAsync(source.id, body).catch(() => {});
