@@ -102,6 +102,28 @@ export function getSourceCountLabel(item: SavedItem): string | null {
   return item.sources.length > 1 ? `출처 ${item.sources.length}개` : null;
 }
 
+/**
+ * 조각 목록에 보여줄 한 줄 미리보기.
+ *
+ * 긁어온 본문은 마크다운이라 첫 줄이 프로필 사진 태그인 경우가 흔합니다.
+ * 그대로 보여주면 '![Image 1: ...](https://scontent...' 같은 글자만 보여서
+ * 무슨 조각인지 알 수 없습니다. 사람이 읽을 부분만 남깁니다.
+ */
+export function describeSourceBody(source: {
+  rawText: string | null;
+  sourceUrl: string | null;
+}): string {
+  const cleaned = (source.rawText ?? '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[#*`>]/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return cleaned || source.sourceUrl || '내용 없음';
+}
+
 export const SOURCE_KIND_LABELS: Record<string, string> = {
   instagram_reel: 'Instagram 릴스',
   instagram_dm: 'Instagram DM',

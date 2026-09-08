@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -28,6 +28,7 @@ import {
   getCategoryLabel,
   getItemCategory,
   SOURCE_KIND_LABELS,
+  describeSourceBody,
   getItemTitle,
   getSyncStatusLabel,
   tryParseStructuredContent,
@@ -307,6 +308,23 @@ export function DetailContent({
       Linking.openURL(url).catch(() => {});
     });
   }
+  /**
+   * 눌러서 열 수 있는 링크 전부.
+   *
+   * 예전에는 저장할 때 원문에서 뽑아둔 것만 보여줬습니다. 나중에 조각으로 붙인
+   * 링크는 어디에도 안 나와서, 요약이 부족할 때 원문으로 갈 방법이 없었습니다.
+   * 릴스에 노션을 붙여놓고 노션을 못 여는 상태였습니다.
+   */
+  const openableUrls = useMemo(() => {
+    const urls = [...(selectedItem.extractedUrls ?? [])];
+    for (const source of selectedItem.sources) {
+      if (source.sourceUrl && !urls.includes(source.sourceUrl)) {
+        urls.push(source.sourceUrl);
+      }
+    }
+    return urls;
+  }, [selectedItem.extractedUrls, selectedItem.sources]);
+
   const actions = parseActionItems(selectedItem.rawInput, selectedItem.userNote ?? undefined, structured);
 
   async function handleActionPress(action: ActionItem) {
@@ -500,8 +518,13 @@ export function DetailContent({
                 {SOURCE_KIND_LABELS[source.kind] ?? source.kind}
               </Text>
               <Text style={styles.sourceExcerpt} numberOfLines={2}>
-                {source.rawText?.trim() || source.sourceUrl || '내용 없음'}
+                {describeSourceBody(source)}
               </Text>
+              {source.sourceUrl ? (
+                <Pressable onPress={() => openOriginal(source.sourceUrl!)} hitSlop={6}>
+                  <Text style={styles.sourceOpenText}>원본 열기 🔗</Text>
+                </Pressable>
+              ) : null}
             </View>
             {/* 조각이 하나뿐이면 뗄 수 없습니다. 그건 저장물 자체를 지우는 일입니다. */}
             {selectedItem.sources.length > 1 ? (
@@ -690,11 +713,11 @@ export function DetailContent({
       )}
 
       {/* 5. 추출된 링크 */}
-      {selectedItem.extractedUrls && selectedItem.extractedUrls.length > 0 ? (
+      {openableUrls.length > 0 ? (
         <View style={styles.detailSection}>
-          <Text style={styles.detailLabel}>추출된 링크 ({selectedItem.extractedUrls.length}개)</Text>
+          <Text style={styles.detailLabel}>링크 ({openableUrls.length}개)</Text>
           <View style={styles.extractedUrlsList}>
-            {selectedItem.extractedUrls.map((url, idx) => (
+            {openableUrls.map((url, idx) => (
               <Pressable
                 key={url + idx}
                 onPress={() => openOriginal(url)}
@@ -1443,6 +1466,12 @@ const createStyles = (palette: Palette) =>
     paddingVertical: spacing[2],
   },
   sourceRowText: { flex: 1, gap: 2 },
+  sourceOpenText: {
+    color: palette.accentText,
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 2,
+  },
   imageViewer: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.92)',
