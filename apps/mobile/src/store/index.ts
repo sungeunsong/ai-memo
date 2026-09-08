@@ -11,6 +11,7 @@ import {
   hasSameItemSourceAsync,
   recoverStalledEnrichAsync,
   recoverStalledSyncJobsAsync,
+  getTaxonomyAsync,
   migrateItemContentsToV2Async,
   seedTaxonomyAsync,
   removeItemSourceAsync,
@@ -41,6 +42,7 @@ import {
 } from '@/features/items/types';
 import { STALLED_ENRICH_MESSAGE } from '@/features/items/staleEnrich';
 import { applyItemPatch } from '@/features/items/patch';
+import { SEED_REGISTRY, TaxonomyRegistry, buildRegistry } from '@/features/taxonomy/registry';
 import { classifySourceType } from '@/features/capture/normalizeSharedInput';
 import { buildInitialSource, buildItemSource, toSourceKind } from '@/features/items/sources';
 import { runSyncQueueOnce } from '@/sync/worker';
@@ -98,6 +100,11 @@ type AppStore = {
   hasInitializationAttempted: boolean;
   isSaving: boolean;
   items: SavedItem[];
+  /**
+   * 사전. 값을 어떻게 다듬고 어느 축으로 검색할지가 여기서 나옵니다.
+   * DB를 읽기 전과 사전을 읽을 수 없는 환경에서는 앱에 심어둔 기본값을 씁니다.
+   */
+  taxonomy: TaxonomyRegistry;
   selectedItemId: string | null;
   errorMessage: string | null;
   syncQueuePendingCount: number;
@@ -148,6 +155,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   hasInitializationAttempted: false,
   isSaving: false,
   items: [],
+  taxonomy: SEED_REGISTRY,
   selectedItemId: null,
   errorMessage: null,
   syncQueuePendingCount: 0,
@@ -189,6 +197,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
           // 옮기기에 실패해도 앱은 떠야 합니다. V1 데이터는 그대로 남아 있고,
           // 읽는 쪽이 두 형식을 모두 다루므로 화면은 정상입니다.
           console.error('[Init] V2 마이그레이션 실패. V1 데이터를 그대로 씁니다:', error);
+        }
+
+        // 사전을 읽어 옵니다. AI가 만든 잠정 정의까지 들어 있어야 새 분야의 항목이
+        // 제 이름과 제 축으로 검색에 잡힙니다. 실패하면 심어둔 기본값으로 둡니다.
+        try {
+          const { domains, facts } = await getTaxonomyAsync();
+          if (facts.length > 0) {
+            set({ taxonomy: buildRegistry(domains, facts) });
+          }
+        } catch (error) {
+          console.error('[Init] 사전을 읽지 못했습니다. 기본 사전을 씁니다:', error);
         }
 
         // 동기화 job은 앱이 꺼지면 'processing'에 갇힙니다.

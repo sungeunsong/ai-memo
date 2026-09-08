@@ -1,6 +1,5 @@
 /** facet을 화면에 표시할 때 쓰는 라벨과 아이콘. */
 
-import { FacetKind } from './extract';
 
 const VALUE_EMOJIS: Record<string, string> = {
   // 재료
@@ -34,42 +33,44 @@ const VALUE_EMOJIS: Record<string, string> = {
   '내추럴': '🌿', '인더스트리얼': '🏭', '러블리': '🎀',
 };
 
-const KIND_FALLBACK_EMOJIS: Record<FacetKind, string> = {
-  ingredient: '🥗',
-  muscle: '💪',
+/**
+ * 값에 어울리는 그림이 없을 때 쓰는 축별 기본값.
+ *
+ * 사전이 커지면 여기 없는 축이 생깁니다. 그때는 마지막 기본값으로 떨어지는데,
+ * 그림이 없는 것보다는 밋밋한 그림이라도 있는 편이 목록에서 칩을 구분하기 쉽습니다.
+ */
+const AXIS_FALLBACK_EMOJIS: Record<string, string> = {
+  // 분야를 넘는 축
+  place: '📍',
   equipment: '🎽',
-  region: '📍',
-  amenity: '✨',
-  theme: '🏷️',
-  product: '📦',
-  seller: '🏪',
-  purchase: '🛍️',
-  babyAge: '👶',
+  target: '💪',
+  price: '💰',
+  deadline: '⏰',
+  duration: '⏱️',
   topic: '📚',
-  room: '🚪',
-  style: '🎨',
+
+  // 자유 텍스트에서 건져낸 축
+  amenity: '✨',
+
+  // 분야 전용 축
+  'recipe.ingredient': '🥗',
+  'recipe.difficulty': '🎚️',
+  'travel.theme': '🏷️',
+  'parenting.baby_age': '👶',
+  'parenting.parenting_topic': '📚',
+  'shopping.product_type': '📦',
+  'shopping.seller': '🏪',
+  'shopping.purchase_type': '🛍️',
+  'interior.room_type': '🚪',
+  'interior.interior_style': '🎨',
 };
 
-export const KIND_LABELS: Record<FacetKind, string> = {
-  ingredient: '재료',
-  muscle: '부위',
-  equipment: '도구',
-  region: '지역',
-  amenity: '시설',
-  theme: '테마',
-  product: '품목',
-  seller: '구매처',
-  purchase: '구매형태',
-  babyAge: '월령',
-  topic: '주제',
-  room: '공간',
-  style: '스타일',
-};
+const DEFAULT_EMOJI = '🏷️';
 
-export function facetEmoji(kind: FacetKind, value: string): string {
-  return VALUE_EMOJIS[value] ?? KIND_FALLBACK_EMOJIS[kind];
+export function facetEmoji(axis: string, value: string): string {
+  return VALUE_EMOJIS[value] ?? AXIS_FALLBACK_EMOJIS[axis] ?? DEFAULT_EMOJI;
 }
 
-export function facetLabel(kind: FacetKind, value: string): string {
-  return `${value} ${facetEmoji(kind, value)}`;
+export function facetLabel(axis: string, value: string): string {
+  return `${value} ${facetEmoji(axis, value)}`;
 }

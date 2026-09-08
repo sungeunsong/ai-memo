@@ -1,3 +1,4 @@
+import { readContentV2 } from '@/features/items/contentV2';
 import { SavedItem } from '@/features/items/types';
 import { getHostname } from '@/features/items/fallback';
 import { hangulMatch } from './search';
@@ -307,15 +308,12 @@ export function getItemCategory(item: SavedItem): string {
     return item.userCategory;
   }
 
-  const structured = tryParseStructuredContent(item.content);
-  const category = structured?.category || item.sourceType;
-
-  if (category === 'parenting') return 'parenting';
-  if (category === 'travel') return 'travel';
-  if (category === 'recipe') return 'recipe';
-  if (category === 'workout') return 'workout';
-  if (category === 'shopping') return 'shopping';
-  if (category === 'interior') return 'interior';
+  // V2는 분야를 값으로 다룹니다. 목록에 없는 분야가 들어와도 그대로 인정해야
+  // 새 분야가 '미분류'로 떨어지지 않습니다. 예전처럼 여섯 개를 나열해두면
+  // 낚시 글은 분야를 제대로 받고도 화면에서는 미분류로 보입니다.
+  const content = readContentV2(item.content);
+  const domainKey = content && content.domain.key !== 'other' ? content.domain.key : '';
+  if (domainKey) return domainKey;
 
   const title = item.title.toLowerCase();
   // 본문은 contentText로 분리됐습니다. item.content에는 구조화 데이터만 남아 있어
@@ -324,10 +322,10 @@ export function getItemCategory(item: SavedItem): string {
   // getItemCategory는 검색어를 칠 때마다 아이템 수만큼 호출됩니다.
   // 본문 전체를 매번 소문자로 복사하면 비용이 커지므로 앞부분만 봅니다.
   // 분류 근거가 되는 단어는 대개 글머리에 나옵니다.
-  const content = `${(item.contentText ?? '').slice(0, CATEGORY_SCAN_LIMIT)} ${item.content.slice(0, CATEGORY_SCAN_LIMIT)}`.toLowerCase();
+  const scanned = `${(item.contentText ?? '').slice(0, CATEGORY_SCAN_LIMIT)} ${item.content.slice(0, CATEGORY_SCAN_LIMIT)}`.toLowerCase();
   const userNote = (item.userNote || '').toLowerCase();
 
-  const fallback = classifyByKeyword(title, userNote, content);
+  const fallback = classifyByKeyword(title, userNote, scanned);
   if (fallback) {
     return fallback;
   }

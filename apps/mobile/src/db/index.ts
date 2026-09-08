@@ -38,6 +38,8 @@ import {
   bumpFactDefinitionUseAsync as bumpFactUseInRepositoryAsync,
   insertDomainDefinitionIfAbsentAsync,
   insertFactDefinitionIfAbsentAsync,
+  upsertSeedDomainDefinitionAsync,
+  upsertSeedFactDefinitionAsync,
   listDomainDefinitionsAsync,
   listFactDefinitionsAsync,
 } from '@/db/taxonomyRepository';
@@ -442,7 +444,7 @@ export async function seedTaxonomyAsync(now = Date.now()) {
   await runWriteAsync((database) =>
     database.withTransactionAsync(async () => {
       for (const domain of SEED_DOMAINS) {
-        await insertDomainDefinitionIfAbsentAsync(database, {
+        await upsertSeedDomainDefinitionAsync(database, {
           ...domain,
           status: 'confirmed',
           useCount: 0,
@@ -452,7 +454,7 @@ export async function seedTaxonomyAsync(now = Date.now()) {
       }
 
       for (const fact of SEED_FACTS) {
-        await insertFactDefinitionIfAbsentAsync(database, {
+        await upsertSeedFactDefinitionAsync(database, {
           ...fact,
           status: 'confirmed',
           useCount: 0,

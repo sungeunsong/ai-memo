@@ -17,6 +17,8 @@
  * ============================================================================
  */
 
+import { NormalizationPolicy } from '@/features/taxonomy/types';
+
 /**
  * 재료 계량에 쓰이는 단위들.
  * 실제 레시피 사이트를 돌려보니 '베이컨 2줄', '대파 1뼘', '간장 2숟가락'처럼
@@ -230,6 +232,25 @@ export function expand(value: string): string[] {
   }
 
   return result;
+}
+
+/**
+ * 정의된 정책에 따라 값을 다듬습니다.
+ *
+ * 'exact'는 canonicalize를 절대 거치지 않습니다. canonicalize는 수량과 단위를
+ * 걷어내도록 만들어져서, 부품번호 '5Q0 121 251'을 'Q0'으로 만들고 쿠폰 코드에서
+ * 숫자를 지웁니다. 재료에는 맞고 코드에는 파괴적입니다.
+ * 값의 성격은 값 자체가 아니라 사전이 정하므로, 판단을 여기서 하지 않고 받아 씁니다.
+ */
+export function normalizeByPolicy(raw: string, policy: NormalizationPolicy): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  if (policy === 'aliasable') return normalizeToValues(trimmed);
+
+  // exact와 나머지(날짜·금액·기간·수치)는 원문을 그대로 둡니다.
+  // 이들은 조합 검색의 축이 아니라 비교와 표시에 쓰는 값이라, 다듬을 이유가 없습니다.
+  return [trimmed];
 }
 
 /** 원본 문자열을 정규화 + 계층 확장까지 한 번에 처리합니다. */

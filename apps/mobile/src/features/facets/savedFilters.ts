@@ -25,12 +25,50 @@ export type SavedFilter = {
   createdAt: string;
 };
 
+/**
+ * 예전 축 이름 -> 지금 축.
+ *
+ * 축 이름이 바뀌면 저장해둔 조건은 아무 데도 걸리지 않습니다. 화면에는 '내 냉장고'가
+ * 그대로 있는데 누르면 0건이 나오고, 사용자는 저장한 것이 사라졌다고 느낍니다.
+ * 조건은 사용자가 손으로 만든 것이라 다시 만들라고 할 수 없습니다.
+ */
+const LEGACY_AXES: Record<string, string> = {
+  ingredient: 'recipe.ingredient',
+  muscle: 'target',
+  region: 'place',
+  theme: 'travel.theme',
+  product: 'shopping.product_type',
+  seller: 'shopping.seller',
+  purchase: 'shopping.purchase_type',
+  babyAge: 'parenting.baby_age',
+  topic: 'parenting.parenting_topic',
+  room: 'interior.room_type',
+  style: 'interior.interior_style',
+  // equipment와 amenity는 이름이 그대로라 옮길 것이 없습니다.
+};
+
+function migrateFacetKey(key: string): string {
+  const boundary = key.indexOf(':');
+  if (boundary <= 0) return key;
+
+  const axis = key.slice(0, boundary);
+  const next = LEGACY_AXES[axis];
+  return next ? `${next}${key.slice(boundary)}` : key;
+}
+
 export async function loadSavedFilters(): Promise<SavedFilter[]> {
   try {
     const raw = await getSettingAsync(SETTING_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+
+    // 읽을 때마다 옮깁니다. 저장된 값은 그대로 두어, 옮기는 규칙이 틀렸을 때
+    // 원래 조건이 무엇이었는지 확인할 수 있게 합니다.
+    return parsed.map((filter: SavedFilter) => ({
+      ...filter,
+      facetKeys: Array.isArray(filter.facetKeys) ? filter.facetKeys.map(migrateFacetKey) : [],
+    }));
   } catch (error) {
     console.log('[SavedFilters] 불러오기 실패:', error);
     return [];

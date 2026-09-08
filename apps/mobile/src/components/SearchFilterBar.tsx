@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { FacetOption } from '@/features/facets/query';
-import { KIND_LABELS, facetLabel } from '@/features/facets/labels';
+import { facetLabel } from '@/features/facets/labels';
 import { SavedFilter } from '@/features/facets/savedFilters';
 import { Palette } from '@/theme/palette';
 import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
@@ -157,7 +157,7 @@ export function SearchFilterBar({
                 ]}
               >
                 <Text style={[styles.chipText, styles.chipTextActive]}>
-                  {facetLabel(option.kind, option.value)} ✕
+                  {facetLabel(option.axis, option.value)} ✕
                 </Text>
               </Pressable>
             ))}
@@ -248,10 +248,10 @@ export function SearchFilterBar({
                 ]}
               >
                 <Text style={styles.chipText}>
-                  {facetLabel(option.kind, option.value)}
+                  {facetLabel(option.axis, option.value)}
                   <Text style={styles.chipCount}> {option.count}</Text>
                 </Text>
-                <Text style={styles.chipKind}>{KIND_LABELS[option.kind]}</Text>
+                <Text style={styles.chipKind}>{option.axisLabel}</Text>
               </Pressable>
             ))}
           </ScrollView>

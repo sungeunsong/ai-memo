@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 
 import { SavedItem } from '@/features/items/types';
-import { matchPantry, summarizeShoppingWins } from '@/features/facets/pantry';
+import { PANTRY_AXIS, matchPantry, summarizeShoppingWins } from '@/features/facets/pantry';
 import { facetEmoji } from '@/features/facets/labels';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -130,7 +130,7 @@ export function PantryModal({
                   style={styles.ownedChip}
                 >
                   <Text style={styles.ownedChipText}>
-                    {facetEmoji('ingredient', ingredient)} {ingredient} ✕
+                    {facetEmoji(PANTRY_AXIS, ingredient)} {ingredient} ✕
                   </Text>
                 </Pressable>
               ))}

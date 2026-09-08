@@ -99,6 +99,7 @@ export function HomeScreen() {
   const isInitializing = useAppStore((s) => s.isInitializing);
   const isSaving = useAppStore((s) => s.isSaving);
   const items = useAppStore((s) => s.items);
+  const taxonomy = useAppStore((s) => s.taxonomy);
   const selectedItemId = useAppStore((s) => s.selectedItemId);
   const errorMessage = useAppStore((s) => s.errorMessage);
   const syncQueuePendingCount = useAppStore((s) => s.syncQueuePendingCount);
@@ -290,7 +291,7 @@ export function HomeScreen() {
   // 텍스트/카테고리로 먼저 좁히고, 그 결과 위에 조합 조건을 AND로 얹습니다.
   // facet 건수와 완화 제안도 같은 기준 집합에서 계산해야 화면과 숫자가 어긋나지 않습니다.
   // ==========================================
-  const facetIndex = useMemo(() => buildFacetIndex(items), [items]);
+  const facetIndex = useMemo(() => buildFacetIndex(items, taxonomy), [items, taxonomy]);
 
   const baseItems = useMemo(
     () =>
@@ -771,7 +772,7 @@ export function HomeScreen() {
               canSaveFilter={isFilterSaveable(activeCategory, selectedFacets, searchQuery)}
               describeFacetKey={(key) => {
                 const parsed = parseFacetKey(key);
-                return parsed ? facetLabel(parsed.kind, parsed.value) : key;
+                return parsed ? facetLabel(parsed.axis, parsed.value) : key;
               }}
             />
           </View>

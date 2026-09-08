@@ -1,7 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Relaxation } from '@/features/facets/query';
-import { parseFacetKey } from '@/features/facets/extract';
 import { facetLabel } from '@/features/facets/labels';
 import { Palette } from '@/theme/palette';
 import { useThemedStyles } from '@/theme/ThemeContext';
@@ -74,10 +73,7 @@ export function EmptyResultGuide({
           ) : null}
 
           {relaxations.map((relaxation) => {
-            const parsed = parseFacetKey(relaxation.dropKey);
-            const label = parsed
-              ? facetLabel(parsed.kind, parsed.value)
-              : relaxation.dropValue;
+            const label = facetLabel(relaxation.dropAxis, relaxation.dropValue);
 
             return (
               <Pressable

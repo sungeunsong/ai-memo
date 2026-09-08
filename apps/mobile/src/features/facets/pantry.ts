@@ -9,9 +9,23 @@
  * 냉장고 앞이 아니라 마트에서 쓰는 기능이 되기 때문입니다.
  */
 
+import { readContentV2 } from '@/features/items/contentV2';
 import { SavedItem } from '@/features/items/types';
+import { SEED_REGISTRY, TaxonomyRegistry, factRef, resolveFact } from '@/features/taxonomy/registry';
+import { NormalizationPolicy } from '@/features/taxonomy/types';
 
 import { canonicalize, expand } from './normalize';
+
+/**
+ * 냉장고 털기가 보는 축.
+ *
+ * 재료에는 globalRole을 안 붙였습니다. 이 기능이 그 축 하나만 보고 동작하는데,
+ * 다른 분야의 값이 같은 축으로 흘러 들어오면 '뜰채'가 있어야 만들 수 있는
+ * 요리가 생깁니다.
+ */
+export const PANTRY_DOMAIN = 'recipe';
+export const PANTRY_FACT_KEY = 'ingredient';
+export const PANTRY_AXIS = factRef(PANTRY_DOMAIN, PANTRY_FACT_KEY);
 
 export type PantryMatch = {
   item: SavedItem;
@@ -22,14 +36,6 @@ export type PantryMatch = {
   /** 보유 비율 0~1 */
   ratio: number;
 };
-
-function safeParse(content: string): any {
-  try {
-    return JSON.parse(content);
-  } catch {
-    return null;
-  }
-}
 
 /**
  * 보유 재료를 대표값으로만 정리합니다. 상위 개념으로 펼치지 않습니다.
@@ -52,6 +58,16 @@ export function buildPantrySet(ownedRaw: string[]): Set<string> {
 }
 
 /**
+ * 값을 대표값으로 정리합니다. 정책이 'aliasable'일 때만 다듬습니다.
+ *
+ * 사전에서 재료의 정책을 바꾸면 여기도 따라갑니다. 재료를 원문 그대로 두기로
+ * 정한 사람에게 '두부 반 모'를 '두부'로 바꿔 보여주면 그건 고장입니다.
+ */
+function pantryValue(raw: string, policy: NormalizationPolicy): string {
+  return policy === 'aliasable' ? canonicalize(raw) : raw.trim();
+}
+
+/**
  * 보유 재료 기준으로 레시피를 매칭해 순위를 매깁니다.
  *
  * 재료를 하나만 넣어도 그 재료가 들어가는 레시피는 전부 보여줍니다.
@@ -64,28 +80,33 @@ export function buildPantrySet(ownedRaw: string[]): Set<string> {
 export function matchPantry(
   items: SavedItem[],
   ownedRaw: string[],
-  maxMissing = Number.POSITIVE_INFINITY
+  maxMissing = Number.POSITIVE_INFINITY,
+  registry: TaxonomyRegistry = SEED_REGISTRY
 ): PantryMatch[] {
   const owned = buildPantrySet(ownedRaw);
   if (owned.size === 0) return [];
 
+  const definition = resolveFact(registry, PANTRY_DOMAIN, PANTRY_FACT_KEY);
   const matches: PantryMatch[] = [];
 
   for (const item of items) {
-    // 카테고리로 거르지 않습니다.
-    // AI는 아이템당 카테고리를 하나만 정하므로, 여행과 레시피가 한 메모에 섞이면
-    // 카테고리가 'travel'로 찍히고 재료가 멀쩡히 있는데도 냉장고 털기에서 빠집니다.
+    // 분야로 거르지 않습니다.
+    // 아이템의 분야는 하나뿐이라 여행과 레시피가 한 메모에 섞이면 분야가 'travel'로
+    // 찍히는데, 재료 항목은 자기 정의를 들고 있으므로 그대로 살아 있습니다.
     // 재료가 있으면 레시피로 취급하는 것으로 충분합니다.
-    const structured = safeParse(item.content);
-    if (!Array.isArray(structured?.ingredients)) continue;
+    const content = readContentV2(item.content);
+    if (!content) continue;
 
     // 정규화 후 중복을 제거해야 '감자 2개'와 '감자'가 두 번 세어지지 않습니다.
     const required: string[] = [];
-    for (const raw of structured.ingredients) {
-      if (typeof raw !== 'string') continue;
-      const unit = canonicalize(raw);
-      if (unit && !required.includes(unit)) {
-        required.push(unit);
+    for (const fact of content.facts) {
+      if (fact.domainKey !== PANTRY_DOMAIN || fact.key !== PANTRY_FACT_KEY) continue;
+      for (const raw of fact.values) {
+        if (typeof raw !== 'string') continue;
+        const unit = pantryValue(raw, definition.normalizationPolicy);
+        if (unit && !required.includes(unit)) {
+          required.push(unit);
+        }
       }
     }
     if (required.length === 0) continue;

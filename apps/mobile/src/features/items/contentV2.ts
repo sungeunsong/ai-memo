@@ -78,6 +78,25 @@ export function isContentV2(parsed: unknown): parsed is ItemContentV2 {
 }
 
 /**
+ * 아이템의 구조화 내용을 V2로 읽습니다.
+ *
+ * 아직 V1인 아이템은 메모리에서만 변환해 씁니다. DB 마이그레이션이 끝나기 전이거나
+ * 마이그레이션이 없는 환경(웹)에서도 검색과 화면이 같은 결과를 내야 하기 때문입니다.
+ * 저장은 하지 않습니다. 읽기 경로가 데이터를 고치기 시작하면 무엇이 언제 바뀌는지
+ * 알 수 없게 됩니다.
+ */
+export function readContentV2(rawContent: string): ItemContentV2 | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawContent || '{}');
+  } catch {
+    parsed = null;
+  }
+  if (isContentV2(parsed)) return parsed;
+  return migrateContentToV2(rawContent);
+}
+
+/**
  * V1 구조화 데이터를 V2로 옮깁니다. AI를 다시 부르지 않습니다.
  *
  * 이미 V2면 그대로 돌려줍니다. 같은 데이터에 몇 번을 돌려도 결과가 같아야

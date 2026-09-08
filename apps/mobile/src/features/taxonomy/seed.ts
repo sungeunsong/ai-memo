@@ -34,6 +34,11 @@ export const SEED_DOMAINS: Array<Pick<DomainDefinition, 'key' | 'label'>> = [
  *
  * room_type도 안 붙였습니다. '거실'과 '제주'가 같은 장소 축에 들어가면
  * 조합 검색이 이상해집니다.
+ *
+ * 주제·테마·품목·스타일도 안 붙였습니다. 한 축으로 묶어놓고 보니 '호캉스'와
+ * '이유식'과 '주방용품'이 같은 그룹에 서 있었습니다. 말은 다 '주제'지만
+ * 분야마다 뜻이 달라서, 묶어도 같이 걸 일이 없고 고르기만 어려워집니다.
+ * 축을 묶는 기준은 이름이 같은 것이 아니라 같은 질문에 답하는 것입니다.
  */
 export const SEED_FACTS: SeedFact[] = [
   // 레시피
@@ -49,17 +54,19 @@ export const SEED_FACTS: SeedFact[] = [
 
   // 여행
   { domainKey: 'travel', key: 'place', label: '장소', valueType: 'term', cardinality: 'many', normalizationPolicy: 'aliasable', globalRole: 'place' },
-  { domainKey: 'travel', key: 'theme', label: '테마', valueType: 'term', cardinality: 'many', normalizationPolicy: 'aliasable', globalRole: 'topic' },
+  { domainKey: 'travel', key: 'theme', label: '테마', valueType: 'term', cardinality: 'many', normalizationPolicy: 'aliasable', globalRole: null },
   { domainKey: 'travel', key: 'budget', label: '예산', valueType: 'money', cardinality: 'single', normalizationPolicy: 'money', globalRole: 'price' },
   { domainKey: 'travel', key: 'highlight', label: '핵심 스팟', valueType: 'text', cardinality: 'many', normalizationPolicy: 'exact', globalRole: null },
   { domainKey: 'travel', key: 'checklist', label: '준비물', valueType: 'term', cardinality: 'many', normalizationPolicy: 'aliasable', globalRole: 'equipment' },
 
   // 육아
-  { domainKey: 'parenting', key: 'baby_age', label: '대상 월령', valueType: 'range', cardinality: 'single', normalizationPolicy: 'measurement', globalRole: 'target' },
-  { domainKey: 'parenting', key: 'parenting_topic', label: '육아 주제', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: 'topic' },
+  // 월령은 target을 안 붙였습니다. 자극 부위와 한 축에 서면 '둔근'과 '7~12개월'이
+  // 같은 그룹에 담기고, 운동 탭에 육아 글이 딸려 들어옵니다.
+  { domainKey: 'parenting', key: 'baby_age', label: '대상 월령', valueType: 'range', cardinality: 'single', normalizationPolicy: 'measurement', globalRole: null },
+  { domainKey: 'parenting', key: 'parenting_topic', label: '육아 주제', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },
 
   // 쇼핑
-  { domainKey: 'shopping', key: 'product_type', label: '품목', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: 'topic' },
+  { domainKey: 'shopping', key: 'product_type', label: '품목', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },
   { domainKey: 'shopping', key: 'seller', label: '판매처', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },
   { domainKey: 'shopping', key: 'purchase_type', label: '구매 형태', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },
   { domainKey: 'shopping', key: 'price', label: '가격', valueType: 'money', cardinality: 'single', normalizationPolicy: 'money', globalRole: 'price' },
@@ -68,5 +75,5 @@ export const SEED_FACTS: SeedFact[] = [
 
   // 인테리어
   { domainKey: 'interior', key: 'room_type', label: '공간', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },
-  { domainKey: 'interior', key: 'interior_style', label: '스타일', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: 'topic' },
+  { domainKey: 'interior', key: 'interior_style', label: '스타일', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },
 ];

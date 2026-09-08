@@ -8,10 +8,21 @@
  */
 
 import { SavedItem } from '@/features/items/types';
+import {
+  SEED_REGISTRY,
+  TaxonomyRegistry,
+  axisLabelOf,
+} from '@/features/taxonomy/registry';
 
 import { getItemCategory } from '@/utils/formatters';
 
-import { Facet, FacetKind, extractFacets, facetKey, parseFacetKey } from './extract';
+import {
+  DERIVED_AXIS_LABELS,
+  Facet,
+  extractItemFacets,
+  facetKey,
+  parseFacetKey,
+} from './extract';
 
 export type FacetIndex = {
   /** 전체 아이템 id (선택된 facet이 없을 때의 기준 집합) */
@@ -20,21 +31,42 @@ export type FacetIndex = {
   byKey: Map<string, Set<string>>;
   /** itemId -> 그 아이템이 가진 facet 목록 */
   byItem: Map<string, Facet[]>;
+  /** itemId -> 그 아이템이 걸쳐 있는 분야들 */
+  domainsByItem: Map<string, Set<string>>;
+  /** 축 -> 화면에 쓸 이름. 사전이 바뀌면 이름도 따라 바뀝니다 */
+  axisLabels: Map<string, string>;
 };
 
-export function buildFacetIndex(items: SavedItem[]): FacetIndex {
+export function buildFacetIndex(
+  items: SavedItem[],
+  registry: TaxonomyRegistry = SEED_REGISTRY
+): FacetIndex {
   const allIds = new Set<string>();
   const byKey = new Map<string, Set<string>>();
   const byItem = new Map<string, Facet[]>();
+  const domainsByItem = new Map<string, Set<string>>();
+  const axisLabels = new Map<string, string>();
 
   for (const item of items) {
     allIds.add(item.id);
 
-    const facets = extractFacets(item);
+    const { facets, domainKeys } = extractItemFacets(item, registry);
     byItem.set(item.id, facets);
 
+    // 사용자가 직접 고친 분류는 사전보다 우선합니다. 탭에서도 그래야
+    // 손으로 옮겨둔 것이 다음 렌더에 제자리로 돌아가지 않습니다.
+    domainKeys.add(getItemCategory(item));
+    domainsByItem.set(item.id, domainKeys);
+
     for (const facet of facets) {
-      const key = facetKey(facet.kind, facet.value);
+      if (!axisLabels.has(facet.axis)) {
+        axisLabels.set(
+          facet.axis,
+          DERIVED_AXIS_LABELS[facet.axis] ?? axisLabelOf(registry, facet.axis)
+        );
+      }
+
+      const key = facetKey(facet.axis, facet.value);
       let bucket = byKey.get(key);
       if (!bucket) {
         bucket = new Set<string>();
@@ -44,7 +76,12 @@ export function buildFacetIndex(items: SavedItem[]): FacetIndex {
     }
   }
 
-  return { allIds, byKey, byItem };
+  return { allIds, byKey, byItem, domainsByItem, axisLabels };
+}
+
+/** 축의 이름. 색인에 없는 축이면 키를 그대로 돌려줍니다. */
+export function axisLabel(index: FacetIndex, axis: string): string {
+  return index.axisLabels.get(axis) ?? axis;
 }
 
 function intersect(a: Set<string>, b: Set<string>): Set<string> {
@@ -80,7 +117,9 @@ export function selectByFacets(
 
 export type FacetOption = {
   key: string;
-  kind: FacetKind;
+  axis: string;
+  /** 축의 이름. 칩을 묶어 보여줄 때 씁니다 */
+  axisLabel: string;
   value: string;
   /** 이 facet을 추가로 선택했을 때 남는 건수 */
   count: number;
@@ -98,7 +137,7 @@ export function availableFacets(
   index: FacetIndex,
   selectedKeys: string[],
   baseIds?: Set<string>,
-  kinds?: FacetKind[]
+  axes?: string[]
 ): FacetOption[] {
   const selected = new Set(selectedKeys);
   const current = selectByFacets(index, selectedKeys, baseIds);
@@ -107,29 +146,24 @@ export function availableFacets(
   for (const [key, bucket] of index.byKey) {
     const parsed = parseFacetKey(key);
     if (!parsed) continue;
-    if (kinds && !kinds.includes(parsed.kind)) continue;
+    if (axes && !axes.includes(parsed.axis)) continue;
+
+    const base = {
+      key,
+      axis: parsed.axis,
+      axisLabel: axisLabel(index, parsed.axis),
+      value: parsed.value,
+    };
 
     if (selected.has(key)) {
-      options.push({
-        key,
-        kind: parsed.kind,
-        value: parsed.value,
-        count: current.size,
-        selected: true,
-      });
+      options.push({ ...base, count: current.size, selected: true });
       continue;
     }
 
     const count = intersect(current, bucket).size;
     if (count === 0) continue;
 
-    options.push({
-      key,
-      kind: parsed.kind,
-      value: parsed.value,
-      count,
-      selected: false,
-    });
+    options.push({ ...base, count, selected: false });
   }
 
   // 선택된 것 우선, 그다음 결과가 많은 순
@@ -143,6 +177,7 @@ export function availableFacets(
 export type Relaxation = {
   /** 이 키를 빼면 */
   dropKey: string;
+  dropAxis: string;
   dropValue: string;
   /** 이만큼 나옵니다 */
   count: number;
@@ -166,9 +201,11 @@ export function suggestRelaxations(
     const count = selectByFacets(index, remaining, baseIds).size;
     if (count === 0) continue;
 
+    const parsed = parseFacetKey(key);
     suggestions.push({
       dropKey: key,
-      dropValue: parseFacetKey(key)?.value ?? key,
+      dropAxis: parsed?.axis ?? '',
+      dropValue: parsed?.value ?? key,
       count,
     });
   }
@@ -177,39 +214,34 @@ export function suggestRelaxations(
 }
 
 /**
- * 카테고리 탭이 포함하는 facet 축.
+ * 탭으로 세우는 분야들.
  *
- * 탭 판정을 카테고리 값 하나로만 하면 놓치는 게 생깁니다.
- * '돌아기랑 갈 만한 강릉 키즈펜션'은 AI가 카테고리를 하나만 고르므로 여행으로
- * 찍히고, 월령·주제 축을 다 갖고도 육아 탭에서는 보이지 않았습니다.
- *
- * 그래서 탭은 "대표 분류가 맞거나, 그 탭의 축을 가진 것"으로 판정합니다.
- * 카테고리는 상세의 대표 표시로 남기고, 탭은 관련된 것을 모두 보여주는 역할을 맡습니다.
+ * 아직 고정입니다. 사전에 새 분야가 생겨도 탭은 늘지 않습니다.
+ * 탭이 스무 개가 되면 그것대로 못 쓰게 되므로, 무엇을 세울지는 따로 다룹니다.
  */
-const CATEGORY_FACET_KINDS: Record<string, FacetKind[]> = {
-  recipe: ['ingredient'],
-  workout: ['muscle', 'equipment'],
-  travel: ['region', 'amenity', 'theme'],
-  parenting: ['babyAge', 'topic'],
-  shopping: ['product', 'seller', 'purchase'],
-  interior: ['room', 'style'],
-};
-
-export const TAB_CATEGORIES = Object.keys(CATEGORY_FACET_KINDS);
-
-function matchesOneCategory(item: SavedItem, category: string, facets: Facet[]): boolean {
-  if (getItemCategory(item) === category) return true;
-  const kinds = CATEGORY_FACET_KINDS[category] ?? [];
-  return facets.some((facet) => kinds.includes(facet.kind));
-}
+export const TAB_CATEGORIES = [
+  'recipe',
+  'workout',
+  'travel',
+  'parenting',
+  'shopping',
+  'interior',
+];
 
 /**
  * 아이템이 해당 탭에 보여야 하는지 판단합니다.
  *
- * 'other'는 별도로 다룹니다. 어느 탭에도 걸리지 않는 아이템만 모으는 자리라,
- * 분류에서 빠진 것이 '전체' 말고는 갈 곳이 없어 묻히는 일을 막습니다.
+ * 대표 분야 하나로만 판정하면 놓치는 게 생깁니다.
+ * '돌아기랑 갈 만한 강릉 키즈펜션'은 분야가 하나뿐이라 여행으로 찍히고,
+ * 월령과 주제를 다 갖고도 육아 탭에서는 보이지 않았습니다.
  *
- * facet은 이미 만들어둔 색인에서 꺼내 씁니다. 검색어를 칠 때마다 아이템 수만큼
+ * 그래서 "대표 분야가 맞거나, 그 분야의 항목을 하나라도 가진 것"으로 판정합니다.
+ * 대표 분야는 상세의 표시로 남기고, 탭은 관련된 것을 모두 보여주는 역할을 맡습니다.
+ *
+ * 축이 아니라 분야로 판정하는 이유가 있습니다. 축은 분야를 넘어 묶입니다.
+ * 도구 축으로 판정하면 여행 준비물을 가진 숙소 글이 운동 탭에 딸려 들어옵니다.
+ *
+ * 분야는 이미 만들어둔 색인에서 꺼내 씁니다. 검색어를 칠 때마다 아이템 수만큼
  * 다시 추출하면 비용이 커집니다.
  */
 export function matchesCategoryTab(
@@ -219,11 +251,14 @@ export function matchesCategoryTab(
 ): boolean {
   if (!tab) return true;
 
-  const facets = index.byItem.get(item.id) ?? [];
+  const domains = index.domainsByItem.get(item.id);
+  if (!domains) return false;
 
+  // 'other'는 별도로 다룹니다. 어느 탭에도 걸리지 않는 아이템만 모으는 자리라,
+  // 분류에서 빠진 것이 '전체' 말고는 갈 곳이 없어 묻히는 일을 막습니다.
   if (tab === 'other') {
-    return !TAB_CATEGORIES.some((category) => matchesOneCategory(item, category, facets));
+    return !TAB_CATEGORIES.some((category) => domains.has(category));
   }
 
-  return matchesOneCategory(item, tab, facets);
+  return domains.has(tab);
 }
