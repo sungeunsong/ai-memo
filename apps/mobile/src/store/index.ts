@@ -479,6 +479,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const ocr = base64 ? await fetchImageMetadataPatch(base64, item.createdAt) : null;
       const extracted = ocr?.contentText?.trim() ?? '';
 
+      // 같은 화면을 두 번 고르면 읽어낸 글도 같습니다. AI 호출만 헛되이 나가므로
+      // 붙이기 전에 확인합니다. 이미 옮겨둔 파일은 지웁니다.
+      if (extracted && (await hasSameItemSourceAsync(itemId, null, extracted))) {
+        await deletePersistedImage(storedUri).catch(() => {});
+        return { ok: false, message: '이미 붙어 있는 스크린샷입니다.' };
+      }
+
       const source = buildItemSource(
         itemId,
         'screenshot',

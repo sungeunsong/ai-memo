@@ -79,6 +79,7 @@ export async function hasSameItemSourceAsync(
   sourceUrl: string | null,
   rawText: string | null
 ) {
+  // 스크린샷은 읽어낸 글로 비교합니다. 같은 화면을 두 번 고르면 같은 글이 나옵니다.
   if (sourceUrl) {
     const row = await db.getFirstAsync<{ id: string }>(
       `SELECT id FROM item_sources WHERE item_id = ? AND source_url = ? LIMIT 1`,
