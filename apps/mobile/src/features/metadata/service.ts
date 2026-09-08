@@ -479,11 +479,22 @@ export async function fetchSourceBodyText(sourceUrl: string): Promise<string | n
     const caption = isInstagramHost(new URL(normalized).hostname)
       ? extractInstagramCaption(html.rawDescription)
       : null;
+
+    // fetchHtmlMetadata는 설명이 없으면 '○○ 링크를 저장했습니다.'를 지어냅니다.
+    // 화면에 뭐라도 띄우려는 문장이지 본문이 아닙니다. 그걸 조각에 담으면
+    // 본문이 있다고 판단돼 다시는 긁지 않게 되고, 종합할 재료가 영영 없습니다.
     const fallback = (caption || html.summary || '').trim();
-    return fallback || null;
+    return fallback && !isPlaceholderBody(fallback) ? fallback : null;
   } catch {
     return null;
   }
+}
+
+/** 본문이 없을 때 화면용으로 지어내는 문장들. 조각의 본문으로 삼으면 안 됩니다. */
+export function isPlaceholderBody(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  return /링크를 저장했습니다\.?$/.test(trimmed);
 }
 
 async function fetchGenericMetadata(

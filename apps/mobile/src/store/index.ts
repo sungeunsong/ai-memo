@@ -20,6 +20,7 @@ import {
 import {
   composeSourcesForAI,
   fetchSourceBodyText,
+  isPlaceholderBody,
   fetchMetadataPatch,
   fetchTextMetadataPatch,
   fetchImageMetadataPatch,
@@ -845,6 +846,11 @@ function needsBodyFetch(source: ItemSource): boolean {
 
   const text = source.rawText?.trim() ?? '';
   if (!text) return true;
+
+  // 이미 저장된 조각 중에는 '○○ 링크를 저장했습니다.' 같은 자리 채움 문장이
+  // 본문 자리에 들어간 것들이 있습니다. 그것도 본문이 없는 것으로 봐야
+  // 다시 긁을 기회가 생깁니다.
+  if (isPlaceholderBody(text)) return true;
 
   return text.replace(source.sourceUrl, '').trim().length === 0;
 }
