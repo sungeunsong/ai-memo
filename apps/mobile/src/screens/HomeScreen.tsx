@@ -34,6 +34,7 @@ import { ItemCard } from '@/components/ItemCard';
 import { SearchFilterBar } from '@/components/SearchFilterBar';
 import { EmptyResultGuide } from '@/components/EmptyResultGuide';
 import { BackupModal } from '@/components/BackupModal';
+import { InstallHintBanner } from '@/components/InstallHintBanner';
 import { SaveTargetModal } from '@/components/SaveTargetModal';
 import { PantryModal } from '@/components/PantryModal';
 import {
@@ -622,6 +623,9 @@ export function HomeScreen() {
   // 하는지 각자 계산할 수 없게 됩니다. 필요한 쪽이 직접 안전영역을 씁니다.
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      {/* 아이폰 사파리는 설치 안내를 스스로 띄우지 않습니다. 직접 알려줍니다. */}
+      <InstallHintBanner />
+
       {/* 에러 배너 (상단 고정) */}
       {runtimeErrorMessage ? (
         <View style={styles.errorBanner}>
