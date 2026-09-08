@@ -134,6 +134,56 @@ function belongsToScannedAxis(value: string, axis: string): boolean {
   return false;
 }
 
+/**
+ * 지명 자리에 섞여 오는 일반 낱말.
+ *
+ * '양촌리 골짜기'에서 '골짜기'는 그 곳의 이름이 아닙니다. 칩으로 세워두면
+ * 서로 아무 상관 없는 계곡 글들이 한 조건으로 묶입니다.
+ */
+const NOT_PLACE_NAMES = [
+  '골짜기', '근처', '인근', '부근', '근방', '일대', '방면', '시내', '외곽',
+  '주변', '앞', '뒤', '위치', '숙소', '펜션', '호텔', '리조트',
+];
+
+/** 한 값에서 건져낼 구체 지명 수. 이보다 많으면 지명이 아니라 문장입니다. */
+const MAX_LEFTOVER_PLACES = 3;
+
+/** 지명 하나의 길이 상한. */
+const MAX_PLACE_NAME_LENGTH = 12;
+
+/**
+ * 지역 사전이 못 알아본 지명을 건져냅니다.
+ *
+ * 사전에는 시군구까지만 들어 있습니다. 그 아래(항구, 섬, 리 단위)는 앞으로도
+ * 다 넣을 수 없고, 넣는다고 될 일도 아닙니다. 그래서 훑기가 알아본 부분을
+ * 걷어내고 남는 낱말을 그대로 남깁니다.
+ *
+ * '강릉시'처럼 이미 알아본 것과 겹치는 낱말은 뺍니다. 두면 '강릉'과 '강릉시'가
+ * 다른 칩으로 서서, 같은 곳을 두 번 골라야 합니다.
+ */
+function leftoverPlaceNames(values: string[], found: string[]): string[] {
+  const names: string[] = [];
+
+  for (const value of values) {
+    for (const token of value.split(/[\s,·/]+/)) {
+      const name = token.trim();
+      if (name.length < 2 || name.length > MAX_PLACE_NAME_LENGTH) continue;
+
+      // 이미 알아본 지역과 겹치면 뺍니다. ('강릉' ↔ '강릉시')
+      if (found.some((region) => name.includes(region) || region.includes(name))) continue;
+
+      // 시설 낱말은 시설 축이 맡습니다.
+      if (AMENITY_TERMS.includes(name)) continue;
+      if (NOT_PLACE_NAMES.includes(name)) continue;
+
+      if (!names.includes(name)) names.push(name);
+      if (names.length >= MAX_LEFTOVER_PLACES) return names;
+    }
+  }
+
+  return names;
+}
+
 export type ItemFacets = {
   facets: Facet[];
   /** 이 아이템이 걸쳐 있는 분야들. 탭 판정에 씁니다 */
@@ -243,11 +293,21 @@ export function extractItemFacets(
       .filter((part): part is string => typeof part === 'string')
       .join(' ');
 
-    for (const region of scanTerms(haystack, REGION_TERMS)) {
+    const regions = scanTerms(haystack, REGION_TERMS);
+    for (const region of regions) {
       // 상위 지역까지 함께 붙여야 '강원도'로 걸었을 때 강릉 숙소가 나옵니다.
       for (const value of expand(region)) {
         push(collector, 'place', value, scanDomain);
       }
+    }
+
+    // 사전에 없는 구체 지명도 남깁니다.
+    //
+    // '경기도 화성시 궁평항'에서 사전이 아는 것은 '경기도'뿐입니다. 그것만 남기면
+    // 궁평항은 사라지고, 그 낚시터를 다시 찾을 방법이 지역 단위밖에 안 남습니다.
+    // 사용자가 기억하는 이름은 대개 큰 지역이 아니라 그 구체적인 곳입니다.
+    for (const name of leftoverPlaceNames(placeTexts, regions)) {
+      push(collector, 'place', name, scanDomain);
     }
     for (const amenity of scanTerms(haystack, AMENITY_TERMS)) {
       // 시설 낱말은 표기가 여러 가지입니다. '인피니티풀'과 '야외수영장'을
