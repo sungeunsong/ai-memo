@@ -36,6 +36,18 @@
 import { ItemMetadataPatch } from '@/features/items/types';
 import { getHostname } from '@/features/items/fallback';
 import { classifySourceType } from '@/features/capture/normalizeSharedInput';
+import { ITEM_CONTENT_VERSION, ItemContentV2, migrateContentToV2 } from '@/features/items/contentV2';
+import { SEED_REGISTRY, TaxonomyRegistry, buildRegistry } from '@/features/taxonomy/registry';
+import {
+  IncomingFact,
+  collectNewDefinitions,
+  normalizeDefinitionKey,
+} from '@/features/taxonomy/inference';
+import {
+  bumpTaxonomyUseAsync,
+  getTaxonomyAsync,
+  registerProvisionalDefinitionsAsync,
+} from '@/db';
 
 
 type MetadataResult = {
@@ -241,17 +253,9 @@ export async function fetchTextMetadataPatch(
   }
 
   const aiResponse = result.data;
-  const {
-    title: aiTitle,
-    summary: aiSummary,
-    detailedAnalysis,
-    ...structuredFields
-  } = aiResponse;
+  const { title: aiTitle, summary: aiSummary, detailedAnalysis } = aiResponse;
 
-  const structuredContent = JSON.stringify({
-    category: aiResponse.category || 'text',
-    ...structuredFields,
-  });
+  const structuredContent = toContentJson(aiResponse, 'text');
 
   return {
     ...(typeof aiTitle === 'string' && aiTitle.trim() ? { title: aiTitle.trim() } : null),
@@ -294,17 +298,9 @@ export async function fetchImageMetadataPatch(
   }
 
   const aiResponse = result.data;
-  const {
-    title: aiTitle,
-    summary: aiSummary,
-    detailedAnalysis,
-    ...structuredFields
-  } = aiResponse;
+  const { title: aiTitle, summary: aiSummary, detailedAnalysis } = aiResponse;
 
-  const structuredContent = JSON.stringify({
-    category: aiResponse.category || 'web',
-    ...structuredFields,
-  });
+  const structuredContent = toContentJson(aiResponse, 'web');
 
   return {
     ...(typeof aiTitle === 'string' && aiTitle.trim() ? { title: aiTitle.trim() } : null),
@@ -600,11 +596,8 @@ async function fetchGenericMetadata(
         // 본문은 contentText로, 정리본은 digest로 각각 분리해 보관합니다.
         // 원본과 파생물을 같은 칸에 섞어두면 AI를 다시 돌릴 때 본문까지 덮어쓰게 됩니다.
         // summary와 detailedAnalysis는 각자 전용 컬럼이 있으므로 구조화 데이터에서 제외합니다.
-        const { detailedAnalysis, summary: _summary, ...structuredFields } = parsedStructure ?? {};
-        const structuredContent = JSON.stringify({
-          category: parsedStructure?.category || sourceType,
-          ...structuredFields,
-        });
+        const { detailedAnalysis } = parsedStructure ?? {};
+        const structuredContent = toContentJson(parsedStructure, sourceType);
 
         console.log(`[MetadataService] Jina 파싱 성공. 제목: "${title}", 썸네일 획득 여부: ${Boolean(thumbnailUrl)}`);
 
@@ -663,16 +656,13 @@ async function fetchGenericMetadata(
       aiError = aiResult.reason;
     }
 
-    const { detailedAnalysis, summary: _summary, ...structuredFields } = parsedStructure ?? {};
+    const { detailedAnalysis } = parsedStructure ?? {};
 
     return {
       sourceUrl: htmlMetadata.sourceUrl ?? sourceUrl,
       title,
       summary,
-      content: JSON.stringify({
-        category: parsedStructure?.category || sourceType,
-        ...structuredFields,
-      }),
+      content: toContentJson(parsedStructure, sourceType),
       contentText: instagramCaption,
       digest:
         typeof detailedAnalysis === 'string' && detailedAnalysis.trim()
@@ -685,9 +675,7 @@ async function fetchGenericMetadata(
   }
 
 
-  const structuredContent = JSON.stringify({
-    category: sourceType,
-  });
+  const structuredContent = toContentJson(null, sourceType);
 
   return {
     sourceUrl: htmlMetadata.sourceUrl ?? sourceUrl,
@@ -1063,6 +1051,180 @@ export type GeminiResult =
   | { ok: false; reason: string };
 
 /**
+ * 사전을 읽어 옵니다. 못 읽으면 앱에 심어둔 기본 사전으로 갑니다.
+ * 사전이 없다고 정리를 멈출 이유는 없습니다.
+ */
+async function loadTaxonomyRegistryAsync(): Promise<TaxonomyRegistry> {
+  try {
+    const { domains, facts } = await getTaxonomyAsync();
+    if (facts.length > 0) return buildRegistry(domains, facts);
+  } catch (error) {
+    console.log('[GeminiAPI] 사전을 읽지 못해 기본 사전을 씁니다:', error);
+  }
+  return SEED_REGISTRY;
+}
+
+/** 응답에서 분야를 읽습니다. 못 읽으면 미분류로 둡니다. */
+function readDomain(data: any, registry: TaxonomyRegistry): { key: string; label: string } {
+  const key = normalizeDefinitionKey(typeof data?.domain?.key === 'string' ? data.domain.key : '');
+  if (!key) return { key: 'other', label: '미분류' };
+
+  const label =
+    typeof data?.domain?.label === 'string' && data.domain.label.trim()
+      ? data.domain.label.trim()
+      : (registry.domains.get(key)?.label ?? key);
+
+  return { key, label };
+}
+
+/**
+ * 응답에서 항목을 읽습니다.
+ *
+ * 모델은 같은 항목을 두 번 적기도 하고, 빈 값만 담은 항목을 넣기도 합니다.
+ * 같은 이름은 합치고 빈 것은 버립니다. 이름이 갈라지면 사전도 갈라지고,
+ * 빈 항목은 화면에 이름만 남습니다.
+ */
+function readFacts(data: any, domainKey: string): IncomingFact[] {
+  if (!Array.isArray(data?.facts)) return [];
+
+  const merged = new Map<string, IncomingFact>();
+
+  for (const raw of data.facts) {
+    const key = normalizeDefinitionKey(typeof raw?.key === 'string' ? raw.key : '');
+    if (!key) continue;
+
+    // 이 글의 분야가 아닌 항목은 자기 분야를 따로 답니다.
+    // 여행 글에 딸려온 재료가 냉장고 털기에 걸리려면 그게 레시피 항목이어야 합니다.
+    const factDomain = normalizeDefinitionKey(typeof raw?.domain === 'string' ? raw.domain : '');
+    const resolvedDomain = factDomain || domainKey;
+
+    const values: string[] = [];
+    for (const value of Array.isArray(raw?.values) ? raw.values : []) {
+      if (typeof value !== 'string') continue;
+      const trimmed = value.trim();
+      if (!trimmed || values.includes(trimmed)) continue;
+      values.push(trimmed);
+      if (values.length >= MAX_VALUES_PER_FACT) break;
+    }
+    if (values.length === 0) continue;
+
+    const ref = `${resolvedDomain}.${key}`;
+    const existing = merged.get(ref);
+    if (existing) {
+      for (const value of values) {
+        if (!existing.values.includes(value)) existing.values.push(value);
+      }
+      continue;
+    }
+
+    merged.set(ref, {
+      domainKey: resolvedDomain,
+      key,
+      label: typeof raw?.label === 'string' && raw.label.trim() ? raw.label.trim() : key,
+      values,
+    });
+
+    if (merged.size >= MAX_FACTS_PER_ITEM) break;
+  }
+
+  return [...merged.values()];
+}
+
+/**
+ * 모델 응답을 저장할 형태로 옮깁니다.
+ *
+ * 읽기, 군말 걸러내기, 날짜 보정을 한 자리에 모아둡니다. 순서가 중요합니다.
+ * 군말을 먼저 걸러야 그것이 사전에 등록되지 않고, 날짜는 값이 확정된 뒤에 고쳐야
+ * 버려질 값을 붙들고 연도를 따지지 않습니다.
+ */
+export function buildAiContent(
+  data: any,
+  registry: TaxonomyRegistry,
+  sourceText: string,
+  referenceDate: string
+): { content: ItemContentV2; facts: IncomingFact[] } {
+  const domain = readDomain(data, registry);
+  const facts = normalizeDeadlineYear(
+    dropRamblingValues(readFacts(data, domain.key)),
+    sourceText,
+    referenceDate
+  );
+
+  return {
+    content: {
+      contentVersion: ITEM_CONTENT_VERSION,
+      domain,
+      facts: facts.map(({ domainKey, key, values }) => ({ domainKey, key, values })),
+    },
+    facts,
+  };
+}
+
+/**
+ * 사전에 없던 이름을 잠정으로 등록하고 쓰인 횟수를 올립니다.
+ *
+ * 등록에 실패해도 정리는 그대로 끝냅니다. 사전은 검색이 더 잘 되게 하는 것이지
+ * 저장의 조건이 아닙니다. 값은 아이템에 그대로 남아 있고, 정의는 나중에 붙습니다.
+ */
+async function registerDefinitionsAsync(
+  registry: TaxonomyRegistry,
+  domain: { key: string; label: string },
+  facts: IncomingFact[]
+): Promise<void> {
+  try {
+    const stamp = new Date().toISOString();
+    const additions = collectNewDefinitions(registry, domain, facts, stamp);
+
+    if (additions.domain || additions.facts.length > 0) {
+      await registerProvisionalDefinitionsAsync(additions.domain, additions.facts);
+      const names = additions.facts.map((fact) => `${fact.domainKey}.${fact.key}`);
+      console.log(
+        `[Taxonomy] 새 정의 등록${additions.domain ? ` · 분야 ${additions.domain.key}` : ''}` +
+          `${names.length > 0 ? ` · 항목 ${names.join(', ')}` : ''}`
+      );
+    }
+
+    // 분야별로 나눠 올립니다. 여행 글에 딸려온 재료는 레시피 쪽이 쓰인 것입니다.
+    const byDomain = new Map<string, string[]>();
+    for (const fact of facts) {
+      const list = byDomain.get(fact.domainKey) ?? [];
+      list.push(fact.key);
+      byDomain.set(fact.domainKey, list);
+    }
+    if (!byDomain.has(domain.key)) byDomain.set(domain.key, []);
+
+    for (const [domainKey, keys] of byDomain) {
+      await bumpTaxonomyUseAsync(domainKey, keys);
+    }
+  } catch (error) {
+    console.log('[Taxonomy] 정의 등록에 실패했지만 정리는 계속합니다:', error);
+  }
+}
+
+/**
+ * 저장할 구조화 데이터를 만듭니다.
+ *
+ * AI가 답했으면 그대로 씁니다. AI를 못 부른 경우에는 로컬 파서가 예전 형식으로
+ * 내놓는데, 그건 마이그레이션을 한 번 태워 같은 형식으로 맞춥니다.
+ * 저장되는 형식이 경로마다 다르면 읽는 쪽이 그만큼 갈라집니다.
+ */
+function toContentJson(parsed: any, fallbackCategory: string): string {
+  if (parsed?.contentV2) return JSON.stringify(parsed.contentV2);
+
+  const { title, summary, detailedAnalysis, extractedText, contentV2, ...rest } = parsed ?? {};
+  const legacy = { category: parsed?.category || fallbackCategory, ...rest };
+  const converted = migrateContentToV2(JSON.stringify(legacy));
+
+  return JSON.stringify(
+    converted ?? {
+      contentVersion: ITEM_CONTENT_VERSION,
+      domain: { key: 'other', label: '미분류' },
+      facts: [],
+    }
+  );
+}
+
+/**
  * 마감일의 연도를 바로잡습니다.
  *
  * 프롬프트로 날짜를 알려줘도 모델이 연도를 잘못 넣는 경우가 있습니다.
@@ -1073,20 +1235,29 @@ export type GeminiResult =
  * 재분석하면 오늘 기준으로는 2027년으로 밀려버립니다.
  * 원문에 연도가 실제로 적혀 있으면 그건 사실이므로 건드리지 않습니다.
  */
-function normalizeDeadlineYear(data: any, sourceText: string, referenceDate: string): any {
-  const deadline = typeof data?.deadline === 'string' ? data.deadline.trim() : '';
-  const match = deadline.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return data;
-
-  const parsedYear = Number(match[1]);
+function normalizeDeadlineYear(
+  facts: IncomingFact[],
+  sourceText: string,
+  referenceDate: string
+): IncomingFact[] {
   const baseYear = new Date(referenceDate).getFullYear();
-  if (!Number.isFinite(baseYear)) return data;
-  if (parsedYear >= baseYear) return data;
+  if (!Number.isFinite(baseYear)) return facts;
 
-  // 원문에 그 연도가 명시돼 있으면 모델이 읽은 것이므로 존중합니다.
-  if (sourceText && new RegExp(`${parsedYear}`).test(sourceText)) return data;
+  return facts.map((fact) => ({
+    ...fact,
+    values: fact.values.map((value) => {
+      const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!match) return value;
 
-  return { ...data, deadline: `${baseYear}-${match[2]}-${match[3]}` };
+      const parsedYear = Number(match[1]);
+      if (parsedYear >= baseYear) return value;
+
+      // 원문에 그 연도가 명시돼 있으면 모델이 읽은 것이므로 존중합니다.
+      if (sourceText && new RegExp(`${parsedYear}`).test(sourceText)) return value;
+
+      return `${baseYear}-${match[2]}-${match[3]}`;
+    }),
+  }));
 }
 
 /**
@@ -1145,34 +1316,74 @@ const RESPONSE_SCHEMA = {
     title: { type: 'string' },
     summary: { type: 'string' },
     detailedAnalysis: { type: 'string' },
-    category: {
-      type: 'string',
-      enum: ['recipe', 'workout', 'travel', 'parenting', 'shopping', 'interior', 'web'],
+    domain: {
+      type: 'object',
+      properties: {
+        key: { type: 'string' },
+        label: { type: 'string' },
+      },
+      required: ['key', 'label'],
     },
-    cookTime: { type: 'string' },
-    difficulty: { type: 'string' },
-    ingredients: { type: 'array', items: { type: 'string' } },
-    targetMuscles: { type: 'array', items: { type: 'string' } },
-    equipments: { type: 'array', items: { type: 'string' } },
-    routine: { type: 'array', items: { type: 'string' } },
-    travelTheme: { type: 'string' },
-    location: { type: 'string' },
-    budget: { type: 'string' },
-    highlights: { type: 'array', items: { type: 'string' } },
-    checklist: { type: 'array', items: { type: 'string' } },
-    productType: { type: 'string' },
-    seller: { type: 'string' },
-    purchaseType: { type: 'string' },
-    deadline: { type: 'string' },
-    price: { type: 'string' },
-    babyAgeMonths: { type: 'string' },
-    parentingTopic: { type: 'string' },
+    facts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          key: { type: 'string' },
+          label: { type: 'string' },
+          // 이 글의 분야가 아닌 항목이면 그 분야 키. 여행 글에 나온 요리 재료 같은 경우입니다.
+          domain: { type: 'string' },
+          values: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['key', 'label', 'values'],
+      },
+    },
     extractedText: { type: 'string' },
-    roomType: { type: 'string' },
-    interiorStyle: { type: 'string' },
   },
-  required: ['title', 'summary', 'detailedAnalysis', 'category'],
+  required: ['title', 'summary', 'detailedAnalysis', 'domain', 'facts'],
 };
+
+/** 한 아이템에서 받을 항목 수 상한. 넘치면 화면도 사전도 지저분해집니다. */
+const MAX_FACTS_PER_ITEM = 14;
+
+/** 항목 하나에 담을 값 수 상한. */
+const MAX_VALUES_PER_FACT = 24;
+
+/** 값 하나의 길이 상한. 이보다 길면 값이 아니라 문단입니다. */
+const MAX_VALUE_LENGTH = 200;
+
+/** 프롬프트에 넣을 사전 크기. 다 넣으면 토큰만 먹고 모델이 흘려 읽습니다. */
+const MAX_PROMPT_DOMAINS = 12;
+const MAX_PROMPT_FACTS_PER_DOMAIN = 10;
+
+/**
+ * 이미 쓰고 있는 이름을 프롬프트에 넣습니다.
+ *
+ * 안 넣으면 같은 정보가 글마다 다른 이름으로 들어옵니다. 실험에서 낚시 글 세 개가
+ * 각각 다른 이름을 만들었고, 그 셋은 서로 다른 축이 되어 조합 검색에서 만나지
+ * 못했습니다. 무엇이 맞느냐가 아니라 하나로 모이느냐의 문제입니다.
+ */
+function describeRegistryForPrompt(registry: TaxonomyRegistry): string {
+  const byDomain = new Map<string, string[]>();
+
+  for (const definition of registry.facts.values()) {
+    const list = byDomain.get(definition.domainKey) ?? [];
+    if (list.length < MAX_PROMPT_FACTS_PER_DOMAIN) {
+      list.push(`${definition.key}(${definition.label})`);
+    }
+    byDomain.set(definition.domainKey, list);
+  }
+
+  const lines: string[] = [];
+  for (const [domainKey, facts] of byDomain) {
+    if (lines.length >= MAX_PROMPT_DOMAINS) break;
+    if (domainKey === 'other') continue;
+    const label = registry.domains.get(domainKey)?.label ?? domainKey;
+    lines.push(`- ${domainKey}(${label}): ${facts.join(', ')}`);
+  }
+
+  return lines.join('\n');
+}
 
 /**
  * AI에 넘길 본문 길이 상한.
@@ -1213,33 +1424,15 @@ const GEMINI_TIMEOUT_MS = 12000;
  * 값만 들어와야 하는 분류·발췌 필드들.
  * 검색 facet과 화면의 칩이 이 값들을 그대로 씁니다.
  */
-const SHORT_VALUE_FIELDS = [
-  'cookTime',
-  'difficulty',
-  'travelTheme',
-  'location',
-  'budget',
-  'productType',
-  'seller',
-  'purchaseType',
-  'deadline',
-  'price',
-  'babyAgeMonths',
-  'parentingTopic',
-  'roomType',
-  'interiorStyle',
-] as const;
-
-/** 이 길이를 넘는 분류 값은 값이 아니라 모델의 군말입니다. */
+/** 이 길이를 넘는 값은 값이 아니라 모델의 군말입니다. */
 const MAX_SHORT_VALUE_LENGTH = 40;
 
 /**
  * 짧아도 값이 아닌 것들.
  *
- * 길이만으로는 못 거릅니다. 레시피 글에 travelTheme으로
+ * 길이만으로는 못 거릅니다. 레시피 글의 여행 테마 자리에
  * '국내 / 맛집 탐방에 준함(레시피 관련 없음)'이 들어온 적이 있는데 25자입니다.
- * 값을 적는 대신 왜 그렇게 적었는지, 혹은 해당 없다는 말을 적은 것이라
- * 그대로 두면 레시피 항목에 여행 카드가 뜹니다.
+ * 값을 적는 대신 왜 그렇게 적었는지, 혹은 해당 없다는 말을 적은 것입니다.
  */
 const NON_VALUE_MARKERS = [
   '해당 없',
@@ -1251,53 +1444,46 @@ const NON_VALUE_MARKERS = [
   '추정',
   '판단',
   '것으로 보',
-  '듯',
 ];
 
 function looksLikeExplanation(value: string): boolean {
-  // 괄호로 덧붙인 설명은 값이 아닙니다. '국내 / 호캉스'에는 괄호가 없습니다.
-  if (/[(（]/.test(value)) return true;
   return NON_VALUE_MARKERS.some((marker) => value.includes(marker));
 }
 
 /**
- * 분류 필드에 섞여 들어온 모델의 혼잣말을 걷어냅니다.
+ * 값에 섞여 들어온 모델의 혼잣말을 걷어냅니다.
  *
- * 사고 토큰을 꺼두면 모델은 판단이 필요할 때 답변 필드 안에서 고민합니다.
- * 실제로 travelTheme에 "2개만 넣겠습니다... 지침이 필요합니다" 같은 문단이
+ * 사고 토큰을 꺼두면 모델은 판단이 필요할 때 답변 안에서 고민합니다.
+ * 실제로 여행 테마 자리에 "2개만 넣겠습니다... 지침이 필요합니다" 같은 문단이
  * 통째로 들어온 적이 있습니다. 화면이 지저분해지는 것으로 끝나지 않고,
- * travelTheme과 location은 쪼개져 검색 facet의 축이 되기 때문에
- * 그대로 두면 조합 검색이 오염됩니다.
+ * 이 값들은 쪼개져 검색 축이 되기 때문에 그대로 두면 조합 검색이 오염됩니다.
  *
- * 프롬프트로 줄일 수는 있어도 없앨 수는 없으므로 저장 전에 한 번 더 거릅니다.
- * 배열 필드는 건드리지 않습니다. 긴 항목이 정상인 경우(highlights 등)가 있어
- * 같은 잣대를 대면 멀쩡한 값을 지웁니다.
+ * 예전에는 정해진 짧은 필드에만 이 잣대를 댔습니다. 이제는 어떤 항목이 짧은
+ * 분류인지 미리 알 수 없으므로, 성격과 무관하게 '값이 아닌 말'만 걸러냅니다.
+ * 괄호는 근거에서 뺐습니다. '초당순두부(30년 노포)'처럼 괄호가 붙은 멀쩡한 값이
+ * 있고, 짧은 명사에 붙은 괄호는 정규화가 알아서 걷어냅니다.
  */
-function dropRamblingValues(data: any): any {
-  if (!data || typeof data !== 'object') {
-    return data;
+function dropRamblingValues(facts: IncomingFact[]): IncomingFact[] {
+  const cleaned: IncomingFact[] = [];
+
+  for (const fact of facts) {
+    const values = fact.values.filter((value) => {
+      if (value.length > MAX_VALUE_LENGTH) {
+        console.log(`[GeminiAPI] ${fact.key}에 값 대신 문단이 들어와 버립니다 (${value.length}자)`);
+        return false;
+      }
+      if (value.length <= MAX_SHORT_VALUE_LENGTH && looksLikeExplanation(value)) {
+        console.log(`[GeminiAPI] ${fact.key}가 값이 아니라 설명이라 버립니다: ${value}`);
+        return false;
+      }
+      return true;
+    });
+
+    // 값이 다 걸러졌으면 항목 자체를 버립니다. 빈 항목은 화면에 이름만 남습니다.
+    if (values.length > 0) cleaned.push({ ...fact, values });
   }
 
-  for (const field of SHORT_VALUE_FIELDS) {
-    const value = data[field];
-    if (typeof value !== 'string') continue;
-
-    const trimmed = value.trim();
-    if (!trimmed) continue;
-
-    if (trimmed.length > MAX_SHORT_VALUE_LENGTH) {
-      console.log(`[GeminiAPI] ${field}에 값 대신 설명이 들어와 버립니다 (${trimmed.length}자)`);
-      data[field] = '';
-      continue;
-    }
-
-    if (looksLikeExplanation(trimmed)) {
-      console.log(`[GeminiAPI] ${field}가 값이 아니라 설명이라 버립니다: ${trimmed}`);
-      data[field] = '';
-    }
-  }
-
-  return data;
+  return cleaned;
 }
 
 async function callGeminiApi(
@@ -1317,13 +1503,18 @@ async function callGeminiApi(
   // 학습 시점 근처로 찍어버려, 방금 저장한 공구가 몇백 일 지난 것으로 표시됩니다.
   const today = referenceDate.slice(0, 10);
 
+  // 사전을 먼저 읽습니다. 이름을 알려주지 않으면 같은 정보가 글마다 다른 이름으로
+  // 들어와서, 사전이 갈라지고 검색이 그만큼 어긋납니다.
+  const registry = await loadTaxonomyRegistryAsync();
+  const registrySection = describeRegistryForPrompt(registry);
+
   const prompt = `오늘 날짜는 ${today}이다. 연도가 적혀 있지 않은 날짜는 오늘이 속한 연도로 해석하라.
 
 너는 입력된 원문 지식에서 핵심적인 정보만을 고도로 구조화된 형태로 요약 및 추출하는 AI 에이전트이다.
 다음 지침에 따라 반드시 JSON 형식으로만 응답해라. 백틱( \`\`\`json )이나 기타 텍스트는 일절 출력하지 마라.
 
-각 필드에는 값만 넣어라. 설명, 판단 근거, 질문, 대안 제시를 필드 안에 쓰지 마라.
-분류가 애매하면 가장 가까운 것 하나를 고르고, 해당 사항이 아예 없으면 빈 문자열로 두어라.
+각 값에는 값만 넣어라. 설명, 판단 근거, 질문, 대안 제시를 값 안에 쓰지 마라.
+원문에서 알 수 없는 것은 지어내지 말고 아예 넣지 마라.
 
 원문에 [SOURCE n] 표시가 여러 개 있으면, 그것들은 모두 같은 하나의 대상에 대한
 서로 다른 출처다. 전체를 종합해서 각 항목을 채워라. 서로 어긋나는 정보가 있으면
@@ -1338,28 +1529,40 @@ async function callGeminiApi(
   "title": "12~32자 내외의 핵심 요약형 제목 (과장/클릭베이트 금지)",
   "summary": "홈용 3줄 요약 (가독성 좋게 1), 2), 3) 번호 매김)",
   "detailedAnalysis": "상세 뷰용 전체 요약 정리본 (원문 본문의 중요한 핵심 논지, 세부 정보들을 소제목과 글머리 기호(불릿)를 활용해 일목요연하고 깊이 있게 정리한 상세 설명 텍스트, 한국어로 정성스럽게 작성할 것)",
-  "category": "recipe | workout | travel | parenting | shopping | interior | web 중 하나로 분류 (공동구매/꿀템/제품추천은 shopping, 방꾸미기/가구/조명은 interior)",
-  "cookTime": "조리 시간 (예: '20분')",
-  "difficulty": "조리 난이도 ('쉬움', '보통', '어려움' 중 하나)",
-  "ingredients": ["재료1", "재료2", "재료3"],
-  "targetMuscles": ["부위1", "부위2"],
-  "equipments": ["도구1", "도구2"],
-  "routine": ["루틴동작 1", "루틴동작 2"],
-  "travelTheme": "'국내' 또는 '해외' 뒤에 ' / '와 테마 한 단어. 예: '국내 / 호캉스', '해외 / 배낭여행'. 정확히 이 형태로만 쓰고 다른 말을 덧붙이지 마라",
-  "location": "위치 및 숙소명",
-  "budget": "예상 예산 정보",
-  "highlights": ["추천 명소/특장점 1", "2"],
-  "checklist": ["준비물/예약 필요 항목 1", "2"],
-  "productType": "품목 분류 한 단어 (식품 | 주방 | 생활 | 패션 | 가전 | 뷰티 | 인테리어 | 육아용품 중 하나)",
-  "seller": "판매처 또는 공구 주최 (예: '쿠팡', '네이버 스마트스토어', '인스타 공구')",
-  "purchaseType": "구매 형태 ('공동구매' 또는 '일반구매')",
-  "deadline": "마감일이 본문에 있으면 YYYY-MM-DD 형식으로. 연도가 없으면 오늘 날짜의 연도를 쓸 것. 없으면 빈 문자열",
-  "price": "가격 정보 (예: '19,900원')",
-  "babyAgeMonths": "대상 아기 월령을 숫자 개월로. 범위면 '6-12', 단일이면 '6'. 없으면 빈 문자열 (돌=12, 3세=36)",
-  "parentingTopic": "육아 주제 (이유식 | 수면 | 발달 | 놀이 | 마사지 | 건강 | 교육 | 외출 | 용품 중 하나)",
-  "roomType": "공간 (거실 | 침실 | 주방 | 욕실 | 현관 | 서재 | 아이방 | 베란다 중 하나)",
-  "interiorStyle": "인테리어 스타일 (북유럽 | 미니멀 | 모던 | 빈티지 | 내추럴 | 인더스트리얼 | 러블리 중 하나)"
+  "domain": { "key": "영문 소문자와 밑줄만 쓴 분야 키", "label": "한국어 분야 이름" },
+  "facts": [
+    { "key": "영문 소문자와 밑줄만 쓴 항목 키", "label": "한국어 항목 이름", "values": ["값1", "값2"] }
+  ]
 }
+
+분야(domain)는 이 글이 무엇에 대한 것인지를 나타내는 대분류 하나다.
+목록에서 고르는 것이 아니라 글에 맞는 것을 직접 정해라. 낚시 글이면 fishing(낚시),
+캠핑 글이면 camping(캠핑)이다. 억지로 기존 분야에 밀어 넣지 마라.
+다만 아래 '이미 쓰고 있는 이름'에 뜻이 같은 것이 있으면 반드시 그 키를 그대로 써라.
+
+항목(facts)은 그 글에서 건진 정보다. 다음을 지켜라.
+
+1. 한 항목에는 한 종류만 담아라. 여러 종류를 한 항목에 뭉치지 마라.
+   나쁨: { "key": "fishing_info", "values": ["대부도", "우럭", "원투대"] }
+   좋음: { "key": "spot", "label": "포인트", "values": ["대부도"] },
+         { "key": "target_fish", "label": "대상어", "values": ["우럭"] },
+         { "key": "gear", "label": "장비", "values": ["원투대"] }
+
+2. 같은 종류가 여럿이면 항목을 늘리지 말고 values에 나란히 담아라.
+   나쁨: gear_1, gear_2   좋음: { "key": "gear", "values": ["원투대", "뜰채"] }
+
+3. 값에는 값만 적어라. 설명, 판단 근거, 질문, "해당 없음" 같은 말을 적지 마라.
+   원문에서 알 수 없는 항목은 빈 값으로 두지 말고 그 항목 자체를 넣지 마라.
+   없는 정보를 지어내는 것보다 항목이 없는 편이 낫다.
+
+4. 날짜는 YYYY-MM-DD로 적어라. 연도가 안 적혀 있으면 오늘이 속한 연도로 해석해라.
+
+5. 이 글의 분야가 아닌 항목이 섞여 있으면 그 항목에만 "domain"을 따로 적어라.
+   예를 들어 여행 글에 요리 재료가 나오면
+   { "key": "ingredient", "label": "재료", "domain": "recipe", "values": ["흑돼지"] }
+
+이미 쓰고 있는 이름 (뜻이 같으면 반드시 이 키를 그대로 써라):
+${registrySection || '(아직 없음)'}
 
 ${base64Image
   ? `분석 대상: 첨부된 이미지 (스크린샷일 수 있음)
@@ -1444,10 +1647,14 @@ ${rawContent.slice(0, MAX_CONTENT_CHARS)}`}
 
         try {
           const data = JSON.parse(cleaned);
-          return {
-            ok: true,
-            data: dropRamblingValues(normalizeDeadlineYear(data, rawContent, referenceDate)),
-          };
+
+          const { content, facts } = buildAiContent(data, registry, rawContent, referenceDate);
+
+          // 사전은 여기서 자랍니다. 처음 보는 분야와 항목이 잠정으로 등록되고,
+          // 여러 번 쓰이면 확정으로 올라갑니다.
+          await registerDefinitionsAsync(registry, content.domain, facts);
+
+          return { ok: true, data: { ...data, contentV2: content } };
         } catch (parseErr) {
           const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
           console.log(`[GeminiAPI] JSON 파싱 실패 (시도 ${attempt}/${maxAttempts}):`, message);

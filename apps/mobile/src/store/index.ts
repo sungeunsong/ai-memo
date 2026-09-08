@@ -201,14 +201,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
         // 사전을 읽어 옵니다. AI가 만든 잠정 정의까지 들어 있어야 새 분야의 항목이
         // 제 이름과 제 축으로 검색에 잡힙니다. 실패하면 심어둔 기본값으로 둡니다.
-        try {
-          const { domains, facts } = await getTaxonomyAsync();
-          if (facts.length > 0) {
-            set({ taxonomy: buildRegistry(domains, facts) });
-          }
-        } catch (error) {
-          console.error('[Init] 사전을 읽지 못했습니다. 기본 사전을 씁니다:', error);
-        }
+        await refreshTaxonomyAsync(set);
 
         // 동기화 job은 앱이 꺼지면 'processing'에 갇힙니다.
         // 이쪽은 되돌려두면 아래 워커가 곧바로 다시 집어갑니다.
@@ -1130,8 +1123,28 @@ async function enrichSavedItemMetadata(
     console.error('[Enrich] 보강 결과 저장/큐잉 실패. AI 결과는 유지합니다:', error);
   } finally {
     enrichingItemIds.delete(itemId);
+
+    // 정리하면서 사전이 자랐을 수 있습니다. 다시 읽지 않으면 방금 만들어진 항목이
+    // 화면에 'target_fish'라는 키 그대로 보이고, 다음 실행 때에야 이름이 붙습니다.
+    await refreshTaxonomyAsync(set);
+
     console.log('[Enrich] 메타데이터 보강 단계 완료. 동기화 워커를 구동합니다.');
     void runSyncWorker(set, get);
+  }
+}
+
+/**
+ * 사전을 다시 읽어 화면에 반영합니다.
+ *
+ * 실패하면 그냥 둡니다. 들고 있던 사전이 조금 오래됐을 뿐이라 화면은 그대로 뜨고,
+ * 다음 정리나 다음 실행 때 맞춰집니다.
+ */
+async function refreshTaxonomyAsync(set: SetAppState) {
+  try {
+    const { domains, facts } = await getTaxonomyAsync();
+    if (facts.length > 0) set({ taxonomy: buildRegistry(domains, facts) });
+  } catch (error) {
+    console.log('[Taxonomy] 사전을 다시 읽지 못했습니다. 들고 있던 것을 씁니다:', error);
   }
 }
 
