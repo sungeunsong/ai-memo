@@ -11,6 +11,7 @@ import {
   hasSameItemSourceAsync,
   recoverStalledEnrichAsync,
   recoverStalledSyncJobsAsync,
+  seedTaxonomyAsync,
   removeItemSourceAsync,
   updateItemSourceTextAsync,
   saveUrlItemWithSyncJobAsync,
@@ -170,6 +171,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
     initializationPromise = (async () => {
       try {
         await initializeDatabase();
+
+        // 분야·항목 사전의 출발점을 심습니다. 이미 있는 것은 건드리지 않으므로
+        // 여러 번 불려도 같고, 사용자가 고쳐둔 이름은 그대로 남습니다.
+        await seedTaxonomyAsync();
 
         // 동기화 job은 앱이 꺼지면 'processing'에 갇힙니다.
         // 이쪽은 되돌려두면 아래 워커가 곧바로 다시 집어갑니다.

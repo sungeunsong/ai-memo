@@ -58,6 +58,34 @@ CREATE TABLE IF NOT EXISTS sync_jobs (
   updated_at TEXT NOT NULL
 );
 
+-- 분야와 항목의 정의. AI가 발견한 정보에 안정된 이름과 규칙을 부여합니다.
+CREATE TABLE IF NOT EXISTS domain_definitions (
+  key TEXT PRIMARY KEY NOT NULL,
+  label TEXT NOT NULL,
+  status TEXT NOT NULL,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- 같은 이름이라도 분야가 다르면 다른 정의입니다.
+-- fishing:place와 travel:place는 정규화와 표시를 따로 가져갈 수 있어야 합니다.
+-- 검색에서만 global_role로 묶입니다.
+CREATE TABLE IF NOT EXISTS fact_definitions (
+  domain_key TEXT NOT NULL,
+  key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  value_type TEXT NOT NULL,
+  cardinality TEXT NOT NULL,
+  normalization_policy TEXT NOT NULL,
+  global_role TEXT,
+  status TEXT NOT NULL,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (domain_key, key)
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL,
@@ -66,6 +94,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_item_sources_item_id ON item_sources(item_id);
+CREATE INDEX IF NOT EXISTS idx_fact_definitions_global_role ON fact_definitions(global_role);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_item_id ON sync_jobs(item_id);
 `;

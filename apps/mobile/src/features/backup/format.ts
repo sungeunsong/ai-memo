@@ -1,4 +1,5 @@
 import { ItemSource, SavedItem } from '@/features/items/types';
+import { DomainDefinition, FactDefinition } from '@/features/taxonomy/types';
 
 /**
  * 백업 파일의 형식 번호.
@@ -43,6 +44,14 @@ export type BackupFile = {
   items: BackupItem[];
   /** 냉장고 재료처럼 아이템에 속하지 않는 사용자 상태 */
   settings: Record<string, string>;
+  /**
+   * 분야·항목 사전.
+   *
+   * 아이템의 fact는 이름만 갖고 있어서, 사전이 없으면 타입도 정규화 규칙도
+   * 검색 축도 알 수 없습니다. 데이터는 있는데 검색이 죽는 상태가 되고,
+   * 그 증상만 봐서는 원인을 짚기 어렵습니다.
+   */
+  taxonomy?: { domains: DomainDefinition[]; facts: FactDefinition[] };
 };
 
 export type ParsedBackup =
@@ -52,7 +61,8 @@ export type ParsedBackup =
 export function buildBackupFile(
   items: BackupItem[],
   settings: Record<string, string>,
-  exportedAt: string
+  exportedAt: string,
+  taxonomy?: { domains: DomainDefinition[]; facts: FactDefinition[] }
 ): BackupFile {
   return {
     app: APP_TAG,
@@ -61,6 +71,7 @@ export function buildBackupFile(
     itemCount: items.length,
     items,
     settings,
+    ...(taxonomy ? { taxonomy } : null),
   };
 }
 
@@ -119,6 +130,7 @@ export function parseBackupFile(raw: string): ParsedBackup {
       itemCount: data.items.length,
       items: data.items,
       settings,
+      taxonomy: data.taxonomy,
     },
   };
 }

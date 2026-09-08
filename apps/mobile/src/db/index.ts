@@ -31,7 +31,21 @@ import {
   insertItemSourceAsync as insertItemSourceInRepositoryAsync,
   listItemSourcesAsync as listItemSourcesInRepositoryAsync,
 } from '@/db/sourcesRepository';
+import {
+  bumpDomainDefinitionUseAsync as bumpDomainUseInRepositoryAsync,
+  bumpFactDefinitionUseAsync as bumpFactUseInRepositoryAsync,
+  insertDomainDefinitionIfAbsentAsync,
+  insertFactDefinitionIfAbsentAsync,
+  listDomainDefinitionsAsync,
+  listFactDefinitionsAsync,
+} from '@/db/taxonomyRepository';
 import { applyItemPatch } from '@/features/items/patch';
+import { SEED_DOMAINS, SEED_FACTS } from '@/features/taxonomy/seed';
+import {
+  CONFIRM_THRESHOLD,
+  DomainDefinition,
+  FactDefinition,
+} from '@/features/taxonomy/types';
 import { STALLED_ENRICH_MESSAGE } from '@/features/items/staleEnrich';
 import { STALLED_SYNC_JOB_THRESHOLD_MS } from '@/sync/retryPolicy';
 import {
@@ -344,6 +358,88 @@ export async function recoverStalledEnrichAsync(activeItemIds: string[], now = D
  * 앱이 꺼지며 'processing'에 갇힌 동기화 job을 회수합니다.
  * 회수한 건수를 돌려줍니다.
  */
+/**
+ * 사전의 출발점을 심습니다. 이미 있는 것은 건드리지 않습니다.
+ *
+ * 앱을 켤 때마다 부르지만 ON CONFLICT DO NOTHING이라 여러 번 불려도 같습니다.
+ * 사용자가 이름을 고쳐뒀다면 그 값이 유지됩니다.
+ */
+export async function seedTaxonomyAsync(now = Date.now()) {
+  if (Platform.OS === 'web') return;
+
+  const stamp = new Date(now).toISOString();
+
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      for (const domain of SEED_DOMAINS) {
+        await insertDomainDefinitionIfAbsentAsync(database, {
+          ...domain,
+          status: 'confirmed',
+          useCount: 0,
+          createdAt: stamp,
+          updatedAt: stamp,
+        });
+      }
+
+      for (const fact of SEED_FACTS) {
+        await insertFactDefinitionIfAbsentAsync(database, {
+          ...fact,
+          status: 'confirmed',
+          useCount: 0,
+          createdAt: stamp,
+          updatedAt: stamp,
+        });
+      }
+    })
+  );
+}
+
+export async function getTaxonomyAsync(): Promise<{
+  domains: DomainDefinition[];
+  facts: FactDefinition[];
+}> {
+  if (Platform.OS === 'web') return { domains: [], facts: [] };
+
+  const database = await getDatabaseAsync();
+  const [domains, facts] = await Promise.all([
+    listDomainDefinitionsAsync(database),
+    listFactDefinitionsAsync(database),
+  ]);
+  return { domains, facts };
+}
+
+/** AI가 처음 만든 정의를 잠정으로 등록합니다. 이미 있으면 건드리지 않습니다. */
+export async function registerProvisionalDefinitionsAsync(
+  domain: DomainDefinition | null,
+  facts: FactDefinition[]
+) {
+  if (Platform.OS === 'web') return;
+
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      if (domain) await insertDomainDefinitionIfAbsentAsync(database, domain);
+      for (const fact of facts) {
+        await insertFactDefinitionIfAbsentAsync(database, fact);
+      }
+    })
+  );
+}
+
+/** 쓰인 횟수를 올립니다. 임계치를 넘으면 확정으로 올라갑니다. */
+export async function bumpTaxonomyUseAsync(domainKey: string, factKeys: string[]) {
+  if (Platform.OS === 'web') return;
+
+  const stamp = new Date().toISOString();
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      await bumpDomainUseInRepositoryAsync(database, domainKey, CONFIRM_THRESHOLD, stamp);
+      for (const key of factKeys) {
+        await bumpFactUseInRepositoryAsync(database, domainKey, key, CONFIRM_THRESHOLD, stamp);
+      }
+    })
+  );
+}
+
 export async function recoverStalledSyncJobsAsync(now = Date.now()) {
   const staleBefore = new Date(now - STALLED_SYNC_JOB_THRESHOLD_MS).toISOString();
   const updatedAt = new Date(now).toISOString();

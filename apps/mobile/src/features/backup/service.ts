@@ -1,5 +1,7 @@
 import {
   getAllSettingsAsync,
+  getTaxonomyAsync,
+  registerProvisionalDefinitionsAsync,
   getItemUpdatedAtMapAsync,
   getSavedItemsAsync,
   importItemsAsync,
@@ -39,7 +41,11 @@ export type ImportResult =
  * @param includeImages 스크린샷 원본까지 담을지. 담으면 파일이 건당 수백 KB씩 커집니다.
  */
 export async function exportBackupAsync(includeImages: boolean): Promise<ExportResult> {
-  const [items, settings] = await Promise.all([getSavedItemsAsync(), getAllSettingsAsync()]);
+  const [items, settings, taxonomy] = await Promise.all([
+    getSavedItemsAsync(),
+    getAllSettingsAsync(),
+    getTaxonomyAsync(),
+  ]);
 
   let imageCount = 0;
   const backupItems: BackupItem[] = [];
@@ -62,7 +68,7 @@ export async function exportBackupAsync(includeImages: boolean): Promise<ExportR
 
   const exportedAt = new Date().toISOString();
   const fileName = buildBackupFileName(exportedAt);
-  const file = buildBackupFile(backupItems, settings, exportedAt);
+  const file = buildBackupFile(backupItems, settings, exportedAt, taxonomy);
 
   const uri = await writeToPickedFolderAsync(fileName, JSON.stringify(file));
   if (!uri) {
@@ -151,6 +157,21 @@ async function applyBackupTextAsync(raw: string): Promise<ImportResult> {
 
   // 냉장고 재료 같은 설정은 비어 있을 때만 채웁니다.
   // 지금 쓰고 있는 값을 옛 백업으로 되돌리면 사용자가 놀랍니다.
+  // 사전은 없는 것만 채웁니다. 백업이 이 기기의 규칙을 덮으면, 여기서 고쳐둔
+  // 이름이나 정책이 옛 파일 하나로 되돌아갑니다. 권위는 로컬에 있습니다.
+  if (parsed.file.taxonomy) {
+    const { domains, facts } = parsed.file.taxonomy;
+    for (const domain of Array.isArray(domains) ? domains : []) {
+      await registerProvisionalDefinitionsAsync(domain, []).catch(() => {});
+    }
+    const validFacts = (Array.isArray(facts) ? facts : []).filter(
+      (fact) => fact && typeof fact.domainKey === 'string' && typeof fact.key === 'string'
+    );
+    if (validFacts.length > 0) {
+      await registerProvisionalDefinitionsAsync(null, validFacts).catch(() => {});
+    }
+  }
+
   const currentSettings = await getAllSettingsAsync();
   for (const [key, value] of Object.entries(parsed.file.settings)) {
     if (typeof value !== 'string') continue;
