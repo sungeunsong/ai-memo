@@ -176,6 +176,14 @@ export function DetailContent({
   const [titleDraft, setTitleDraft] = useState('');
   const [sourceDraft, setSourceDraft] = useState('');
   const [isAttaching, setIsAttaching] = useState(false);
+  /**
+   * 크게 볼 스크린샷.
+   *
+   * 글자는 AI가 읽어 요약에 넣지만, 그 읽기가 틀릴 수 있습니다. 가격이나
+   * 전화번호처럼 숫자가 섞인 곳이 특히 그렇습니다. 원본을 확인할 수 없으면
+   * 보관하는 의미가 없습니다.
+   */
+  const [expandedImageUri, setExpandedImageUri] = useState<string | null>(null);
 
   const isAwaitingInput = selectedItem.aiStatus === 'awaiting_input';
 
@@ -469,7 +477,12 @@ export function DetailContent({
         {selectedItem.sources.map((source) => (
           <View key={source.id} style={styles.sourceRow}>
             {source.imageUri ? (
-              <Image source={{ uri: source.imageUri }} style={styles.sourceThumb as any} />
+              <Pressable
+                onPress={() => setExpandedImageUri(source.imageUri)}
+                style={({ pressed }) => pressed && { opacity: 0.6 }}
+              >
+                <Image source={{ uri: source.imageUri }} style={styles.sourceThumb as any} />
+              </Pressable>
             ) : null}
             <View style={styles.sourceRowText}>
               <Text style={styles.sourceKind}>
@@ -770,6 +783,25 @@ export function DetailContent({
           );
         }}
       />
+
+      {/* 스크린샷 원본. AI가 읽은 글자가 맞는지 눈으로 확인하는 자리입니다. */}
+      <Modal
+        visible={expandedImageUri !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setExpandedImageUri(null)}
+      >
+        <Pressable style={styles.imageViewer} onPress={() => setExpandedImageUri(null)}>
+          {expandedImageUri ? (
+            <Image
+              source={{ uri: expandedImageUri }}
+              style={styles.imageViewerImage as any}
+              resizeMode="contain"
+            />
+          ) : null}
+          <Text style={styles.imageViewerHint}>아무 곳이나 눌러 닫기</Text>
+        </Pressable>
+      </Modal>
 
       <ReaderModeModal
         visible={isReaderVisible}
@@ -1400,6 +1432,22 @@ const createStyles = (palette: Palette) =>
     paddingVertical: spacing[2],
   },
   sourceRowText: { flex: 1, gap: 2 },
+  imageViewer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[4],
+  },
+  imageViewerImage: {
+    width: '92%',
+    height: '80%',
+  },
+  imageViewerHint: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   sourceThumb: {
     width: 36,
     height: 36,
