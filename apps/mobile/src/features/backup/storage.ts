@@ -3,6 +3,14 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 const { StorageAccessFramework } = FileSystem;
 
+/**
+ * 폴더를 고르는 방식이 되는 곳인지.
+ *
+ * 안드로이드는 폴더 권한을 받아 그 안을 훑습니다. 브라우저에는 그런 창구가 없어서
+ * 내려받기와 파일 선택으로 대신합니다.
+ */
+export const supportsFolderPicker = Platform.OS === 'android';
+
 export type PickedFile = {
   uri: string;
   /** 화면에 보여줄 이름. SAF는 URI만 주므로 거기서 뽑아냅니다. */
@@ -22,6 +30,10 @@ export async function writeToPickedFolderAsync(
   fileName: string,
   contents: string
 ): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    return downloadOnWeb(`${fileName}.json`, contents);
+  }
+
   if (Platform.OS !== 'android') {
     throw new Error('이 기기에서는 파일 내보내기를 지원하지 않습니다.');
   }
@@ -52,7 +64,7 @@ export async function writeToPickedFolderAsync(
  */
 export async function listBackupFilesInPickedFolderAsync(): Promise<PickedFile[] | null> {
   if (Platform.OS !== 'android') {
-    throw new Error('이 기기에서는 파일 가져오기를 지원하지 않습니다.');
+    throw new Error('이 기기에서는 폴더 열기를 지원하지 않습니다.');
   }
 
   const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync();
@@ -71,6 +83,57 @@ export async function listBackupFilesInPickedFolderAsync(): Promise<PickedFile[]
 
 export async function readTextFileAsync(uri: string): Promise<string> {
   return FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.UTF8 });
+}
+
+/**
+ * 브라우저에서 백업 파일 하나를 고르고 내용을 읽습니다.
+ *
+ * 취소하면 null입니다. 파일 선택창은 취소를 알려주는 표준 신호가 없어서,
+ * 창이 닫히고 아무 일도 없으면 취소로 봅니다.
+ */
+export async function pickBackupTextOnWebAsync(): Promise<{ name: string; text: string } | null> {
+  if (Platform.OS !== 'web') {
+    throw new Error('브라우저에서만 쓰는 기능입니다.');
+  }
+
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) {
+        resolve(null);
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => resolve({ name: file.name, text: String(reader.result ?? '') });
+      reader.onerror = () => resolve(null);
+      reader.readAsText(file);
+    };
+
+    // 취소는 이벤트로 오지 않는 브라우저가 있어, 창을 벗어나면 취소로 봅니다.
+    input.oncancel = () => resolve(null);
+    input.click();
+  });
+}
+
+/** 브라우저에는 폴더에 쓰는 창구가 없어서 내려받기로 대신합니다. */
+function downloadOnWeb(fileName: string, contents: string): string {
+  const blob = new Blob([contents], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+
+  // 바로 지우면 내려받기가 시작되기 전에 끊기는 브라우저가 있습니다.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+  return fileName;
 }
 
 /**

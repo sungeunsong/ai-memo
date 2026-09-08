@@ -16,7 +16,9 @@ import {
 } from './format';
 import {
   listBackupFilesInPickedFolderAsync,
+  pickBackupTextOnWebAsync,
   readTextFileAsync,
+  supportsFolderPicker,
   writeToPickedFolderAsync,
 } from './storage';
 
@@ -81,8 +83,25 @@ export async function listBackupCandidatesAsync() {
  * 복원이 곧 삭제가 되어버리면(기기 A의 옛 백업으로 기기 B를 덮어쓰는 식)
  * 되돌릴 방법이 없기 때문입니다.
  */
+/**
+ * 브라우저에서 백업 파일을 골라 곧바로 가져옵니다.
+ * 폴더를 훑는 창구가 없어 목록 화면 없이 한 번에 끝냅니다.
+ */
+export async function importBackupFromPickedFileAsync(): Promise<ImportResult> {
+  const picked = await pickBackupTextOnWebAsync();
+  if (!picked) {
+    return { kind: 'cancelled' };
+  }
+
+  return applyBackupTextAsync(picked.text);
+}
+
 export async function importBackupAsync(fileUri: string): Promise<ImportResult> {
   const raw = await readTextFileAsync(fileUri);
+  return applyBackupTextAsync(raw);
+}
+
+async function applyBackupTextAsync(raw: string): Promise<ImportResult> {
   const parsed = parseBackupFile(raw);
 
   if (!parsed.ok) {

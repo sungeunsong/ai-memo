@@ -15,7 +15,9 @@ import {
   PickedFile,
   exportBackupAsync,
   importBackupAsync,
+  importBackupFromPickedFileAsync,
   listBackupCandidatesAsync,
+  supportsFolderPicker,
 } from '@/features/backup';
 import { ResultToast, ResultToastData } from '@/components/ResultToast';
 import { Palette } from '@/theme/palette';
@@ -82,6 +84,44 @@ export function BackupModal({ visible, itemCount, onClose, onImported }: Props) 
     }
   }
 
+  /**
+   * 브라우저에는 폴더를 훑는 창구가 없습니다. 파일 하나를 골라 곧바로 가져옵니다.
+   */
+  async function handlePickFile() {
+    setBusy('import');
+    setHint(null);
+    try {
+      const result = await importBackupFromPickedFileAsync();
+      if (result.kind !== 'imported') return;
+
+      onImported();
+      showImportResult(result.added, result.updated, result.skipped);
+    } catch (error) {
+      setToast({
+        tone: 'error',
+        icon: '⚠️',
+        title: '가져오지 못했습니다',
+        detail: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function showImportResult(added: number, updated: number, skipped: number) {
+    const changed = added + updated;
+    setToast({
+      tone: 'success',
+      icon: changed > 0 ? '📥' : '👌',
+      title: changed > 0 ? `${changed}건을 가져왔습니다` : '이미 모두 최신입니다',
+      detail:
+        changed > 0
+          ? `새로 ${added}건 · 갱신 ${updated}건` +
+            (skipped > 0 ? `\n${skipped}건은 지금 것이 최신이라 두었습니다` : '')
+          : `${skipped}건 모두 지금 것이 더 최신입니다`,
+    });
+  }
+
   async function handlePickFolder() {
     setBusy('import');
     setHint(null);
@@ -114,18 +154,7 @@ export function BackupModal({ visible, itemCount, onClose, onImported }: Props) 
 
       setCandidates(null);
       onImported();
-
-      const changed = result.added + result.updated;
-      setToast({
-        tone: 'success',
-        icon: changed > 0 ? '📥' : '👌',
-        title: changed > 0 ? `${changed}건을 가져왔습니다` : '이미 모두 최신입니다',
-        detail:
-          changed > 0
-            ? `새로 ${result.added}건 · 갱신 ${result.updated}건` +
-              (result.skipped > 0 ? `\n${result.skipped}건은 지금 것이 최신이라 두었습니다` : '')
-            : `${result.skipped}건 모두 지금 것이 더 최신입니다`,
-      });
+      showImportResult(result.added, result.updated, result.skipped);
     } catch (error) {
       setToast({
         tone: 'error',
@@ -187,7 +216,7 @@ export function BackupModal({ visible, itemCount, onClose, onImported }: Props) 
             </Text>
             <Pressable
               disabled={busy !== null}
-              onPress={handlePickFolder}
+              onPress={supportsFolderPicker ? handlePickFolder : handlePickFile}
               style={({ pressed }) => [
                 styles.secondaryBtn,
                 (pressed || busy !== null) && { opacity: 0.6 },
@@ -196,7 +225,9 @@ export function BackupModal({ visible, itemCount, onClose, onImported }: Props) 
               {busy === 'import' ? (
                 <ActivityIndicator size="small" color={palette.accentText} />
               ) : (
-                <Text style={styles.secondaryBtnText}>백업 파일이 있는 폴더 고르기</Text>
+                <Text style={styles.secondaryBtnText}>
+                  {supportsFolderPicker ? '백업 파일이 있는 폴더 고르기' : '백업 파일 고르기'}
+                </Text>
               )}
             </Pressable>
 
