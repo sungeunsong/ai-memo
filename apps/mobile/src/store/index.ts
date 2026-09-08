@@ -577,10 +577,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return;
     }
 
-    const item = get().items.find((entry) => entry.id === itemId);
-    if (item) {
-      await runEnrichForItem(item, set, get);
-    }
+    await reenrichFromSources(itemId, set, get);
   },
   /**
    * 사용자가 카테고리를 직접 바꿉니다.
@@ -646,7 +643,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
 
     try {
-      await runEnrichForItem(item, set, get);
+      // 붙어 있는 조각을 모두 종합합니다. 예전에는 아이템 자신의 링크만 다시
+      // 긁어서, 재분석을 누를 때마다 합쳐둔 요약이 릴스 하나짜리로 덮였습니다.
+      await reenrichFromSources(itemId, set, get);
       set({ isSaving: false });
     } catch (error) {
       console.error('[Retry] 에러 발생:', error);
@@ -800,7 +799,7 @@ async function resumeStalledEnrich(set: SetAppState, get: () => AppStore) {
 
   for (const item of targets) {
     try {
-      await runEnrichForItem(item, set, get);
+      await reenrichFromSources(item.id, set, get);
     } catch (error) {
       // 한 건이 실패해도 나머지는 계속합니다.
       // 실패 사유는 enrichSavedItemMetadata가 이미 아이템에 적어둡니다.
