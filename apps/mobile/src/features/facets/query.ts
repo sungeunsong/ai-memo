@@ -35,6 +35,8 @@ export type FacetIndex = {
   domainsByItem: Map<string, Set<string>>;
   /** 축 -> 화면에 쓸 이름. 사전이 바뀌면 이름도 따라 바뀝니다 */
   axisLabels: Map<string, string>;
+  /** 분야 -> 아이템이 들고 있던 이름. 사전에 아직 없는 분야를 위한 것입니다 */
+  domainLabels: Map<string, string>;
 };
 
 export function buildFacetIndex(
@@ -46,16 +48,25 @@ export function buildFacetIndex(
   const byItem = new Map<string, Facet[]>();
   const domainsByItem = new Map<string, Set<string>>();
   const axisLabels = new Map<string, string>();
+  const domainLabels = new Map<string, string>();
 
   for (const item of items) {
     allIds.add(item.id);
 
-    const { facets, domainKeys } = extractItemFacets(item, registry);
+    const { facets, domainKeys, domainLabel } = extractItemFacets(item, registry);
     byItem.set(item.id, facets);
+
+    if (domainLabel && !domainLabels.has(domainLabel.key)) {
+      domainLabels.set(domainLabel.key, domainLabel.label);
+    }
 
     // 사용자가 직접 고친 분류는 사전보다 우선합니다. 탭에서도 그래야
     // 손으로 옮겨둔 것이 다음 렌더에 제자리로 돌아가지 않습니다.
     domainKeys.add(getItemCategory(item));
+
+    // 분야가 하나라도 잡혔으면 미분류에서는 뺍니다. 양쪽에 다 보이면
+    // 미분류가 '아직 정리 안 된 것'이라는 뜻을 잃습니다.
+    if (domainKeys.size > 1) domainKeys.delete('other');
     domainsByItem.set(item.id, domainKeys);
 
     for (const facet of facets) {
@@ -76,7 +87,7 @@ export function buildFacetIndex(
     }
   }
 
-  return { allIds, byKey, byItem, domainsByItem, axisLabels };
+  return { allIds, byKey, byItem, domainsByItem, axisLabels, domainLabels };
 }
 
 /** 축의 이름. 색인에 없는 축이면 키를 그대로 돌려줍니다. */
@@ -214,21 +225,6 @@ export function suggestRelaxations(
 }
 
 /**
- * 탭으로 세우는 분야들.
- *
- * 아직 고정입니다. 사전에 새 분야가 생겨도 탭은 늘지 않습니다.
- * 탭이 스무 개가 되면 그것대로 못 쓰게 되므로, 무엇을 세울지는 따로 다룹니다.
- */
-export const TAB_CATEGORIES = [
-  'recipe',
-  'workout',
-  'travel',
-  'parenting',
-  'shopping',
-  'interior',
-];
-
-/**
  * 아이템이 해당 탭에 보여야 하는지 판단합니다.
  *
  * 대표 분야 하나로만 판정하면 놓치는 게 생깁니다.
@@ -254,10 +250,10 @@ export function matchesCategoryTab(
   const domains = index.domainsByItem.get(item.id);
   if (!domains) return false;
 
-  // 'other'는 별도로 다룹니다. 어느 탭에도 걸리지 않는 아이템만 모으는 자리라,
-  // 분류에서 빠진 것이 '전체' 말고는 갈 곳이 없어 묻히는 일을 막습니다.
+  // 'other'는 분야를 못 정한 것들의 자리입니다. 분류에서 빠진 것이
+  // '전체' 말고는 갈 곳이 없어 묻히는 일을 막습니다.
   if (tab === 'other') {
-    return !TAB_CATEGORIES.some((category) => domains.has(category));
+    return domains.has('other') || domains.size === 0;
   }
 
   return domains.has(tab);

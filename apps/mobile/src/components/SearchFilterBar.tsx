@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { FacetOption } from '@/features/facets/query';
+import { TabOption } from '@/features/facets/tabs';
 import { facetLabel } from '@/features/facets/labels';
 import { SavedFilter } from '@/features/facets/savedFilters';
 import { Palette } from '@/theme/palette';
@@ -13,6 +14,11 @@ type Props = {
   onSearchChange: (query: string) => void;
   activeCategory: string;
   onCategoryChange: (category: string) => void;
+  /** 지금 세울 탭. 저장된 것이 있는 분야만 옵니다 */
+  tabs: TabOption[];
+  /** 탭에 못 세운 분야가 남아 있는지 */
+  hasHiddenTabs: boolean;
+  onOpenTabPicker: () => void;
   /** 선택된 facet 키. 서로 AND로 묶입니다. */
   selectedFacets: string[];
   onToggleFacet: (key: string) => void;
@@ -31,17 +37,6 @@ type Props = {
   describeFacetKey: (key: string) => string;
 };
 
-const FOLDERS = [
-  { label: '전체 🔍', value: '' },
-  { label: '레시피 🍳', value: 'recipe' },
-  { label: '운동 💪', value: 'workout' },
-  { label: '여행 ✈️', value: 'travel' },
-  { label: '육아 🍼', value: 'parenting' },
-  { label: '공구·꿀템 🛍️', value: 'shopping' },
-  { label: '인테리어 🛋️', value: 'interior' },
-  { label: '미분류 🏷️', value: 'other' },
-];
-
 /** 추천 칩이 너무 많으면 고르는 것 자체가 일이 됩니다. */
 const MAX_SUGGESTED_CHIPS = 12;
 
@@ -50,6 +45,9 @@ export function SearchFilterBar({
   onSearchChange,
   activeCategory,
   onCategoryChange,
+  tabs,
+  hasHiddenTabs,
+  onOpenTabPicker,
   selectedFacets,
   onToggleFacet,
   onClearFacets,
@@ -106,18 +104,31 @@ export function SearchFilterBar({
         ) : null}
       </View>
 
-      {/* 2. 스마트 폴더 탭 */}
+      {/* 2. 분야 탭
+          분야는 사용자가 저장하는 대로 늘어납니다. 전부 세우면 스무 개가 되어
+          가로로 한참 밀어야 하므로, 몇 개만 세우고 나머지는 '더보기'에 둡니다. */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.tabsRow}
       >
-        {FOLDERS.map((folder) => {
-          const isActive = activeCategory === folder.value;
+        <Pressable
+          onPress={() => onCategoryChange('')}
+          style={({ pressed }) => [
+            styles.tab,
+            !activeCategory && styles.tabActive,
+            { transform: [{ scale: pressed ? 0.96 : 1 }] },
+          ]}
+        >
+          <Text style={[styles.tabText, !activeCategory && styles.tabTextActive]}>전체 🔍</Text>
+        </Pressable>
+
+        {tabs.map((tab) => {
+          const isActive = activeCategory === tab.key;
           return (
             <Pressable
-              key={folder.value}
-              onPress={() => onCategoryChange(folder.value)}
+              key={tab.key}
+              onPress={() => onCategoryChange(tab.key)}
               style={({ pressed }) => [
                 styles.tab,
                 isActive && styles.tabActive,
@@ -125,11 +136,20 @@ export function SearchFilterBar({
               ]}
             >
               <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
-                {folder.label}
+                {tab.label}
               </Text>
             </Pressable>
           );
         })}
+
+        {hasHiddenTabs ? (
+          <Pressable
+            onPress={onOpenTabPicker}
+            style={({ pressed }) => [styles.tab, { transform: [{ scale: pressed ? 0.96 : 1 }] }]}
+          >
+            <Text style={styles.tabText}>더보기 ⋯</Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
 
       {/* 3. 선택된 조건 — 조합의 현재 상태를 항상 눈에 보이게 둡니다. */}

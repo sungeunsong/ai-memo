@@ -138,6 +138,13 @@ export type ItemFacets = {
   facets: Facet[];
   /** 이 아이템이 걸쳐 있는 분야들. 탭 판정에 씁니다 */
   domainKeys: Set<string>;
+  /**
+   * 이 아이템이 들고 있는 분야 이름.
+   *
+   * AI가 방금 만든 분야는 사전에 등록되기 전일 수 있습니다. 그때 탭에 'fishing'이라고
+   * 적혀 있으면 무엇인지 알 수 없습니다. 아이템에 적힌 이름이라도 쓰는 편이 낫습니다.
+   */
+  domainLabel: { key: string; label: string } | null;
 };
 
 function push(collector: ItemFacets, axis: string, value: string, domainKey: string) {
@@ -155,12 +162,13 @@ export function extractItemFacets(
   item: SavedItem,
   registry: TaxonomyRegistry = SEED_REGISTRY
 ): ItemFacets {
-  const collector: ItemFacets = { facets: [], domainKeys: new Set() };
+  const collector: ItemFacets = { facets: [], domainKeys: new Set(), domainLabel: null };
 
   const content = readContentV2(item.content);
   if (!content) return collector;
 
   collector.domainKeys.add(content.domain.key);
+  collector.domainLabel = { key: content.domain.key, label: content.domain.label };
 
   // 분야로 가르지 않고 "있는 항목은 전부" 뽑습니다.
   //

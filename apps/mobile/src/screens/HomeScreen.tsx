@@ -54,6 +54,14 @@ import {
 } from '@/features/facets/savedFilters';
 import { parseFacetKey } from '@/features/facets/extract';
 import { facetLabel } from '@/features/facets/labels';
+import {
+  buildTabOptions,
+  loadPinnedTabs,
+  resolveVisibleTabs,
+  savePinnedTabs,
+  togglePinned,
+} from '@/features/facets/tabs';
+import { TabPickerModal } from '@/components/TabPickerModal';
 import { CaptureModal, CaptureFloatingButton } from '@/components/CaptureModal';
 import { DetailScreen, DetailContent } from '@/components/DetailScreen';
 import {
@@ -195,6 +203,27 @@ export function HomeScreen() {
   }, [saveImage]);
 
   // ==========================================
+  // 분야 탭
+  // 분야는 저장하는 대로 늘어납니다. 전부 세우면 가로로 한참 밀어야 하므로
+  // 몇 개만 세우고, 무엇을 세울지는 사용자가 고정으로 정합니다.
+  // ==========================================
+  const [pinnedTabs, setPinnedTabs] = useState<string[]>([]);
+  const [isTabPickerVisible, setIsTabPickerVisible] = useState(false);
+
+  useEffect(() => {
+    void (async () => setPinnedTabs(await loadPinnedTabs()))();
+  }, []);
+
+  const handleTogglePinnedTab = useCallback(
+    async (key: string) => {
+      const next = togglePinned(pinnedTabs, key);
+      setPinnedTabs(next);
+      await savePinnedTabs(next);
+    },
+    [pinnedTabs]
+  );
+
+  // ==========================================
   // 스마트 폴더 (조합 조건 저장)
   // ==========================================
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
@@ -292,6 +321,24 @@ export function HomeScreen() {
   // facet 건수와 완화 제안도 같은 기준 집합에서 계산해야 화면과 숫자가 어긋나지 않습니다.
   // ==========================================
   const facetIndex = useMemo(() => buildFacetIndex(items, taxonomy), [items, taxonomy]);
+
+  const tabOptions = useMemo(
+    () => buildTabOptions(facetIndex, taxonomy, pinnedTabs),
+    [facetIndex, taxonomy, pinnedTabs]
+  );
+
+  const visibleTabs = useMemo(
+    () => resolveVisibleTabs(tabOptions, pinnedTabs, activeCategory),
+    [tabOptions, pinnedTabs, activeCategory]
+  );
+
+  // 보고 있던 분야가 비면 전체로 돌아옵니다. 마지막 항목을 지우거나 분류를 옮기면
+  // 그 탭은 사라지는데, 그 상태로 두면 아무것도 없는 화면에 갇힙니다.
+  useEffect(() => {
+    if (!activeCategory) return;
+    if (tabOptions.some((option) => option.key === activeCategory)) return;
+    setActiveCategory('');
+  }, [activeCategory, tabOptions]);
 
   const baseItems = useMemo(
     () =>
@@ -769,6 +816,9 @@ export function HomeScreen() {
               onApplyFilter={handleApplyFilter}
               onRemoveFilter={handleRemoveFilter}
               onSaveFilter={handleSaveFilter}
+              tabs={visibleTabs}
+              hasHiddenTabs={tabOptions.length > visibleTabs.length}
+              onOpenTabPicker={() => setIsTabPickerVisible(true)}
               canSaveFilter={isFilterSaveable(activeCategory, selectedFacets, searchQuery)}
               describeFacetKey={(key) => {
                 const parsed = parseFacetKey(key);
@@ -926,6 +976,17 @@ export function HomeScreen() {
         itemCount={items.length}
         onClose={() => setIsBackupVisible(false)}
         onImported={() => void reloadItems()}
+      />
+
+      {/* 분야 전체 보기. 탭에 못 세운 것들이 갈 자리입니다. */}
+      <TabPickerModal
+        visible={isTabPickerVisible}
+        options={tabOptions}
+        activeKey={activeCategory}
+        pinned={pinnedTabs}
+        onSelect={setActiveCategory}
+        onTogglePin={(key) => void handleTogglePinnedTab(key)}
+        onClose={() => setIsTabPickerVisible(false)}
       />
 
       {/* 냉장고 털기 (보유 재료 -> 만들 수 있는 것) */}
