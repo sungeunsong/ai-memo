@@ -473,28 +473,40 @@ export async function fetchSourceBodyText(sourceUrl: string): Promise<string | n
     }
   }
 
-  // Jina가 막히면 og 태그라도 씁니다. 인스타는 캡션이 description에 들어 있습니다.
+  // Jina가 막히면 인스타만 og 태그로 폴백합니다. 인스타는 캡션이 description에
+  // 실제로 들어 있어서 그게 곧 본문입니다.
+  //
+  // 다른 사이트의 og:description은 본문이 아니라 페이지 소개 문구입니다. 노션은
+  // 어떤 페이지를 열어도 'A collaborative AI workspace...'를 돌려줍니다. 그걸
+  // 본문으로 담으면 조각에 내용이 있다고 판단돼 다시는 긁지 않고, 종합할 재료가
+  // 영영 없어집니다. 없는 채로 두면 다음 재정리 때 다시 시도할 기회가 남습니다.
   try {
-    const html = await fetchHtmlMetadata(normalized);
-    const caption = isInstagramHost(new URL(normalized).hostname)
-      ? extractInstagramCaption(html.rawDescription)
-      : null;
+    if (!isInstagramHost(new URL(normalized).hostname)) return null;
 
-    // fetchHtmlMetadata는 설명이 없으면 '○○ 링크를 저장했습니다.'를 지어냅니다.
-    // 화면에 뭐라도 띄우려는 문장이지 본문이 아닙니다. 그걸 조각에 담으면
-    // 본문이 있다고 판단돼 다시는 긁지 않게 되고, 종합할 재료가 영영 없습니다.
-    const fallback = (caption || html.summary || '').trim();
-    return fallback && !isPlaceholderBody(fallback) ? fallback : null;
+    const html = await fetchHtmlMetadata(normalized);
+    const caption = extractInstagramCaption(html.rawDescription)?.trim();
+    return caption && !isPlaceholderBody(caption) ? caption : null;
   } catch {
     return null;
   }
 }
 
-/** 본문이 없을 때 화면용으로 지어내는 문장들. 조각의 본문으로 삼으면 안 됩니다. */
+/**
+ * 본문이 아니라 페이지 소개나 자리 채움인 글.
+ *
+ * 이미 저장된 조각 중에 이런 것들이 섞여 있습니다. 본문으로 인정하면 다시 긁지
+ * 않으므로, 없는 것으로 봐야 되살릴 기회가 생깁니다.
+ */
 export function isPlaceholderBody(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return true;
-  return /링크를 저장했습니다\.?$/.test(trimmed);
+  if (/링크를 저장했습니다\.?$/.test(trimmed)) return true;
+
+  // 노션이 어떤 페이지에서도 돌려주는 소개 문구. 코드 다른 곳에서도 이미 걸러냅니다.
+  return (
+    trimmed.includes('collaborative AI workspace') ||
+    trimmed.includes('Where teams and agents work together')
+  );
 }
 
 async function fetchGenericMetadata(

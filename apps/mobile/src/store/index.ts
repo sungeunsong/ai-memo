@@ -873,6 +873,15 @@ async function fillMissingSourceTexts(
   const item = get().items.find((entry) => entry.id === itemId);
   if (!item) return;
 
+  // 조각에 무엇이 담겼는지 남깁니다. 본문이 비었는지, 자리 채움인지, 진짜 글인지는
+  // 겉으로 구분되지 않아서 이 줄이 없으면 원인을 짚을 수 없습니다.
+  for (const source of item.sources) {
+    const preview = (source.rawText ?? '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    console.log(
+      `[Enrich] 조각 ${source.kind} | 길이 ${(source.rawText ?? '').length} | 다시 긁기 ${needsBodyFetch(source)} | ${preview}`
+    );
+  }
+
   for (const source of item.sources) {
     if (!needsBodyFetch(source)) continue;
 
