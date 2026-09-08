@@ -11,16 +11,49 @@
  * 긴 변 1600px면 글자를 읽기에 충분하고 용량은 1/5~1/10로 줄어듭니다.
  */
 
+import { Image } from 'react-native';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 
-/** 보관용 최대 길이. 이보다 크면 줄입니다. */
+/** 보관용 긴 변의 최대 길이. 이보다 길 때만 줄입니다. */
 const MAX_EDGE = 1600;
 
 /** Gemini에 보낼 때 쓰는 크기. 이미지 토큰은 크기와 무관하게 고정이라 작게 보내도 손해가 없습니다. */
 const ANALYSIS_EDGE = 1024;
 
 const IMAGE_DIR = `${FileSystem.documentDirectory}captured-images/`;
+
+/**
+ * 긴 변을 기준으로 줄이는 리사이즈 지시를 만듭니다.
+ *
+ * resize에 width만 주면 '가로를 그 값으로 맞추라'는 뜻입니다. 세로로 긴 폰
+ * 스크린샷(1080×2640)에 width 1600을 주면 1600×3911로 오히려 커집니다.
+ * 없던 화소를 만들어 채우는 거라 글자가 선명해지지도 않으면서 파일만 두 배가 됩니다.
+ *
+ * 이미 충분히 작으면 아무것도 하지 않습니다. 크기를 못 읽었을 때도 그렇게 둡니다.
+ * 모르는 채로 손대면 키울 위험이 있는데, 압축만으로도 대부분 줄어듭니다.
+ */
+async function buildResizeActions(uri: string, maxEdge: number) {
+  const size = await measureImage(uri);
+  if (!size) return [];
+
+  const longest = Math.max(size.width, size.height);
+  if (longest <= maxEdge) return [];
+
+  return size.width >= size.height
+    ? [{ resize: { width: maxEdge } }]
+    : [{ resize: { height: maxEdge } }];
+}
+
+function measureImage(uri: string): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    Image.getSize(
+      uri,
+      (width, height) => resolve({ width, height }),
+      () => resolve(null)
+    );
+  });
+}
 
 async function ensureDirectory() {
   const info = await FileSystem.getInfoAsync(IMAGE_DIR);
@@ -38,7 +71,7 @@ export async function persistImage(sourceUri: string, itemId: string): Promise<s
 
   const resized = await manipulateAsync(
     sourceUri,
-    [{ resize: { width: MAX_EDGE } }],
+    await buildResizeActions(sourceUri, MAX_EDGE),
     { compress: 0.8, format: SaveFormat.JPEG }
   );
 
@@ -53,7 +86,7 @@ export async function readImageForAnalysis(uri: string): Promise<string | null> 
   try {
     const prepared = await manipulateAsync(
       uri,
-      [{ resize: { width: ANALYSIS_EDGE } }],
+      await buildResizeActions(uri, ANALYSIS_EDGE),
       { compress: 0.7, format: SaveFormat.JPEG, base64: true }
     );
     return prepared.base64 ?? null;
