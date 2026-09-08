@@ -1,4 +1,4 @@
-import { SavedItem } from '@/features/items/types';
+import { ItemSource, SavedItem } from '@/features/items/types';
 
 /**
  * 백업 파일의 형식 번호.
@@ -18,8 +18,20 @@ const APP_TAG = 'sireong';
  * syncStatus는 담지 않습니다. 어느 기기에서 전송을 마쳤는지는 그 기기의 사정이라,
  * 옮겨간 기기에서 물려받으면 보내지도 않은 것을 보냈다고 여기게 됩니다.
  */
-export type BackupItem = Omit<SavedItem, 'syncStatus'> & {
+export type BackupItem = Omit<SavedItem, 'syncStatus' | 'sources'> & {
   /** 이미지 원본. 파일 경로는 기기마다 달라서 내용을 직접 담습니다. */
+  imageBase64?: string;
+  sources: BackupSource[];
+};
+
+/**
+ * 백업에 담기는 조각.
+ *
+ * 스크린샷은 경로가 아니라 내용을 담습니다. 인스타 DM은 복사도 전달도 안 되어
+ * 화면을 찍은 것이 유일한 원본인데, 경로만 담으면 복원한 기기에서 열리지 않습니다.
+ * 읽어낸 글자는 파생물이라 그것만 남으면 원본을 확인할 방법이 사라집니다.
+ */
+export type BackupSource = Omit<ItemSource, 'imageUri'> & {
   imageBase64?: string;
 };
 

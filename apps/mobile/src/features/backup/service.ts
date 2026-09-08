@@ -122,6 +122,8 @@ async function applyBackupTextAsync(raw: string): Promise<ImportResult> {
       continue;
     }
 
+    item.sources = await normalizeImportedSourcesAsync(raw.sources, item.id);
+
     const current = existing.get(item.id);
     if (current === undefined) {
       added += 1;
@@ -169,22 +171,36 @@ const SOURCE_KINDS: ItemSourceKind[] = [
   'text', 'screenshot', 'memo', 'other',
 ];
 
-/** 백업에 담긴 조각들. 형이 어긋난 것은 버립니다. */
-function normalizeImportedSources(raw: any, itemId: string): ItemSource[] {
+/**
+ * 백업에 담긴 조각들. 형이 어긋난 것은 버립니다.
+ *
+ * 스크린샷은 내용으로 담겨 오므로 앱 폴더에 되살리고 새 경로를 씁니다.
+ * 옛 경로는 남의 기기 것이라 그대로 두면 열리지 않습니다. 인스타 DM은 복사도
+ * 전달도 안 되어 화면을 찍은 것이 유일한 원본이라, 이걸 잃으면 되돌릴 수 없습니다.
+ */
+async function normalizeImportedSourcesAsync(raw: any, itemId: string): Promise<ItemSource[]> {
   if (!Array.isArray(raw)) return [];
 
-  return raw
-    .filter((entry) => entry && typeof entry === 'object' && typeof entry.id === 'string')
-    .map((entry) => ({
+  const sources: ItemSource[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || typeof entry.id !== 'string') continue;
+
+    const restored = entry.imageBase64
+      ? await restoreImageFromBackup(entry.imageBase64, `${itemId}_src_${entry.id}`)
+      : null;
+
+    sources.push({
       id: entry.id as string,
       itemId,
       kind: SOURCE_KINDS.includes(entry.kind) ? (entry.kind as ItemSourceKind) : 'other',
       sourceUrl: typeof entry.sourceUrl === 'string' ? entry.sourceUrl : null,
       rawText: typeof entry.rawText === 'string' ? entry.rawText : null,
-      // 스크린샷 경로는 기기마다 다릅니다. 파일까지 복원하는 건 다음 일이라 비웁니다.
-      imageUri: null,
+      imageUri: restored,
       createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : new Date(0).toISOString(),
-    }));
+    });
+  }
+
+  return sources;
 }
 
 function normalizeImportedItem(raw: any): SavedItem | null {
@@ -224,6 +240,7 @@ function normalizeImportedItem(raw: any): SavedItem | null {
     savedFrom: text(raw.savedFrom, 'import'),
     createdAt: text(raw.createdAt, raw.updatedAt),
     updatedAt: raw.updatedAt,
-    sources: normalizeImportedSources(raw.sources, raw.id),
+    // 조각은 스크린샷 복원이 필요해 비동기입니다. 부르는 쪽에서 채웁니다.
+    sources: [],
   };
 }
