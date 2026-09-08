@@ -1,0 +1,15 @@
+{
+  "name": "시렁",
+  "short_name": "시렁",
+  "description": "던져두면 알아서 정리되는 지식 수집함",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#08142e",
+  "theme_color": "#08142e",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

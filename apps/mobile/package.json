@@ -10,7 +10,9 @@
     "web": "expo start --web",
     "prebuild": "expo prebuild",
     "prebuild:clean": "expo prebuild --clean",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:web": "expo export --platform web && node scripts/inject-pwa-tags.mjs",
+    "deploy:web": "npm run build:web && eas deploy --prod"
   },
   "dependencies": {
     "@react-native-community/datetimepicker": "8.4.4",
