@@ -121,10 +121,10 @@ type AppStore = {
    * 스크린샷을 조각으로 붙입니다.
    * 인스타 DM은 복사도 전달도 안 되어서, 화면을 찍는 것이 유일한 통로입니다.
    */
-  attachScreenshotToItem: (
+  attachScreenshotsToItem: (
     itemId: string,
-    imageUri: string
-  ) => Promise<{ ok: boolean; message?: string }>;
+    imageUris: string[]
+  ) => Promise<{ ok: boolean; added: number; skipped: number; message?: string }>;
   /** 잘못 붙인 조각을 떼고 남은 것 기준으로 다시 정리합니다. */
   detachSourceFromItem: (sourceId: string) => Promise<void>;
   /** 추가 입력 대기를 끝냅니다. input이 있으면 붙이고, 없으면 있는 대로 정리합니다. */
@@ -459,53 +459,67 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return { ok: false, message };
     }
   },
-  async attachScreenshotToItem(itemId, imageUri) {
+  /**
+   * 스크린샷 여러 장을 한 번에 붙입니다.
+   *
+   * 긴 DM은 한 화면에 안 들어와서 두세 장으로 나눠 찍게 됩니다. 한 장씩 붙이면
+   * 장마다 재정리가 돌아 AI 호출이 배로 나가고, 그동안 다음 장을 고를 수도 없습니다.
+   * 글자 읽기는 장마다 필요하지만 종합은 마지막에 한 번이면 됩니다.
+   */
+  async attachScreenshotsToItem(itemId, imageUris) {
     if (!get().isReady) {
-      return { ok: false, message: '로컬 저장소가 아직 준비되지 않았습니다.' };
+      return { ok: false, added: 0, skipped: 0, message: '로컬 저장소가 아직 준비되지 않았습니다.' };
     }
 
     const item = get().items.find((entry) => entry.id === itemId);
     if (!item) {
-      return { ok: false, message: '붙일 저장물을 찾지 못했습니다.' };
+      return { ok: false, added: 0, skipped: 0, message: '붙일 저장물을 찾지 못했습니다.' };
     }
 
+    let added = 0;
+    let skipped = 0;
+
     try {
-      // 공유로 받은 경로는 임시라 앱 폴더로 옮겨두지 않으면 나중에 못 엽니다.
-      const storedUri = await persistImage(imageUri, `${itemId}_${Date.now()}`);
+      for (const [index, imageUri] of imageUris.entries()) {
+        // 공유로 받은 경로는 임시라 앱 폴더로 옮겨두지 않으면 나중에 못 엽니다.
+        const storedUri = await persistImage(imageUri, `${itemId}_${Date.now()}_${index}`);
 
-      // 이미지에서 글자를 먼저 읽습니다. 조각에 글이 남아야 검색에 잡힙니다.
-      // DM에만 있는 전화번호나 제품명으로 찾을 수 있어야 하기 때문입니다.
-      const base64 = await readImageForAnalysis(storedUri);
-      const ocr = base64 ? await fetchImageMetadataPatch(base64, item.createdAt) : null;
-      const extracted = ocr?.contentText?.trim() ?? '';
+        // 글자를 먼저 읽습니다. 조각에 글이 남아야 검색에 잡힙니다.
+        // DM에만 있는 전화번호나 제품명으로 찾을 수 있어야 하기 때문입니다.
+        const base64 = await readImageForAnalysis(storedUri);
+        const ocr = base64 ? await fetchImageMetadataPatch(base64, item.createdAt) : null;
+        const extracted = ocr?.contentText?.trim() ?? '';
 
-      // 같은 화면을 두 번 고르면 읽어낸 글도 같습니다. AI 호출만 헛되이 나가므로
-      // 붙이기 전에 확인합니다. 이미 옮겨둔 파일은 지웁니다.
-      if (extracted && (await hasSameItemSourceAsync(itemId, null, extracted))) {
-        await deletePersistedImage(storedUri).catch(() => {});
-        return { ok: false, message: '이미 붙어 있는 스크린샷입니다.' };
+        // 같은 화면을 두 번 고르면 읽어낸 글도 같습니다. 이미 옮겨둔 파일은 지웁니다.
+        if (extracted && (await hasSameItemSourceAsync(itemId, null, extracted))) {
+          await deletePersistedImage(storedUri).catch(() => {});
+          skipped += 1;
+          continue;
+        }
+
+        const source = buildItemSource(itemId, 'screenshot', null, extracted || null, storedUri);
+        await addItemSourceAsync(source);
+        set((state) => ({
+          items: state.items.map((entry) =>
+            entry.id === itemId ? { ...entry, sources: [...entry.sources, source] } : entry
+          ),
+        }));
+        added += 1;
       }
 
-      const source = buildItemSource(
-        itemId,
-        'screenshot',
-        null,
-        extracted || null,
-        storedUri
-      );
+      // 종합은 마지막에 한 번만. 장마다 돌리면 호출이 장 수만큼 늘어납니다.
+      if (added > 0) {
+        await reenrichFromSources(itemId, set, get);
+      }
 
-      await addItemSourceAsync(source);
-      set((state) => ({
-        items: state.items.map((entry) =>
-          entry.id === itemId ? { ...entry, sources: [...entry.sources, source] } : entry
-        ),
-      }));
-
-      await reenrichFromSources(itemId, set, get);
-      return { ok: true };
+      return { ok: added > 0, added, skipped };
     } catch (error) {
+      // 도중에 실패해도 그때까지 붙인 것은 살립니다. 다시 고르게 만들 이유가 없습니다.
+      if (added > 0) {
+        await reenrichFromSources(itemId, set, get).catch(() => {});
+      }
       const message = error instanceof Error ? error.message : '스크린샷을 붙이지 못했습니다.';
-      return { ok: false, message };
+      return { ok: false, added, skipped, message };
     }
   },
   async detachSourceFromItem(sourceId) {

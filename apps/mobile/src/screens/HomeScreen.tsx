@@ -112,7 +112,7 @@ export function HomeScreen() {
   const resumeEnrich = useAppStore((s) => s.resumeEnrich);
   const reloadItems = useAppStore((s) => s.reloadItems);
   const attachSourceToItem = useAppStore((s) => s.attachSourceToItem);
-  const attachScreenshotToItem = useAppStore((s) => s.attachScreenshotToItem);
+  const attachScreenshotsToItem = useAppStore((s) => s.attachScreenshotsToItem);
   const resolveAwaitingInput = useAppStore((s) => s.resolveAwaitingInput);
 
   // Share intent
@@ -900,7 +900,7 @@ export function HomeScreen() {
           if (!source) return;
           void (async () => {
             const merged = source.imageUri
-              ? await attachScreenshotToItem(targetItemId, source.imageUri)
+              ? await attachScreenshotsToItem(targetItemId, [source.imageUri])
               : await attachSourceToItem(targetItemId, source.rawInput);
             if (merged.ok) {
               // 합쳤으니 방금 만든 임시 항목은 남길 이유가 없습니다.

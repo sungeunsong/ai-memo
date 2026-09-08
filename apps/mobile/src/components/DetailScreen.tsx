@@ -133,7 +133,7 @@ export function DetailContent({
   const isSaving = useAppStore((state) => state.isSaving);
   const setItemTitle = useAppStore((state) => state.setItemTitle);
   const attachSourceToItem = useAppStore((state) => state.attachSourceToItem);
-  const attachScreenshotToItem = useAppStore((state) => state.attachScreenshotToItem);
+  const attachScreenshotsToItem = useAppStore((state) => state.attachScreenshotsToItem);
   const detachSourceFromItem = useAppStore((state) => state.detachSourceFromItem);
   const resolveAwaitingInput = useAppStore((state) => state.resolveAwaitingInput);
   const setItemCategory = useAppStore((state) => state.setItemCategory);
@@ -226,18 +226,29 @@ export function DetailContent({
       return;
     }
 
+    // 긴 DM은 한 화면에 안 들어와 여러 장으로 나눠 찍게 됩니다.
+    // 한 장씩 고르게 하면 장마다 재정리가 돌아 기다려야 합니다.
     const picked = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      selectionLimit: 5,
       quality: 1,
     });
-    if (picked.canceled || !picked.assets?.[0]?.uri) return;
+    if (picked.canceled || !picked.assets?.length) return;
 
     setIsAttaching(true);
     try {
-      const result = await attachScreenshotToItem(selectedItem.id, picked.assets[0].uri);
-      setToastMessage(
-        result.ok ? '스크린샷을 읽어 함께 정리합니다' : result.message ?? '붙이지 못했습니다'
-      );
+      const uris = picked.assets.map((asset) => asset.uri);
+      const result = await attachScreenshotsToItem(selectedItem.id, uris);
+
+      if (result.added > 0) {
+        setToastMessage(
+          `스크린샷 ${result.added}장을 읽어 함께 정리합니다` +
+            (result.skipped > 0 ? ` (${result.skipped}장은 이미 붙어 있음)` : '')
+        );
+      } else {
+        setToastMessage(result.message ?? '이미 붙어 있는 스크린샷입니다');
+      }
     } finally {
       setIsAttaching(false);
     }
