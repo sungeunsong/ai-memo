@@ -15,34 +15,39 @@ import { Image } from 'react-native';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 
-/** 보관용 긴 변의 최대 길이. 이보다 길 때만 줄입니다. */
-const MAX_EDGE = 1600;
+/** 보관용 최대 가로 길이. 이보다 넓을 때만 줄입니다. */
+const MAX_WIDTH = 1600;
 
-/** Gemini에 보낼 때 쓰는 크기. 이미지 토큰은 크기와 무관하게 고정이라 작게 보내도 손해가 없습니다. */
-const ANALYSIS_EDGE = 1024;
+/**
+ * Gemini에 보낼 때의 최대 가로.
+ *
+ * 너무 줄이면 글자를 못 읽습니다. DM 스크린샷에서 전화번호나 가격을 읽어내는 것이
+ * 이 앱의 쓸모라, 알아볼 수 있는 선은 지켜야 합니다.
+ */
+const ANALYSIS_WIDTH = 1024;
 
 const IMAGE_DIR = `${FileSystem.documentDirectory}captured-images/`;
 
 /**
- * 긴 변을 기준으로 줄이는 리사이즈 지시를 만듭니다.
+ * 가로가 기준보다 넓을 때만 줄이는 리사이즈 지시를 만듭니다.
  *
- * resize에 width만 주면 '가로를 그 값으로 맞추라'는 뜻입니다. 세로로 긴 폰
- * 스크린샷(1080×2640)에 width 1600을 주면 1600×3911로 오히려 커집니다.
- * 없던 화소를 만들어 채우는 거라 글자가 선명해지지도 않으면서 파일만 두 배가 됩니다.
+ * resize에 width만 주면 '가로를 그 값으로 맞추라'는 뜻입니다. 예전에는 조건 없이
+ * 그렇게 넘겨서, 세로로 긴 폰 스크린샷(1080×2640)이 1600×3911로 오히려 커졌습니다.
+ * 없던 화소를 만들어 채우는 것이라 글자가 선명해지지도 않으면서 파일만 두 배였습니다.
  *
- * 이미 충분히 작으면 아무것도 하지 않습니다. 크기를 못 읽었을 때도 그렇게 둡니다.
- * 모르는 채로 손대면 키울 위험이 있는데, 압축만으로도 대부분 줄어듭니다.
+ * 그렇다고 긴 변을 기준으로 잡으면 반대로 지나칩니다. 2640을 1600에 맞추면
+ * 가로가 655px로 뭉개져서 한글이 읽히지 않습니다. 세로로 긴 글자 화면에서
+ * 중요한 것은 가로 해상도입니다. 인스타 DM 스크린샷이 정확히 그런 그림입니다.
+ *
+ * 그래서 기준은 가로 하나이고, 넘칠 때만 줄입니다. 이미 좁으면 그대로 둡니다.
+ * 크기를 못 읽었을 때도 손대지 않습니다. 모르는 채로 건드리면 키울 위험이 있는데,
+ * 압축만으로도 대부분 줄어듭니다.
  */
-async function buildResizeActions(uri: string, maxEdge: number) {
+async function buildResizeActions(uri: string, maxWidth: number) {
   const size = await measureImage(uri);
-  if (!size) return [];
+  if (!size || size.width <= maxWidth) return [];
 
-  const longest = Math.max(size.width, size.height);
-  if (longest <= maxEdge) return [];
-
-  return size.width >= size.height
-    ? [{ resize: { width: maxEdge } }]
-    : [{ resize: { height: maxEdge } }];
+  return [{ resize: { width: maxWidth } }];
 }
 
 function measureImage(uri: string): Promise<{ width: number; height: number } | null> {
@@ -71,7 +76,7 @@ export async function persistImage(sourceUri: string, itemId: string): Promise<s
 
   const resized = await manipulateAsync(
     sourceUri,
-    await buildResizeActions(sourceUri, MAX_EDGE),
+    await buildResizeActions(sourceUri, MAX_WIDTH),
     { compress: 0.8, format: SaveFormat.JPEG }
   );
 
@@ -86,7 +91,7 @@ export async function readImageForAnalysis(uri: string): Promise<string | null> 
   try {
     const prepared = await manipulateAsync(
       uri,
-      await buildResizeActions(uri, ANALYSIS_EDGE),
+      await buildResizeActions(uri, ANALYSIS_WIDTH),
       { compress: 0.7, format: SaveFormat.JPEG, base64: true }
     );
     return prepared.base64 ?? null;
