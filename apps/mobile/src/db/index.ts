@@ -4,6 +4,8 @@ import { openDatabaseAsync, SQLiteDatabase } from 'expo-sqlite';
 import { createTablesStatement } from '@/db/schema';
 import {
   deleteItemRowAsync as deleteItemRowInRepositoryAsync,
+  listItemContentsAsync,
+  updateItemContentAsync,
   insertUrlItemAsync,
   listItemUpdatedAtAsync as listItemUpdatedAtInRepositoryAsync,
   listItemsAsync,
@@ -39,6 +41,7 @@ import {
   listDomainDefinitionsAsync,
   listFactDefinitionsAsync,
 } from '@/db/taxonomyRepository';
+import { isContentV2, migrateContentToV2 } from '@/features/items/contentV2';
 import { applyItemPatch } from '@/features/items/patch';
 import { SEED_DOMAINS, SEED_FACTS } from '@/features/taxonomy/seed';
 import {
@@ -364,6 +367,73 @@ export async function recoverStalledEnrichAsync(activeItemIds: string[], now = D
  * 앱을 켤 때마다 부르지만 ON CONFLICT DO NOTHING이라 여러 번 불려도 같습니다.
  * 사용자가 이름을 고쳐뒀다면 그 값이 유지됩니다.
  */
+/**
+ * 아이템의 구조화 데이터를 V2로 옮깁니다.
+ *
+ * 한 트랜잭션으로 처리합니다. 중간에 실패하면 통째로 없던 일이 되어, 절반만
+ * 옮겨진 상태가 남지 않습니다. 그 상태는 화면에서 알아채기도 어렵고 되돌리기도
+ * 어렵습니다.
+ *
+ * 이미 V2인 아이템은 건너뜁니다. contentVersion으로 판단하므로 몇 번을 실행해도
+ * 결과가 같습니다. 실패해서 다시 돌릴 때 안심하고 부를 수 있어야 합니다.
+ *
+ * AI는 부르지 않습니다. V1 데이터가 이미 구조화되어 있어 기계적으로 옮겨집니다.
+ * 원본은 legacy에 남겨, 나중에 더 잘게 쪼갤 때의 근거로 씁니다.
+ */
+export async function migrateItemContentsToV2Async(): Promise<{ migrated: number; skipped: number }> {
+  if (Platform.OS === 'web') {
+    const items = getWebItems();
+    let migrated = 0;
+    let skipped = 0;
+    const next = items.map((item) => {
+      const converted = migrateContentToV2(item.content);
+      const serialized = JSON.stringify(converted);
+      if (serialized === item.content) {
+        skipped += 1;
+        return item;
+      }
+      migrated += 1;
+      return { ...item, content: serialized };
+    });
+    if (migrated > 0) saveWebItems(next);
+    return { migrated, skipped };
+  }
+
+  let migrated = 0;
+  let skipped = 0;
+
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      const rows = await listItemContentsAsync(database);
+
+      for (const row of rows) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(row.content || '{}');
+        } catch {
+          parsed = null;
+        }
+
+        if (isContentV2(parsed)) {
+          skipped += 1;
+          continue;
+        }
+
+        const converted = migrateContentToV2(row.content);
+        if (!converted) {
+          skipped += 1;
+          continue;
+        }
+
+        await updateItemContentAsync(database, row.id, JSON.stringify(converted));
+        migrated += 1;
+      }
+    })
+  );
+
+  return { migrated, skipped };
+}
+
 export async function seedTaxonomyAsync(now = Date.now()) {
   if (Platform.OS === 'web') return;
 

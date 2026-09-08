@@ -189,6 +189,22 @@ export async function markStalledEnrichAsFailedAsync(
  * 이어지는 INSERT와 한 트랜잭션 안에서 짝을 이루는 '교체'의 일부라,
  * 전송 큐까지 함께 지울 이유가 없습니다.
  */
+/** 마이그레이션 대상 훑기. content만 읽으면 되므로 통짜로 안 읽습니다. */
+export async function listItemContentsAsync(db: SQLiteDatabase) {
+  return db.getAllAsync<{ id: string; content: string }>(
+    `SELECT id, content FROM items`
+  );
+}
+
+/** 구조화 데이터만 바꿉니다. updated_at은 건드리지 않습니다. */
+export async function updateItemContentAsync(
+  db: SQLiteDatabase,
+  itemId: string,
+  content: string
+) {
+  await db.runAsync(`UPDATE items SET content = ? WHERE id = ?`, content, itemId);
+}
+
 export async function deleteItemRowAsync(db: SQLiteDatabase, itemId: string) {
   await db.runAsync(`DELETE FROM items WHERE id = ?`, itemId);
 }

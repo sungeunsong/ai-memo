@@ -19,6 +19,8 @@ export const SEED_DOMAINS: Array<Pick<DomainDefinition, 'key' | 'label'>> = [
   { key: 'parenting', label: '육아' },
   { key: 'shopping', label: '쇼핑' },
   { key: 'interior', label: '인테리어' },
+  // V1에서 'web'이나 'text'로 찍혔던 것들이 갈 자리. 분야를 못 정한 상태입니다.
+  { key: 'other', label: '미분류' },
 ];
 
 /**

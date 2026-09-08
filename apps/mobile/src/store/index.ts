@@ -11,6 +11,7 @@ import {
   hasSameItemSourceAsync,
   recoverStalledEnrichAsync,
   recoverStalledSyncJobsAsync,
+  migrateItemContentsToV2Async,
   seedTaxonomyAsync,
   removeItemSourceAsync,
   updateItemSourceTextAsync,
@@ -175,6 +176,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
         // 분야·항목 사전의 출발점을 심습니다. 이미 있는 것은 건드리지 않으므로
         // 여러 번 불려도 같고, 사용자가 고쳐둔 이름은 그대로 남습니다.
         await seedTaxonomyAsync();
+
+        // 구조화 데이터를 V2로 옮깁니다. 한 트랜잭션이라 중간에 실패하면 통째로
+        // 없던 일이 되고, 이미 옮긴 것은 건너뛰므로 여러 번 실행해도 같습니다.
+        // 사전을 먼저 심어야 옮겨진 fact가 가리킬 정의가 존재합니다.
+        try {
+          const { migrated, skipped } = await migrateItemContentsToV2Async();
+          if (migrated > 0) {
+            console.log(`[Init] 구조화 데이터 ${migrated}건을 V2로 옮겼습니다. (건너뜀 ${skipped}건)`);
+          }
+        } catch (error) {
+          // 옮기기에 실패해도 앱은 떠야 합니다. V1 데이터는 그대로 남아 있고,
+          // 읽는 쪽이 두 형식을 모두 다루므로 화면은 정상입니다.
+          console.error('[Init] V2 마이그레이션 실패. V1 데이터를 그대로 씁니다:', error);
+        }
 
         // 동기화 job은 앱이 꺼지면 'processing'에 갇힙니다.
         // 이쪽은 되돌려두면 아래 워커가 곧바로 다시 집어갑니다.
