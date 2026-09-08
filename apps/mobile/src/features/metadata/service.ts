@@ -420,6 +420,49 @@ async function fetchYouTubeMetadata(sourceUrl: string): Promise<MetadataResult> 
   };
 }
 
+/**
+ * 링크에서 본문만 긁어옵니다. AI는 부르지 않습니다.
+ *
+ * 조각으로 붙인 링크는 주소만 있고 본문이 없습니다. 그대로 두면 AI에게
+ * "https://..." 한 줄만 건네게 되어, 모델이 "분석할 내용이 없다"고 답합니다.
+ * 실제로 릴스에 노션 링크를 붙였더니 제목이 '정보 없음'이 됐습니다.
+ *
+ * 종합할 때 쓸 재료라 요약도 분류도 필요 없습니다. 글만 있으면 됩니다.
+ */
+export async function fetchSourceBodyText(sourceUrl: string): Promise<string | null> {
+  let normalized = sourceUrl;
+  try {
+    normalized = normalizeSourceUrl(sourceUrl);
+  } catch {
+    return null;
+  }
+
+  try {
+    const response = await fetchWithTimeout(`https://r.jina.ai/${normalized}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (response.ok) {
+      const json = await response.json();
+      const body = decodeHtmlEntities(json?.data?.content || '').trim();
+      if (body) return body;
+    }
+  } catch (error) {
+    console.log('[MetadataService] 조각 본문 수집 실패, og 태그로 폴백합니다.', error);
+  }
+
+  // Jina가 막히면 og 태그라도 씁니다. 인스타는 캡션이 description에 들어 있습니다.
+  try {
+    const html = await fetchHtmlMetadata(normalized);
+    const caption = isInstagramHost(new URL(normalized).hostname)
+      ? extractInstagramCaption(html.rawDescription)
+      : null;
+    const fallback = (caption || html.summary || '').trim();
+    return fallback || null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchGenericMetadata(
   sourceUrl: string,
   referenceDate?: string

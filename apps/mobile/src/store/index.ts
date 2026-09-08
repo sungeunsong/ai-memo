@@ -19,6 +19,7 @@ import {
 } from '@/db';
 import {
   composeSourcesForAI,
+  fetchSourceBodyText,
   fetchMetadataPatch,
   fetchTextMetadataPatch,
   fetchImageMetadataPatch,
@@ -438,11 +439,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
         return { ok: false, message: '이미 붙어 있는 내용입니다.' };
       }
 
+      // 링크를 붙였으면 주소만 담아선 안 됩니다. 그대로 두면 AI에게 "https://..."
+      // 한 줄만 건네게 되어 "분석할 내용이 없다"는 답이 돌아옵니다.
+      // 사용자가 링크와 함께 적은 메모가 있으면 본문 앞에 함께 남깁니다.
+      const note = extractedUrl ? trimmed.replace(extractedUrl, '').trim() : trimmed;
+      const body = extractedUrl ? await fetchSourceBodyText(extractedUrl).catch(() => null) : null;
+      const rawText = [note, body].filter(Boolean).join('\n\n') || trimmed;
+
       const source = buildItemSource(
         itemId,
         toSourceKind(classifySourceType(extractedUrl, trimmed), Boolean(extractedUrl)),
         extractedUrl,
-        trimmed
+        rawText
       );
 
       await addItemSourceAsync(source);
@@ -827,6 +835,46 @@ async function cacheFetchedBodyIntoSource(
 }
 
 /**
+ * 본문이 없는 링크 조각을 채웁니다.
+ *
+ * 링크 조각은 주소만 갖고 만들어집니다. 저장할 때 만든 첫 조각도, 나중에 붙인
+ * 링크도 그렇습니다. 그대로 종합에 넘기면 AI가 받는 것이 "https://..." 한 줄뿐이라
+ * "분석할 내용이 없다"고 답합니다. 실제로 릴스에 노션 링크를 붙였더니 제목이
+ * '정보 없음'이 됐습니다.
+ *
+ * 한 번 긁어두면 조각에 남으므로 다음 재정리부터는 네트워크를 타지 않습니다.
+ */
+async function fillMissingSourceTexts(
+  itemId: string,
+  set: SetAppState,
+  get: () => AppStore
+) {
+  const item = get().items.find((entry) => entry.id === itemId);
+  if (!item) return;
+
+  for (const source of item.sources) {
+    if (source.rawText?.trim() || !source.sourceUrl) continue;
+
+    const body = await fetchSourceBodyText(source.sourceUrl).catch(() => null);
+    if (!body) continue;
+
+    await updateItemSourceTextAsync(source.id, body).catch(() => {});
+    set((state) => ({
+      items: state.items.map((entry) =>
+        entry.id === itemId
+          ? {
+              ...entry,
+              sources: entry.sources.map((current) =>
+                current.id === source.id ? { ...current, rawText: body } : current
+              ),
+            }
+          : entry
+      ),
+    }));
+  }
+}
+
+/**
  * 붙어 있는 조각 전체를 종합해 AI 정리를 다시 만듭니다.
  *
  * 기존 요약에 새 내용을 이어 붙이는 대신 원본 조각들로 다시 만듭니다.
@@ -845,7 +893,10 @@ async function reenrichFromSources(itemId: string, set: SetAppState, get: () => 
     return;
   }
 
-  const composed = composeSourcesForAI(item.sources);
+  await fillMissingSourceTexts(itemId, set, get);
+
+  const filled = get().items.find((entry) => entry.id === itemId) ?? item;
+  const composed = composeSourcesForAI(filled.sources);
   if (!composed) {
     await runEnrichForItem(item, set, get);
     return;
