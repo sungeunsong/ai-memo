@@ -19,24 +19,20 @@ function uniqueBy<T>(arr: T[], keyGetter: (item: T) => any): T[] {
 export function parseActionItems(
   rawInput: string,
   userNote?: string,
-  structured?: any
+  ingredients: string[] = []
 ): ActionItem[] {
   const actions: ActionItem[] = [];
   const combinedText = `${rawInput || ''}\n${userNote || ''}`;
 
   // 1. 레시피 재료 복사 액션
-  // 카테고리가 아니라 재료가 있는지로 판단합니다.
-  // 여행과 레시피가 한 아이템에 섞이면 카테고리는 하나뿐이라, 카테고리로 가르면
+  // 분야가 아니라 재료가 있는지로 판단합니다.
+  // 여행과 레시피가 한 아이템에 섞이면 분야는 하나뿐이라, 분야로 가르면
   // 재료가 멀쩡히 있는데도 복사 액션이 사라집니다.
-  if (
-    structured &&
-    Array.isArray(structured.ingredients) &&
-    structured.ingredients.length > 0
-  ) {
+  if (ingredients.length > 0) {
     actions.push({
       type: 'ingredients',
       label: '재료 전체 복사',
-      value: structured.ingredients.join(', '),
+      value: ingredients.join(', '),
       icon: '🍳',
     });
   }

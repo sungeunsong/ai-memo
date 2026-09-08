@@ -17,6 +17,9 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 
 import { SavedItem } from '@/features/items/types';
+import { readContentV2 } from '@/features/items/contentV2';
+import { DomainSection, FactRow, buildDomainSections, factValues, legacyText } from '@/features/items/factView';
+import { resolveDomainLabel } from '@/features/taxonomy/registry';
 import { isEnrichStalled } from '@/features/items/staleEnrich';
 import { StatusPills } from '@/components/StatusBadges';
 import { useAppStore } from '@/store';
@@ -31,7 +34,6 @@ import {
   describeSourceBody,
   getItemTitle,
   getSyncStatusLabel,
-  tryParseStructuredContent,
   truncateMiddle,
   shouldShowRawInputFirst,
   describeSavedItemShape,
@@ -129,6 +131,7 @@ export function DetailContent({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isMetaExpanded, setIsMetaExpanded] = useState(false);
   const [isReaderVisible, setIsReaderVisible] = useState(false);
+  const taxonomy = useAppStore((state) => state.taxonomy);
   const updateUserNote = useAppStore((state) => state.updateUserNote);
   const retryEnrichMetadata = useAppStore((state) => state.retryEnrichMetadata);
   const isSaving = useAppStore((state) => state.isSaving);
@@ -157,11 +160,30 @@ export function DetailContent({
     return () => clearTimeout(t);
   }, [toastMessage]);
 
-  const structured = tryParseStructuredContent(selectedItem.content);
+  const content = readContentV2(selectedItem.content);
+
+  // 화면은 사전이 알려주는 대로 그립니다. 분야마다 카드를 따로 두면
+  // 목록에 없는 분야는 아무것도 보이지 않습니다.
+  const factSections = useMemo(() => {
+    if (!content) return [];
+
+    // 마감은 아래 카드가 따로 그립니다. 여기서도 한 줄 세우면 같은 날짜가 두 번
+    // 나오고, 그중 하나는 눌러도 아무 일이 없어 사용자가 어느 쪽을 믿을지 헷갈립니다.
+    return buildDomainSections(content, taxonomy)
+      .map((section) => ({
+        ...section,
+        rows: section.rows.filter((row) => row.role !== 'deadline'),
+      }))
+      .filter((section) => section.rows.length > 0);
+  }, [content, taxonomy]);
+
+  // 마감은 따로 뺍니다. 사용자가 직접 고칠 수 있고 지났는지도 알려줘야 해서,
+  // 값 하나를 그대로 보여주는 다른 항목과 다루는 방식이 다릅니다.
+  const aiDeadline = factValues(content, 'shopping', 'deadline')[0] ?? '';
 
   // 본문은 contentText 컬럼으로 분리됐습니다.
-  // structured.description은 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
-  const readerMarkdown: string = selectedItem.contentText || structured?.description || '';
+  // legacy.description은 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
+  const readerMarkdown: string = selectedItem.contentText || legacyText(content, 'description');
 
   /**
    * 요약 자리에 무엇을 보여줄지.
@@ -292,7 +314,7 @@ export function DetailContent({
   const isEnriching = selectedItem.aiStatus === 'pending' && !isEnrichStalled(selectedItem);
   const summaryBody: string = (
     selectedItem.digest ||
-    structured?.detailedAnalysis ||
+    legacyText(content, 'detailedAnalysis') ||
     (aiFailed ? '' : selectedItem.summary) ||
     ''
   ).trim();
@@ -325,7 +347,11 @@ export function DetailContent({
     return urls;
   }, [selectedItem.extractedUrls, selectedItem.sources]);
 
-  const actions = parseActionItems(selectedItem.rawInput, selectedItem.userNote ?? undefined, structured);
+  const actions = parseActionItems(
+    selectedItem.rawInput,
+    selectedItem.userNote ?? undefined,
+    factValues(content, 'recipe', 'ingredient')
+  );
 
   async function handleActionPress(action: ActionItem) {
     if (action.type === 'phone') {
@@ -401,7 +427,7 @@ export function DetailContent({
             style={({ pressed }) => [styles.categoryChip, pressed && { opacity: 0.6 }]}
           >
             <Text style={styles.categoryChipText}>
-              {getCategoryLabel(itemCategory)}
+              {getCategoryLabel(itemCategory, resolveDomainLabel(taxonomy, itemCategory))}
               {selectedItem.userCategory ? ' · 직접 지정' : ''} ▾
             </Text>
           </Pressable>
@@ -619,7 +645,7 @@ export function DetailContent({
           </Pressable>
         </View>
         {/* 정리본이 상세 화면의 본문입니다.
-            structured.detailedAnalysis는 digest 컬럼 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
+            legacy.detailedAnalysis는 digest 컬럼 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
             소제목·불릿을 써서 오라고 프롬프트에 적어놓고 정작 <Text> 하나에 밀어넣고 있었습니다.
             마크다운으로 렌더링해야 그 구조가 화면에 나타납니다. */}
         {isAwaitingInput ? (
@@ -664,53 +690,27 @@ export function DetailContent({
         <RawInputSection item={selectedItem} />
       ) : null}
 
-      {/* 4. 도메인 특화 카드 */}
-      {structured && (structured.category === 'recipe' || structured.ingredients?.length > 0) && (
-        <RecipeCard
+      {/* 4. 사전이 알려주는 대로 그리는 카드 */}
+      {factSections.map((section) => (
+        <FactCard
+          key={section.domainKey}
+          section={section}
           selectedItem={selectedItem}
-          structured={structured}
           checkedItems={checkedItems}
           onToggleCheck={onToggleCheck}
         />
-      )}
+      ))}
 
-      {structured &&
-        (structured.category === 'workout' ||
-          structured.targetMuscles?.length > 0 ||
-          structured.routine?.length > 0) && (
-        <WorkoutCard
-          selectedItem={selectedItem}
-          structured={structured}
-          checkedItems={checkedItems}
-          onToggleCheck={onToggleCheck}
-        />
-      )}
-
-      {structured &&
-        (structured.category === 'shopping' ||
-          structured.purchaseType ||
-          structured.seller ||
-          structured.deadline ||
-          selectedItem.userDeadline) && (
-        <ShoppingCard
-          structured={structured}
+      {/* 공구는 마감이 지나면 저장해둔 의미가 없어집니다.
+          남은 기간을 눈에 띄게 보여주고, 지난 건 분명히 표시합니다.
+          AI가 못 뽑았어도 사용자가 직접 넣을 수 있어야 해서 쇼핑 글에는 늘 세웁니다. */}
+      {aiDeadline || selectedItem.userDeadline || itemCategory === 'shopping' ? (
+        <DeadlineCard
+          aiDeadline={aiDeadline}
           userDeadline={selectedItem.userDeadline}
           onEditDeadline={() => setIsDeadlineEditorVisible(true)}
         />
-      )}
-
-      {structured &&
-        (structured.category === 'travel' ||
-          structured.location ||
-          structured.travelTheme ||
-          structured.highlights?.length > 0) && (
-        <TravelCard
-          selectedItem={selectedItem}
-          structured={structured}
-          checkedItems={checkedItems}
-          onToggleCheck={onToggleCheck}
-        />
-      )}
+      ) : null}
 
       {/* 5. 추출된 링크 */}
       {openableUrls.length > 0 ? (
@@ -794,7 +794,7 @@ export function DetailContent({
 
       <DeadlineEditor
         visible={isDeadlineEditorVisible}
-        current={selectedItem.userDeadline || structured?.deadline || ''}
+        current={selectedItem.userDeadline || aiDeadline}
         isManual={Boolean(selectedItem.userDeadline)}
         onClose={() => setIsDeadlineEditorVisible(false)}
         onSubmit={(value) => {
@@ -848,231 +848,244 @@ export function DetailContent({
 }
 
 // ==========================================
-// 도메인 특화 서브컴포넌트
+// 사전이 알려주는 대로 그리는 카드
 // ==========================================
-function RecipeCard({
+
+/**
+ * 분야 하나를 카드로 그립니다.
+ *
+ * 예전에는 레시피 카드, 여행 카드가 따로 있었고 각자 자기 필드를 직접 읽었습니다.
+ * 그래서 낚시 글은 분야를 제대로 받아도 화면에 아무것도 나오지 않았습니다.
+ * 카드를 만들어준 적이 없으니까요. 지금은 어떤 분야가 오든 같은 카드가 그립니다.
+ */
+function FactCard({
+  section,
   selectedItem,
-  structured,
   checkedItems,
   onToggleCheck,
 }: {
+  section: DomainSection;
   selectedItem: SavedItem;
-  structured: any;
   checkedItems: Record<string, Record<string, boolean>>;
   onToggleCheck: (itemId: string, key: string) => void;
 }) {
   const styles = useThemedStyles(createStyles);
-  const list = (structured.ingredients as string[]) || [];
-  const total = list.length;
-  const checked = list.filter((ing) => checkedItems[selectedItem.id]?.[ing]).length;
-  const ratio = total > 0 ? (checked / total) * 100 : 0;
+  const accent = DOMAIN_ACCENTS[section.domainKey] ?? DEFAULT_ACCENT;
+
+  const singles = section.rows.filter((row) => !row.isList);
+  const lists = section.rows.filter((row) => row.isList);
 
   return (
     <View style={styles.domainSpecCard}>
-      <View style={[styles.domainSpecHeader, { borderLeftColor: '#ef4444' }]}>
-        <Text style={styles.domainSpecHeaderEmoji}>🍳</Text>
-        <View>
-          <Text style={styles.domainSpecTitle}>장보기 재료 목록</Text>
-          <Text style={styles.domainSpecSub}>
-            난이도: {structured.difficulty || '-'} · 조리시간: {structured.cookTime || '-'}
-          </Text>
-        </View>
-      </View>
-
-      <ProgressBar label="재료 준비율" total={total} checked={checked} ratio={ratio} color="#8b5cf6" />
-
-      <View style={styles.ingredientsGrid}>
-        {list.map((ing) => {
-          const isChecked = !!checkedItems[selectedItem.id]?.[ing];
-          return (
-            <Pressable
-              key={ing}
-              onPress={() => onToggleCheck(selectedItem.id, ing)}
-              style={({ pressed }) => [
-                styles.ingredientBadge,
-                isChecked && styles.ingredientBadgeChecked,
-                { transform: [{ scale: pressed ? 0.95 : 1 }] },
-              ]}
-            >
-              <Text style={[styles.ingredientBadgeDot, isChecked && styles.ingredientBadgeDotChecked]}>
-                {isChecked ? '✔' : '○'}
-              </Text>
-              <Text style={[styles.ingredientBadgeText, isChecked && styles.ingredientBadgeTextChecked]}>
-                {ing}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-    </View>
-  );
-}
-
-function WorkoutCard({
-  selectedItem,
-  structured,
-  checkedItems,
-  onToggleCheck,
-}: {
-  selectedItem: SavedItem;
-  structured: any;
-  checkedItems: Record<string, Record<string, boolean>>;
-  onToggleCheck: (itemId: string, key: string) => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  const list = (structured.routine as string[]) || [];
-  const equipments = (structured.equipments as string[]) || [];
-  const targetMuscles = (structured.targetMuscles as string[]) || [];
-  const total = list.length;
-  const checked = list.filter((r) => checkedItems[selectedItem.id]?.[r]).length;
-  const ratio = total > 0 ? (checked / total) * 100 : 0;
-
-  return (
-    <View style={styles.domainSpecCard}>
-      <View style={[styles.domainSpecHeader, { borderLeftColor: '#8b5cf6' }]}>
-        <Text style={styles.domainSpecHeaderEmoji}>💪</Text>
-        <View>
-          <Text style={styles.domainSpecTitle}>운동 루틴 & 타겟 부위</Text>
-          <Text style={styles.domainSpecSub}>
-            필요도구: {equipments.length > 0 ? equipments.join(', ') : '정보 없음'}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.muscleRow}>
-        <Text style={styles.muscleLabel}>타겟 부위</Text>
-        <View style={styles.muscleBadgeRow}>
-          {targetMuscles.map((m) => (
-            <Text key={m} style={styles.muscleBadge}>{m}</Text>
-          ))}
-        </View>
-      </View>
-
-      <ProgressBar label="루틴 완수도" total={total} checked={checked} ratio={ratio} color="#8b5cf6" />
-
-      <View style={styles.routineList}>
-        {list.map((r, idx) => {
-          const isChecked = !!checkedItems[selectedItem.id]?.[r];
-          return (
-            <Pressable
-              key={r}
-              onPress={() => onToggleCheck(selectedItem.id, r)}
-              style={({ pressed }) => [
-                styles.routineItem,
-                isChecked && styles.routineItemChecked,
-                { transform: [{ scale: pressed ? 0.97 : 1 }] },
-              ]}
-            >
-              <Text style={[styles.routineIndex, isChecked && styles.routineIndexChecked]}>
-                {isChecked ? '✔' : idx + 1}
-              </Text>
-              <Text style={[styles.routineText, isChecked && styles.routineTextChecked]}>
-                {r}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-    </View>
-  );
-}
-
-function TravelCard({
-  selectedItem,
-  structured,
-  checkedItems,
-  onToggleCheck,
-}: {
-  selectedItem: SavedItem;
-  structured: any;
-  checkedItems: Record<string, Record<string, boolean>>;
-  onToggleCheck: (itemId: string, key: string) => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  const { palette } = useTheme();
-  const checklistItems = (structured.checklist as string[]) || [];
-  const highlights = (structured.highlights as string[]) || [];
-  const total = checklistItems.length;
-  const checked = checklistItems.filter((item) => checkedItems[selectedItem.id]?.[item]).length;
-  const ratio = total > 0 ? (checked / total) * 100 : 0;
-
-  return (
-    <View style={styles.domainSpecCard}>
-      <View style={[styles.domainSpecHeader, { borderLeftColor: '#3b82f6' }]}>
-        <Text style={styles.domainSpecHeaderEmoji}>✈</Text>
+      <View style={[styles.domainSpecHeader, { borderLeftColor: accent.color }]}>
+        <Text style={styles.domainSpecHeaderEmoji}>{accent.emoji}</Text>
         <View style={{ flex: 1 }}>
-          <Text style={styles.domainSpecTitle}>여행 코스 & 숙소 정보</Text>
-          <Text style={styles.domainSpecSub}>테마: {structured.travelTheme || '정보 없음'}</Text>
-        </View>
-        <View style={styles.travelThemeBadgeRow}>
-          {structured.travelTheme?.includes('국내') && (
-            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(59, 130, 246, 0.15)', color: palette.infoText, borderColor: '#3b82f6' }]}>국내 🇰🇷</Text>
-          )}
-          {structured.travelTheme?.includes('해외') && (
-            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(236, 72, 153, 0.15)', color: '#fbcfe8', borderColor: '#ec4899' }]}>해외 ✈</Text>
-          )}
-          {structured.travelTheme?.includes('호캉스') && (
-            <Text style={[styles.travelThemeBadge, { backgroundColor: 'rgba(139, 92, 246, 0.15)', color: palette.accentText, borderColor: '#8b5cf6' }]}>호캉스 🏨</Text>
-          )}
+          <Text style={styles.domainSpecTitle}>{section.label}</Text>
+          {/* 값이 없는 항목은 아예 담기지 않습니다. '정보 없음'을 줄줄이 세우면
+              화면은 찼는데 알아낸 것은 없는 상태가 됩니다. */}
+          <Text style={styles.domainSpecSub}>
+            {section.rows.map((row) => row.label).join(' · ')}
+          </Text>
         </View>
       </View>
 
-      <View style={styles.travelGrid}>
-        <View style={styles.travelGridBlock}>
-          <Text style={styles.travelBlockLabel}>📍 위치</Text>
-          <Text style={styles.travelBlockVal}>{structured.location || '정보 없음'}</Text>
+      {singles.length > 0 ? (
+        <View style={styles.travelGrid}>
+          {singles.map((row) => (
+            <View key={row.ref} style={styles.travelGridBlock}>
+              <Text style={styles.travelBlockLabel}>{row.label}</Text>
+              <Text style={styles.travelBlockVal}>{row.values.join(', ')}</Text>
+            </View>
+          ))}
         </View>
-        <View style={styles.travelGridBlock}>
-          <Text style={styles.travelBlockLabel}>💵 예상 예산</Text>
-          <Text style={styles.travelBlockVal}>{structured.budget || '정보 없음'}</Text>
-        </View>
-      </View>
+      ) : null}
 
-      <View style={styles.travelHighlightRow}>
-        <Text style={styles.travelHighlightLabel}>핵심 스팟</Text>
-        <View style={styles.travelHighlightsContainer}>
-          {highlights.map((h) => (
-            <Text key={h} style={styles.travelHighlightText}>⭐ {h}</Text>
+      {lists.map((row) => (
+        <FactList
+          key={row.ref}
+          row={row}
+          accentColor={accent.color}
+          selectedItem={selectedItem}
+          checkedItems={checkedItems}
+          onToggleCheck={onToggleCheck}
+        />
+      ))}
+    </View>
+  );
+}
+
+/**
+ * 목록 하나.
+ *
+ * 체크할 수 있는 것은 준비물과 절차뿐입니다. 모아야 하거나 해내야 하는 것이라
+ * 어디까지 했는지가 그 자체로 쓸모입니다. 자극 부위나 테마는 이 글이 무엇에
+ * 대한 것인지를 말해줄 뿐이라 체크한다는 말이 성립하지 않습니다.
+ */
+function FactList({
+  row,
+  accentColor,
+  selectedItem,
+  checkedItems,
+  onToggleCheck,
+}: {
+  row: FactRow;
+  accentColor: string;
+  selectedItem: SavedItem;
+  checkedItems: Record<string, Record<string, boolean>>;
+  onToggleCheck: (itemId: string, key: string) => void;
+}) {
+  const styles = useThemedStyles(createStyles);
+  const checked = row.values.filter((value) => checkedItems[selectedItem.id]?.[value]).length;
+  const total = row.values.length;
+  const ratio = total > 0 ? (checked / total) * 100 : 0;
+
+  if (!row.checkable) {
+    return (
+      <View style={styles.muscleRow}>
+        <Text style={styles.muscleLabel}>{row.label}</Text>
+        <View style={styles.muscleBadgeRow}>
+          {row.values.map((value) => (
+            <Text key={value} style={styles.muscleBadge}>{value}</Text>
           ))}
         </View>
       </View>
+    );
+  }
 
-      {total > 0 && (
-        <View style={styles.travelChecklistSection}>
-          <Text style={styles.travelHighlightLabel}>준비물 체크리스트</Text>
-          <ProgressBar label="준비 완료도" total={total} checked={checked} ratio={ratio} color="#3b82f6" />
-          <View style={styles.travelChecklistGrid}>
-            {checklistItems.map((item) => {
-              const isChecked = !!checkedItems[selectedItem.id]?.[item];
-              return (
-                <Pressable
-                  key={item}
-                  onPress={() => onToggleCheck(selectedItem.id, item)}
-                  style={({ pressed }) => [
-                    styles.travelChecklistItem,
-                    isChecked && styles.travelChecklistItemChecked,
-                    { transform: [{ scale: pressed ? 0.96 : 1 }] },
-                  ]}
-                >
-                  <Text style={[styles.travelChecklistIcon, isChecked && styles.travelChecklistIconChecked]}>
-                    {isChecked ? '✔' : '□'}
-                  </Text>
-                  <Text style={[styles.travelChecklistText, isChecked && styles.travelChecklistTextChecked]}>
-                    {item}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+  return (
+    <View style={styles.factListSection}>
+      <ProgressBar label={row.label} total={total} checked={checked} ratio={ratio} color={accentColor} />
+
+      {/* 문장은 배지로 눕히면 잘려 보입니다. 절차처럼 순서가 있는 경우도 많아
+          번호를 붙여 한 줄씩 세웁니다. */}
+      {row.isSentence ? (
+        <View style={styles.routineList}>
+          {row.values.map((value, idx) => {
+            const isChecked = !!checkedItems[selectedItem.id]?.[value];
+            return (
+              <Pressable
+                key={value}
+                onPress={() => onToggleCheck(selectedItem.id, value)}
+                style={({ pressed }) => [
+                  styles.routineItem,
+                  isChecked && styles.routineItemChecked,
+                  { transform: [{ scale: pressed ? 0.97 : 1 }] },
+                ]}
+              >
+                <Text style={[styles.routineIndex, isChecked && styles.routineIndexChecked]}>
+                  {isChecked ? '✔' : idx + 1}
+                </Text>
+                <Text style={[styles.routineText, isChecked && styles.routineTextChecked]}>
+                  {value}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : (
+        <View style={styles.ingredientsGrid}>
+          {row.values.map((value) => {
+            const isChecked = !!checkedItems[selectedItem.id]?.[value];
+            return (
+              <Pressable
+                key={value}
+                onPress={() => onToggleCheck(selectedItem.id, value)}
+                style={({ pressed }) => [
+                  styles.ingredientBadge,
+                  isChecked && styles.ingredientBadgeChecked,
+                  { transform: [{ scale: pressed ? 0.95 : 1 }] },
+                ]}
+              >
+                <Text style={[styles.ingredientBadgeDot, isChecked && styles.ingredientBadgeDotChecked]}>
+                  {isChecked ? '✔' : '○'}
+                </Text>
+                <Text style={[styles.ingredientBadgeText, isChecked && styles.ingredientBadgeTextChecked]}>
+                  {value}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
       )}
     </View>
   );
 }
 
-// ==========================================
-// 공통 서브 컴포넌트
-// ==========================================
+/**
+ * 분야별 색과 그림.
+ *
+ * 사전에 없는 분야는 기본값으로 그립니다. 색이 없다고 화면이 비면 안 되고,
+ * 색을 정하는 일은 사용자가 그 분야를 실제로 쓰기 시작한 뒤에 해도 늦지 않습니다.
+ */
+const DOMAIN_ACCENTS: Record<string, { emoji: string; color: string }> = {
+  recipe: { emoji: '🍳', color: '#ef4444' },
+  workout: { emoji: '💪', color: '#8b5cf6' },
+  travel: { emoji: '✈', color: '#3b82f6' },
+  parenting: { emoji: '🍼', color: '#ec4899' },
+  shopping: { emoji: '🛍️', color: '#f59e0b' },
+  interior: { emoji: '🛋️', color: '#10b981' },
+};
+
+const DEFAULT_ACCENT = { emoji: '🏷️', color: '#64748b' };
+
+/**
+ * 마감 카드.
+ *
+ * 공구는 마감이 지나면 저장해둔 의미가 없어집니다.
+ * 그래서 남은 기간을 눈에 띄게 보여주고, 지난 건 분명히 표시합니다.
+ */
+function DeadlineCard({
+  aiDeadline,
+  userDeadline,
+  onEditDeadline,
+}: {
+  aiDeadline: string;
+  userDeadline: string | null;
+  onEditDeadline: () => void;
+}) {
+  const styles = useThemedStyles(createStyles);
+  // 사용자가 고친 값이 있으면 그것이 우선입니다.
+  const deadline = (userDeadline ?? aiDeadline).trim();
+  let deadlineNote: { text: string; expired: boolean } | null = null;
+
+  if (deadline) {
+    const due = new Date(deadline);
+    if (!Number.isNaN(due.getTime())) {
+      // 날짜만 비교합니다. 마감 당일은 아직 지나지 않은 것으로 봅니다.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      due.setHours(0, 0, 0, 0);
+      const days = Math.round((due.getTime() - today.getTime()) / 86400000);
+
+      deadlineNote =
+        days < 0
+          ? { text: `${deadline} · ${-days}일 지남`, expired: true }
+          : { text: days === 0 ? `${deadline} · 오늘 마감` : `${deadline} · ${days}일 남음`, expired: false };
+    } else {
+      deadlineNote = { text: deadline, expired: false };
+    }
+  }
+
+  return (
+    <Pressable
+      onPress={onEditDeadline}
+      style={({ pressed }) => [
+        styles.deadlineBox,
+        deadlineNote?.expired && styles.deadlineBoxExpired,
+        pressed && { opacity: 0.7 },
+      ]}
+    >
+      <Text style={[styles.deadlineLabel, deadlineNote?.expired && styles.deadlineLabelExpired]}>
+        {deadlineNote ? (deadlineNote.expired ? '⛔ 마감됨' : '⏰ 마감') : '⏰ 마감일'}
+        {userDeadline ? ' · 직접 지정' : ''}
+      </Text>
+      <Text style={styles.deadlineText}>
+        {deadlineNote ? deadlineNote.text : '눌러서 입력'}
+      </Text>
+    </Pressable>
+  );
+}
+
 function ProgressBar({ label, total, checked, ratio, color }: { label: string; total: number; checked: number; ratio: number; color: string }) {
   const styles = useThemedStyles(createStyles);
   return (
@@ -1249,91 +1262,12 @@ function CategoryPicker({
   );
 }
 
-/**
- * 공동구매·꿀템용 카드.
- *
- * 공구는 마감이 지나면 저장해둔 의미가 없어집니다.
- * 그래서 남은 기간을 눈에 띄게 보여주고, 지난 건 분명히 표시합니다.
- */
-function ShoppingCard({
-  structured,
-  userDeadline,
-  onEditDeadline,
-}: {
-  structured: any;
-  userDeadline: string | null;
-  onEditDeadline: () => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  // 사용자가 고친 값이 있으면 그것이 우선입니다.
-  const aiDeadline = typeof structured.deadline === 'string' ? structured.deadline.trim() : '';
-  const deadline = (userDeadline ?? aiDeadline).trim();
-  let deadlineNote: { text: string; expired: boolean } | null = null;
-
-  if (deadline) {
-    const due = new Date(deadline);
-    if (!Number.isNaN(due.getTime())) {
-      // 날짜만 비교합니다. 마감 당일은 아직 지나지 않은 것으로 봅니다.
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      due.setHours(0, 0, 0, 0);
-      const days = Math.round((due.getTime() - today.getTime()) / 86400000);
-
-      deadlineNote =
-        days < 0
-          ? { text: `${deadline} · ${-days}일 지남`, expired: true }
-          : { text: days === 0 ? `${deadline} · 오늘 마감` : `${deadline} · ${days}일 남음`, expired: false };
-    } else {
-      deadlineNote = { text: deadline, expired: false };
-    }
-  }
-
-  return (
-    <View style={styles.domainSpecCard}>
-      <View style={[styles.domainSpecHeader, { borderLeftColor: '#f59e0b' }]}>
-        <Text style={styles.domainSpecHeaderEmoji}>🛍️</Text>
-        <View>
-          <Text style={styles.domainSpecTitle}>구매 정보</Text>
-          <Text style={styles.domainSpecSub}>
-            {structured.purchaseType || '구매형태 미상'}
-            {structured.productType ? ` · ${structured.productType}` : ''}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.travelGrid}>
-        <View style={styles.travelGridBlock}>
-          <Text style={styles.travelBlockLabel}>🏪 구매처</Text>
-          <Text style={styles.travelBlockVal}>{structured.seller || '정보 없음'}</Text>
-        </View>
-        <View style={styles.travelGridBlock}>
-          <Text style={styles.travelBlockLabel}>💵 가격</Text>
-          <Text style={styles.travelBlockVal}>{structured.price || '정보 없음'}</Text>
-        </View>
-      </View>
-
-      <Pressable
-        onPress={onEditDeadline}
-        style={({ pressed }) => [
-          styles.deadlineBox,
-          deadlineNote?.expired && styles.deadlineBoxExpired,
-          pressed && { opacity: 0.7 },
-        ]}
-      >
-        <Text style={[styles.deadlineLabel, deadlineNote?.expired && styles.deadlineLabelExpired]}>
-          {deadlineNote ? (deadlineNote.expired ? '⛔ 마감됨' : '⏰ 마감') : '⏰ 마감일'}
-          {userDeadline ? ' · 직접 지정' : ''}
-        </Text>
-        <Text style={styles.deadlineText}>
-          {deadlineNote ? deadlineNote.text : '눌러서 입력'}
-        </Text>
-      </Pressable>
-    </View>
-  );
-}
-
 const createStyles = (palette: Palette) =>
   StyleSheet.create({
+  factListSection: {
+    marginTop: 12,
+    gap: 8,
+  },
   deadlineBox: {
     marginTop: spacing[3],
     backgroundColor: 'rgba(245, 158, 11, 0.12)',

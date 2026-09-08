@@ -1,4 +1,5 @@
 import { readContentV2 } from '@/features/items/contentV2';
+import { allFactValues, legacyText } from '@/features/items/factView';
 import { SavedItem } from '@/features/items/types';
 import { getHostname } from '@/features/items/fallback';
 import { hangulMatch } from './search';
@@ -195,18 +196,6 @@ export function shouldShowRawInputFirst(item: SavedItem) {
 }
 
 // ==========================================
-// 구조화 데이터 파서
-// ==========================================
-
-export function tryParseStructuredContent(content: string) {
-  try {
-    return JSON.parse(content);
-  } catch {
-    return null;
-  }
-}
-
-// ==========================================
 // 소스 테마 (시각적 분류용)
 // ==========================================
 
@@ -394,8 +383,17 @@ export const CATEGORY_LABELS: Record<string, string> = {
   other: '미분류 🏷️',
 };
 
-export function getCategoryLabel(category: string): string {
-  return CATEGORY_LABELS[category] ?? CATEGORY_LABELS.other;
+/**
+ * 분야 이름.
+ *
+ * 목록에 없는 분야는 사전이 알려준 이름을 씁니다. 목록을 여섯 개로 고정해두면
+ * 낚시 글은 분야를 제대로 받고도 화면에서는 '미분류'로 보입니다.
+ */
+export function getCategoryLabel(category: string, fallbackLabel?: string): string {
+  const known = CATEGORY_LABELS[category];
+  if (known) return known;
+  if (fallbackLabel && fallbackLabel !== category) return `${fallbackLabel} 🏷️`;
+  return CATEGORY_LABELS.other;
 }
 
 // ==========================================
@@ -455,8 +453,8 @@ export function filterItems(items: SavedItem[], searchQuery: string): SavedItem[
     }
 
     // 자연어 카테고리 매핑
-    const structured = tryParseStructuredContent(item.content);
-    const category = structured?.category || item.sourceType;
+    const structured = readContentV2(item.content);
+    const category = structured && structured.domain.key !== 'other' ? structured.domain.key : item.sourceType;
     if (category) {
       const lowerQuery = query.toLowerCase();
       if ((lowerQuery === '요리' || lowerQuery === '레시피') && category === 'recipe') return true;
@@ -465,20 +463,11 @@ export function filterItems(items: SavedItem[], searchQuery: string): SavedItem[
     }
 
     // 구조화 데이터 내부 검색
-    if (structured) {
-      if (structured.category === 'recipe' && structured.ingredients) {
-        if ((structured.ingredients as string[]).some((ing) => hangulMatch(ing, query))) return true;
-      }
-      if (structured.category === 'workout' && structured.targetMuscles) {
-        if ((structured.targetMuscles as string[]).some((m) => hangulMatch(m, query))) return true;
-      }
-      if (structured.category === 'travel') {
-        if (structured.location && hangulMatch(structured.location, query)) return true;
-        if (structured.travelTheme && hangulMatch(structured.travelTheme, query)) return true;
-        if (structured.highlights && (structured.highlights as string[]).some((h) => hangulMatch(h, query))) return true;
-        if (structured.checklist && (structured.checklist as string[]).some((c) => hangulMatch(c, query))) return true;
-      }
-    }
+    //
+    // 분야를 가리지 않고 모든 항목의 값을 훑습니다. 예전에는 레시피면 재료만,
+    // 여행이면 장소만 봤습니다. 그래서 여행 글에 딸려온 재료는 검색되지 않았고,
+    // 목록에 없는 분야는 아예 훑을 대상이 없었습니다.
+    if (allFactValues(structured).some((value) => hangulMatch(value, query))) return true;
 
     // 요약도 본문과 같은 규칙으로 봅니다.
     // 세 줄 요약은 짧지 않아서, 자소 순서 매칭을 켜두면 '감자'나 '고기' 같은
@@ -493,8 +482,8 @@ export function filterItems(items: SavedItem[], searchQuery: string): SavedItem[
     if (matchBodyText(item.digest, query)) return true;
     if (matchBodyText(item.contentText, query)) return true;
     // 본문/정리본을 별도 컬럼으로 분리하기 전에 저장된 아이템 호환
-    if (structured && typeof structured.description === 'string' && matchBodyText(structured.description, query)) return true;
-    if (structured && typeof structured.detailedAnalysis === 'string' && matchBodyText(structured.detailedAnalysis, query)) return true;
+    if (matchBodyText(legacyText(structured, 'description'), query)) return true;
+    if (matchBodyText(legacyText(structured, 'detailedAnalysis'), query)) return true;
     if (matchBodyText(item.sourceUrl, query)) return true;
 
     // 나중에 붙인 조각(주로 인스타 DM)도 원문 검색에 들어가야 합니다.
