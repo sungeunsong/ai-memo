@@ -421,6 +421,16 @@ async function fetchYouTubeMetadata(sourceUrl: string): Promise<MetadataResult> 
 }
 
 /**
+ * 조각 본문을 긁을 때의 시한과 시도 횟수.
+ *
+ * 노션처럼 무거운 페이지는 Jina가 렌더링하는 데 시간이 걸립니다. 실측으로 첫
+ * 요청이 8초쯤 걸렸고, 폰에서는 20초에 끊겨 본문을 통째로 놓쳤습니다.
+ * 넉넉히 잡고, 첫 연결이 물리는 경우를 위해 한 번 더 겁니다.
+ */
+const SOURCE_FETCH_TIMEOUT_MS = 30000;
+const SOURCE_FETCH_ATTEMPTS = 2;
+
+/**
  * 링크에서 본문만 긁어옵니다. AI는 부르지 않습니다.
  *
  * 조각으로 붙인 링크는 주소만 있고 본문이 없습니다. 그대로 두면 AI에게
@@ -437,17 +447,30 @@ export async function fetchSourceBodyText(sourceUrl: string): Promise<string | n
     return null;
   }
 
-  try {
-    const response = await fetchWithTimeout(`https://r.jina.ai/${normalized}`, {
-      headers: { Accept: 'application/json' },
-    });
-    if (response.ok) {
-      const json = await response.json();
-      const body = decodeHtmlEntities(json?.data?.content || '').trim();
-      if (body) return body;
+  // 폰에서는 첫 연결이 통째로 물리는 일이 잦습니다. 한 번 끊고 다시 걸면
+  // 대개 곧바로 붙습니다. 재시도가 없으면 그 한 번으로 본문을 포기하게 되는데,
+  // 조각의 본문이 없으면 종합할 재료 자체가 사라집니다.
+  for (let attempt = 1; attempt <= SOURCE_FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(
+        `https://r.jina.ai/${normalized}`,
+        { headers: { Accept: 'application/json' } },
+        SOURCE_FETCH_TIMEOUT_MS
+      );
+      if (response.ok) {
+        const json = await response.json();
+        const body = decodeHtmlEntities(json?.data?.content || '').trim();
+        if (body) return body;
+      }
+      break;
+    } catch (error) {
+      if (attempt < SOURCE_FETCH_ATTEMPTS) {
+        console.log(`[MetadataService] 조각 본문 수집 재시도 (${attempt}/${SOURCE_FETCH_ATTEMPTS}):`, error);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        continue;
+      }
+      console.log('[MetadataService] 조각 본문 수집 실패, og 태그로 폴백합니다.', error);
     }
-  } catch (error) {
-    console.log('[MetadataService] 조각 본문 수집 실패, og 태그로 폴백합니다.', error);
   }
 
   // Jina가 막히면 og 태그라도 씁니다. 인스타는 캡션이 description에 들어 있습니다.
