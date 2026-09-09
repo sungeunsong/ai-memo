@@ -20,7 +20,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { SavedItem } from '@/features/items/types';
 import { readContentV2 } from '@/features/items/contentV2';
 import { DomainSection, FactRow, buildDomainSections, factValues, legacyText } from '@/features/items/factView';
-import { resolveDomainLabel } from '@/features/taxonomy/registry';
+import { TaxonomyRegistry, resolveDomainLabel } from '@/features/taxonomy/registry';
 import { resolveImageUri } from '@/features/capture/imageCapture';
 import { isEnrichStalled } from '@/features/items/staleEnrich';
 import { StatusPills } from '@/components/StatusBadges';
@@ -145,11 +145,25 @@ export function DetailContent({
   const setItemCategory = useAppStore((state) => state.setItemCategory);
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
   const [isDeadlineEditorVisible, setIsDeadlineEditorVisible] = useState(false);
+  /*
+   * 조각 목록을 펼쳤는지.
+   *
+   * 기본은 접힘입니다. 예전에는 조각이 하나면 숨기고 둘 이상이면 다 세웠는데,
+   * 첫 조각은 헤더가 이미 그리고 있어서 나름의 이유는 있었지만 보는 사람에게는
+   * 규칙이 보이지 않았습니다. 개수와 상관없이 늘 접어두고, 펼치면 전부 나옵니다.
+   */
+  const [isSourceListOpen, setIsSourceListOpen] = useState(false);
   const setItemDeadline = useAppStore((state) => state.setItemDeadline);
 
   useEffect(() => {
     setUserNoteInput(selectedItem.userNote ?? '');
   }, [selectedItem.id, selectedItem.userNote]);
+
+  // 다른 글로 넘어가면 다시 접습니다. 펼친 채로 넘어가면 이 글도 조각이 많은
+  // 줄 알고 봅니다.
+  useEffect(() => {
+    setIsSourceListOpen(false);
+  }, [selectedItem.id]);
 
   async function handleSaveUserNote() {
     await updateUserNote(selectedItem.id, userNoteInput);
@@ -214,6 +228,8 @@ export function DetailContent({
   const [expandedImageUri, setExpandedImageUri] = useState<string | null>(null);
 
   const isAwaitingInput = selectedItem.aiStatus === 'awaiting_input';
+  /** 사용자가 정리를 안 돌리기로 하고 담아둔 것. 아직 한 번도 정리하지 않았습니다. */
+  const isSkipped = selectedItem.aiStatus === 'skipped';
 
   /**
    * 조각을 뗄지 확인받습니다.
@@ -349,8 +365,27 @@ export function DetailContent({
         urls.push(source.sourceUrl);
       }
     }
-    return urls;
-  }, [selectedItem.extractedUrls, selectedItem.sources]);
+
+    /*
+     * 헤더가 이미 여는 대표 링크는 뺍니다.
+     *
+     * 이 카드는 '릴스에 노션을 붙였는데 노션을 열 방법이 없다'를 풀려고 만든
+     * 자리입니다. 그런데 아이템의 대표 링크는 바로 위 헤더의 '원본 열기'가
+     * 같은 일을 합니다. 그것까지 세우면 링크 하나만 저장한 글에서 같은 주소가
+     * 두 번 보입니다. 붙인 조각의 링크는 남깁니다. 조각 목록은 접혀 있어서,
+     * 펼치지 않고 여는 길이 여기여야 하기 때문입니다.
+     */
+    return urls.filter((url) => url !== selectedItem.sourceUrl);
+  }, [selectedItem.extractedUrls, selectedItem.sources, selectedItem.sourceUrl]);
+
+  /** 접힌 줄에 적는 조각 종류. 무엇으로 이뤄졌는지는 펼치지 않아도 보여야 합니다. */
+  const sourceKindSummary = useMemo(
+    () =>
+      selectedItem.sources
+        .map((source) => SOURCE_KIND_LABELS[source.kind] ?? source.kind)
+        .join(' · '),
+    [selectedItem.sources]
+  );
 
   const actions = parseActionItems(
     selectedItem.rawInput,
@@ -523,18 +558,48 @@ export function DetailContent({
       {/* 2.5. 출처(조각) — 릴스에 나중에 받은 DM을 붙이는 자리 */}
       <View style={styles.sourceCard}>
         <View style={styles.summaryHeader}>
-          <Text style={styles.summaryTitle}>
-            🧩 출처 {selectedItem.sources.length > 0 ? selectedItem.sources.length : 1}개
-          </Text>
+          {/*
+            제목은 이 카드에서 할 수 있는 일이고, 오른쪽은 지금 몇 조각으로
+            이뤄져 있는지입니다. 제목에 개수를 넣었더니 조각이 하나일 때는
+            할 일이 안 보이고, 할 일만 적었더니 개수가 안 보였습니다. 둘 다
+            필요한 정보라 자리를 나눕니다.
+          */}
+          <Text style={styles.summaryTitle}>➕ 내용 덧붙이기</Text>
+          {/*
+            바로 아래 'AI 요약' 카드의 재분석 버튼과 같은 모양을 씁니다. 같은
+            자리에 같은 크기로 서는 것이라, 하나가 버튼이면 다른 하나도 버튼으로
+            읽힙니다. 색은 중립으로 둡니다 — 이 카드의 주된 일은 덧붙이기고,
+            이건 곁들이는 동작입니다.
+          */}
+          <Pressable
+            onPress={() => setIsSourceListOpen((open) => !open)}
+            hitSlop={10}
+            style={({ pressed }) => [styles.sourceToggle, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.sourceToggleText}>
+              🧩 출처 {selectedItem.sources.length || 1}개
+            </Text>
+            <Text style={styles.sourceToggleCaret}>{isSourceListOpen ? '▴' : '▾'}</Text>
+          </Pressable>
         </View>
 
         {isAwaitingInput ? (
           <Text style={styles.awaitingHint}>
             덧붙일 내용을 기다리는 중입니다. 아래에 붙여넣으면 함께 정리합니다.
           </Text>
-        ) : null}
+        ) : isSourceListOpen ? null : selectedItem.sources.length > 1 ? (
+          // 접힌 채로도 무엇이 붙어 있는지는 알 수 있어야 합니다.
+          <Text style={styles.sourceKinds}>{sourceKindSummary}</Text>
+        ) : (
+          // 아직 아무것도 안 붙인 상태. 조각 이름을 적어봐야 헤더에 이미 있는
+          // 말이라, 그 자리는 붙일 수 있다는 걸 알리는 데 씁니다. 이 앱의 핵심
+          // 동작인데 모르면 릴스 하나짜리 절반에서 끝납니다.
+          <Text style={styles.awaitingHint}>
+            인스타 DM 스크린샷이나 링크를 붙이면 이 글과 함께 다시 정리합니다.
+          </Text>
+        )}
 
-        {selectedItem.sources.map((source) => {
+        {(isSourceListOpen ? selectedItem.sources : []).map((source) => {
           const sourceImageUri = resolveImageUri(source.imageUri);
 
           return (
@@ -648,7 +713,7 @@ export function DetailContent({
               // 아직 한 번도 정리하지 않았는데 '재분석'이라고 하면
               // 이미 정리가 끝난 줄로 읽힙니다.
               <Text style={styles.reanalyzeBtnText}>
-                {isAwaitingInput ? '정리하기 ✨' : '재분석 🧪'}
+                {isAwaitingInput || isSkipped ? '정리하기 ✨' : '재분석 🧪'}
               </Text>
             )}
           </Pressable>
@@ -661,6 +726,17 @@ export function DetailContent({
           <Text style={styles.summaryValue}>
             아직 정리하지 않았습니다. 위에 덧붙일 내용을 넣고 "붙이고 정리"를 누르거나,
             "그냥 정리하기"를 누르면 지금 있는 내용만으로 정리합니다.
+          </Text>
+        ) : isSkipped ? (
+          /*
+           * 정리를 안 하고 담아둔 것.
+           *
+           * 이 상태로 두면 제목 글자로만 찾힙니다. 재료·지역 같은 조합 검색에는
+           * 안 걸린다는 걸 알려줘야, 나중에 안 나온다고 놀라지 않습니다.
+           */
+          <Text style={styles.summaryValue}>
+            정리하지 않고 담아뒀습니다. 지금은 제목으로만 찾힙니다.
+            "정리하기"를 누르면 내용을 읽어 검색 조건까지 만듭니다.
           </Text>
         ) : summaryBody ? (
           <MarkdownViewer markdown={summaryBody} />
@@ -747,13 +823,18 @@ export function DetailContent({
       {(selectedItem.type === 'url' || selectedItem.type === 'image') && thumbnailUri ? (
         <View style={styles.thumbnailPanel}>
           <Text style={styles.detailLabel}>썸네일</Text>
-          <View style={styles.thumbnailPreview}>
+          {/* 조각이 하나뿐이면 위의 조각 줄을 세우지 않으므로, 스크린샷을 크게 보는
+              길이 여기밖에 없습니다. 눌러서 열 수 있어야 합니다. */}
+          <Pressable
+            onPress={() => setExpandedImageUri(thumbnailUri)}
+            style={({ pressed }) => [styles.thumbnailPreview, pressed && { opacity: 0.7 }]}
+          >
             <Image
               source={{ uri: thumbnailUri }}
               style={styles.thumbnailImage as any}
               resizeMode="cover"
             />
-          </View>
+          </Pressable>
         </View>
       ) : null}
 
@@ -817,12 +898,15 @@ export function DetailContent({
         visible={isCategoryPickerVisible}
         current={itemCategory}
         isManual={Boolean(selectedItem.userCategory)}
+        taxonomy={taxonomy}
         onClose={() => setIsCategoryPickerVisible(false)}
         onSelect={(category) => {
           setIsCategoryPickerVisible(false);
           void setItemCategory(selectedItem.id, category);
           setToastMessage(
-            category ? `${getCategoryLabel(category)}(으)로 변경했습니다` : 'AI 분류를 따르도록 되돌렸습니다'
+            category
+              ? `${getCategoryLabel(category, resolveDomainLabel(taxonomy, category))}(으)로 변경했습니다`
+              : 'AI 분류를 따르도록 되돌렸습니다'
           );
         }}
       />
@@ -1273,12 +1357,14 @@ function CategoryPicker({
   visible,
   current,
   isManual,
+  taxonomy,
   onClose,
   onSelect,
 }: {
   visible: boolean;
   current: string;
   isManual: boolean;
+  taxonomy: TaxonomyRegistry;
   onClose: () => void;
   onSelect: (category: string | null) => void;
 }) {
@@ -1304,7 +1390,7 @@ function CategoryPicker({
                 ]}
               >
                 <Text style={[styles.pickerRowText, isCurrent && styles.pickerRowTextActive]}>
-                  {getCategoryLabel(option)}
+                  {getCategoryLabel(option, resolveDomainLabel(taxonomy, option))}
                 </Text>
                 {isCurrent ? <Text style={styles.pickerCheck}>✓</Text> : null}
               </Pressable>
@@ -1722,6 +1808,32 @@ const createStyles = (palette: Palette) =>
     color: palette.accentText,
     fontSize: 15, fontWeight: '900',
     letterSpacing: -0.3,
+  },
+  sourceToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: palette.surfaceStrong,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+  },
+  sourceToggleText: {
+    color: palette.textSecondary,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  sourceToggleCaret: {
+    color: palette.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  sourceKinds: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
   },
   summaryValue: {
     color: palette.textSecondary,

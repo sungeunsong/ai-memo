@@ -245,7 +245,9 @@ function normalizeImportedItem(raw: any): SavedItem | null {
     digest: nullableText(raw.digest),
     thumbnailUrl: nullableText(raw.thumbnailUrl),
     aiStatus:
-      raw.aiStatus === 'completed' || raw.aiStatus === 'failed' ? raw.aiStatus : 'pending',
+      raw.aiStatus === 'completed' || raw.aiStatus === 'failed' || raw.aiStatus === 'skipped'
+        ? raw.aiStatus
+        : 'pending',
     aiError: nullableText(raw.aiError),
     userTitle: nullableText(raw.userTitle),
     userCategory: nullableText(raw.userCategory),

@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -19,10 +21,14 @@ import { useKeyboardHeight } from '@/hooks/useKeyboardHeight';
 type Props = {
   visible: boolean;
   onClose: () => void;
-  onSave: (input: string) => Promise<{ ok: boolean; message?: string }>;
+  onSave: (
+    input: string,
+    options: { skipAi: boolean; imageUris: string[] }
+  ) => Promise<{ ok: boolean; message?: string }>;
   isSaving: boolean;
   initialValue?: string;
-  onPickImage: () => void;
+  /** 고른 사진의 경로를 돌려줍니다. 취소하면 빈 배열입니다. */
+  onPickImages: () => Promise<string[]>;
 };
 
 export function CaptureModal({
@@ -31,7 +37,7 @@ export function CaptureModal({
   onSave,
   isSaving,
   initialValue = '',
-  onPickImage,
+  onPickImages,
 }: Props) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -39,20 +45,59 @@ export function CaptureModal({
   const keyboardHeight = useKeyboardHeight();
   const [input, setInput] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * AI 정리를 돌릴지.
+   *
+   * 기본은 켜짐이고, 끈 것은 이번 저장 한 번에만 적용됩니다. 기억해두면 어느
+   * 날부터 아무것도 정리되지 않는데 사용자는 이유를 알 수 없습니다.
+   */
+  const [useAi, setUseAi] = useState(true);
+  /*
+   * 붙여둔 사진.
+   *
+   * 예전에는 사진을 고르는 순간 저장되고 시트가 닫혔습니다. 이미지가 곧 저장할
+   * 내용 전부이던 시절의 흐름인데, 제목과 토글이 생기면서 사진이 마지막 단계가
+   * 아니게 됐습니다. 고른 뒤에 제목을 쓰려면 확정은 저장 버튼 하나여야 합니다.
+   */
+  const [images, setImages] = useState<string[]>([]);
+  const [isPicking, setIsPicking] = useState(false);
+
+  // 닫으면 비웁니다. 다음에 열었을 때 지난번 사진이 남아 있으면 그건 새 수집이
+  // 아니라 남의 것입니다.
+  useEffect(() => {
+    if (!visible) setImages([]);
+  }, [visible]);
 
   useBackHandler(visible, onClose);
 
   if (!visible) return null;
 
+  const canSave = Boolean(input.trim()) || images.length > 0;
+
   async function handleSave() {
-    if (!input.trim()) return;
+    if (!canSave) return;
     setError(null);
-    const result = await onSave(input);
+    const result = await onSave(input, { skipAi: !useAi, imageUris: images });
     if (result.ok) {
       setInput('');
+      setImages([]);
+      setUseAi(true);
       onClose();
     } else {
       setError(result.message || '저장에 실패했습니다.');
+    }
+  }
+
+  async function handlePick() {
+    setIsPicking(true);
+    try {
+      const picked = await onPickImages();
+      // 같은 사진을 두 번 고르면 한 번만 남깁니다.
+      if (picked.length > 0) {
+        setImages((current) => [...current, ...picked.filter((uri) => !current.includes(uri))]);
+      }
+    } finally {
+      setIsPicking(false);
     }
   }
 
@@ -71,10 +116,23 @@ export function CaptureModal({
           <View style={styles.handle} />
         </View>
 
-        <View style={styles.sheetBody}>
+        {/*
+          키보드가 올라오면 시트가 그만큼 좁아집니다. AI 토글이 생기면서 내용이
+          한 뼘 길어졌고, 그 바람에 '이미지에서 가져오기'와 저장 버튼이 키보드
+          아래로 밀려 손이 닿지 않았습니다. 접근할 수 없는 버튼은 없는 버튼입니다.
+          내용이 넘치면 밀어서 볼 수 있게 둡니다.
+        */}
+        <ScrollView
+          style={styles.sheetBody}
+          contentContainerStyle={styles.sheetBodyContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
           <Text style={styles.title}>새 지식 수집</Text>
           <Text style={styles.subtitle}>
-            유튜브, 인스타, 노션 링크 또는 텍스트를 붙여넣으세요
+            {useAi
+              ? '유튜브, 인스타, 노션 링크 또는 텍스트를 붙여넣으세요'
+              : '적어둔 글이 그대로 제목이 됩니다. 나중에 상세 화면에서 정리할 수 있습니다'}
           </Text>
 
           <TextInput
@@ -83,24 +141,69 @@ export function CaptureModal({
             autoFocus
             multiline
             onChangeText={setInput}
-            placeholder="URL 또는 텍스트를 입력하세요..."
+            placeholder={useAi ? 'URL 또는 텍스트를 입력하세요...' : '제목을 적으세요...'}
             placeholderTextColor={palette.textMuted}
             style={styles.input}
             value={input}
           />
 
+          {/*
+            AI 정리를 끄는 자리.
+            사진 한 장에 제목만 붙이면 될 일에도 정리를 기다리게 하면, 내가 아는
+            것을 기계가 알아내기를 기다리는 셈입니다. 대신 이렇게 담은 것은
+            검색의 재료(fact)가 없어서 제목으로만 찾힙니다. 그래서 나중에
+            정리할 수 있다는 것을 여기서 미리 알려둡니다.
+          */}
+          <Pressable
+            onPress={() => setUseAi((current) => !current)}
+            style={({ pressed }) => [styles.aiToggle, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={styles.aiToggleTitle}>{useAi ? '✨ AI 정리 켬' : '🗂️ 그냥 저장'}</Text>
+            <View style={[styles.aiSwitch, useAi && styles.aiSwitchOn]}>
+              <View style={[styles.aiKnob, useAi && styles.aiKnobOn]} />
+            </View>
+          </Pressable>
+
+          {/* 붙여둔 사진. 저장하기 전까지는 여기서 떼고 다시 고를 수 있습니다.
+              첫 장이 대표가 되고 나머지는 조각으로 붙습니다. */}
+          {images.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.imageStrip}
+            >
+              {images.map((uri, index) => (
+                <View key={uri} style={styles.imageThumbWrap}>
+                  <Image source={{ uri }} style={styles.imageThumb as any} resizeMode="cover" />
+                  {index === 0 && images.length > 1 ? (
+                    <Text style={styles.imageThumbBadge}>대표</Text>
+                  ) : null}
+                  <Pressable
+                    onPress={() => setImages((current) => current.filter((entry) => entry !== uri))}
+                    hitSlop={8}
+                    style={({ pressed }) => [styles.imageThumbRemove, pressed && { opacity: 0.6 }]}
+                  >
+                    <Text style={styles.imageThumbRemoveText}>✕</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+          ) : null}
+
           {/* 스크린샷은 찍는 순간 공유하는 게 가장 빠르지만,
               갤러리에 이미 쌓아둔 것을 나중에 넣는 경로도 필요합니다. */}
           <Pressable
-            onPress={onPickImage}
-            disabled={isSaving}
+            onPress={() => void handlePick()}
+            disabled={isSaving || isPicking}
             style={({ pressed }) => [
               styles.imagePickBtn,
-              isSaving && { opacity: 0.5 },
+              (isSaving || isPicking) && { opacity: 0.5 },
               { transform: [{ scale: pressed ? 0.97 : 1 }] },
             ]}
           >
-            <Text style={styles.imagePickBtnText}>🖼️  이미지에서 가져오기</Text>
+            <Text style={styles.imagePickBtnText}>
+              {images.length > 0 ? '🖼️  사진 더 고르기' : '🖼️  이미지에서 가져오기'}
+            </Text>
           </Pressable>
 
           {error ? (
@@ -118,11 +221,11 @@ export function CaptureModal({
               <Text style={styles.cancelBtnText}>취소</Text>
             </Pressable>
             <Pressable
-              disabled={isSaving || !input.trim()}
+              disabled={isSaving || !canSave}
               onPress={handleSave}
               style={({ pressed }) => [
                 styles.saveBtn,
-                (isSaving || !input.trim()) && styles.saveBtnDisabled,
+                (isSaving || !canSave) && styles.saveBtnDisabled,
                 { transform: [{ scale: pressed ? 0.95 : 1 }] },
               ]}
             >
@@ -133,7 +236,7 @@ export function CaptureModal({
               )}
             </Pressable>
           </View>
-        </View>
+        </ScrollView>
       </View>
     </View>
   );
@@ -161,8 +264,72 @@ export function CaptureFloatingButton({ onPress }: { onPress: () => void }) {
 
 const createStyles = (palette: Palette) =>
   StyleSheet.create({
+  aiToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+    backgroundColor: palette.surfaceRaised,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+  },
+  aiToggleTitle: { color: palette.textPrimary, fontSize: 13, fontWeight: '800' },
+  aiSwitch: {
+    width: 44,
+    height: 26,
+    borderRadius: 999,
+    backgroundColor: palette.surfaceStrong,
+    padding: 3,
+    justifyContent: 'center',
+  },
+  aiSwitchOn: { backgroundColor: palette.accent },
+  aiKnob: {
+    width: 20,
+    height: 20,
+    borderRadius: 999,
+    backgroundColor: palette.textMuted,
+  },
+  aiKnobOn: { backgroundColor: palette.onAccent, alignSelf: 'flex-end' },
+  imageStrip: { gap: spacing[2], paddingVertical: 2 },
+  imageThumbWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+    backgroundColor: palette.surface,
+  },
+  imageThumb: { width: '100%', height: '100%' },
+  imageThumbBadge: {
+    position: 'absolute',
+    left: 0,
+    bottom: 0,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    backgroundColor: palette.accent,
+    color: palette.onAccent,
+    fontSize: 9,
+    fontWeight: '900',
+    borderTopRightRadius: 8,
+    overflow: 'hidden',
+  },
+  imageThumbRemove: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 20,
+    height: 20,
+    borderRadius: 999,
+    backgroundColor: palette.overlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageThumbRemoveText: { color: '#ffffff', fontSize: 11, fontWeight: '900' },
   imagePickBtn: {
-    marginTop: spacing[3],
     backgroundColor: palette.surfaceRaised,
     borderRadius: 14,
     borderWidth: 1,
@@ -199,6 +366,9 @@ const createStyles = (palette: Palette) =>
     shadowRadius: 30,
     shadowOffset: { width: 0, height: -10 },
     elevation: 24,
+    // 남은 공간보다 커지지 않게 합니다. 키보드가 올라오면 쓸 수 있는 높이가
+    // 60%보다 작아지는데, 줄어들지 못하면 위쪽이 화면 밖으로 잘려나갑니다.
+    flexShrink: 1,
     maxHeight: '60%',
   },
   sheetHeader: {
@@ -212,7 +382,8 @@ const createStyles = (palette: Palette) =>
     borderRadius: 99,
     opacity: 0.5,
   },
-  sheetBody: {
+  sheetBody: {},
+  sheetBodyContent: {
     paddingHorizontal: spacing[6],
     paddingBottom: spacing[8],
     gap: spacing[3],

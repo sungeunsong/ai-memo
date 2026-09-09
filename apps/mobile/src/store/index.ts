@@ -12,6 +12,8 @@ import {
   recoverStalledEnrichAsync,
   recoverStalledSyncJobsAsync,
   getTaxonomyAsync,
+  renameDomainAsync,
+  mergeDomainsAsync,
   migrateItemContentsToV2Async,
   seedTaxonomyAsync,
   removeItemSourceAsync,
@@ -29,6 +31,7 @@ import {
   fetchImageMetadataPatch,
 } from '@/features/metadata/service';
 import { buildFallbackItem, buildFallbackImageItem, normalizeUrl } from '@/features/items/fallback';
+import { extractManualTitle } from '@/utils/formatters';
 import {
   persistImage,
   readImageForAnalysis,
@@ -116,12 +119,12 @@ type AppStore = {
   saveUrl: (
     input: string,
     savedFrom?: string,
-    options?: { deferEnrich?: boolean }
+    options?: { deferEnrich?: boolean; skipAi?: boolean; title?: string }
   ) => Promise<SaveUrlResult>;
   saveImage: (
     sourceUri: string,
     savedFrom?: string,
-    options?: { deferEnrich?: boolean }
+    options?: { deferEnrich?: boolean; skipAi?: boolean; title?: string }
   ) => Promise<SaveUrlResult>;
   selectItem: (itemId: string) => void;
   updateUserNote: (itemId: string, userNote: string) => Promise<void>;
@@ -135,13 +138,16 @@ type AppStore = {
    */
   attachScreenshotsToItem: (
     itemId: string,
-    imageUris: string[]
+    imageUris: string[],
+    options?: { skipAi?: boolean }
   ) => Promise<{ ok: boolean; added: number; skipped: number; message?: string }>;
   /** 잘못 붙인 조각을 떼고 남은 것 기준으로 다시 정리합니다. */
   detachSourceFromItem: (sourceId: string) => Promise<void>;
   /** 추가 입력 대기를 끝냅니다. input이 있으면 붙이고, 없으면 있는 대로 정리합니다. */
   resolveAwaitingInput: (itemId: string, input?: string) => Promise<void>;
   setItemCategory: (itemId: string, category: string | null) => Promise<void>;
+  renameDomain: (key: string, label: string) => Promise<void>;
+  mergeDomains: (fromKey: string, into: { key: string; label: string }) => Promise<number>;
   setItemDeadline: (itemId: string, deadline: string | null) => Promise<void>;
   deleteItem: (itemId: string) => Promise<void>;
   resumeSync: () => Promise<void>;
@@ -273,7 +279,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
         syncStatus: 'queued' as const,
         // 덧붙일 내용을 기다리는 동안에는 AI를 돌리지 않습니다.
         // 'pending'으로 두면 회수 로직이 '앱이 죽어 끊긴 것'으로 보고 낚아챕니다.
-        aiStatus: options?.deferEnrich ? 'awaiting_input' : base.aiStatus,
+        aiStatus: options?.skipAi
+          ? 'skipped'
+          : options?.deferEnrich
+            ? 'awaiting_input'
+            : base.aiStatus,
+        // 적어준 글이 곧 제목입니다. userTitle에 넣어야 나중에 정리를 돌려도
+        // AI 제목이 이걸 덮지 않습니다.
+        userTitle: options?.skipAi ? extractManualTitle(input) : base.userTitle,
         sources: [firstSource],
       };
 
@@ -289,7 +302,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         syncWorkerMessage: null,
       }));
 
-      if (!options?.deferEnrich) {
+      if (!options?.deferEnrich && !options?.skipAi) {
         void runEnrichForItem(fallbackItem, set, get);
       }
       void runSyncWorker(set, get);
@@ -336,7 +349,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
         thumbnailUrl: storedUri,
         syncStatus: 'queued' as const,
         // 스크린샷도 어디에 담을지 고르는 동안에는 AI를 돌리지 않습니다.
-        aiStatus: options?.deferEnrich ? 'awaiting_input' : draft.aiStatus,
+        aiStatus: options?.skipAi
+          ? 'skipped'
+          : options?.deferEnrich
+            ? 'awaiting_input'
+            : draft.aiStatus,
+        // AI를 끄고 담을 때는 사용자가 적어준 글이 제목입니다.
+        userTitle: options?.skipAi ? (options.title?.trim() || null) : draft.userTitle,
+        // 기본 요약이 '이미지에서 내용을 읽는 중입니다'인데, 읽지 않기로 한 것이라
+        // 그대로 두면 영영 안 끝나는 작업처럼 보입니다.
+        summary: options?.skipAi ? '정리하지 않고 담아뒀습니다.' : draft.summary,
         sources: [],
       };
       const firstSource = buildInitialSource(fallbackItem);
@@ -354,7 +376,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         syncWorkerMessage: null,
       }));
 
-      if (!options?.deferEnrich) {
+      if (!options?.deferEnrich && !options?.skipAi) {
         void enrichSavedItemMetadata(
           fallbackItem.id,
           async () => {
@@ -513,7 +535,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
    * 장마다 재정리가 돌아 AI 호출이 배로 나가고, 그동안 다음 장을 고를 수도 없습니다.
    * 글자 읽기는 장마다 필요하지만 종합은 마지막에 한 번이면 됩니다.
    */
-  async attachScreenshotsToItem(itemId, imageUris) {
+  async attachScreenshotsToItem(itemId, imageUris, options) {
     if (!get().isReady) {
       return { ok: false, added: 0, skipped: 0, message: '로컬 저장소가 아직 준비되지 않았습니다.' };
     }
@@ -533,7 +555,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
         // 글자를 먼저 읽습니다. 조각에 글이 남아야 검색에 잡힙니다.
         // DM에만 있는 전화번호나 제품명으로 찾을 수 있어야 하기 때문입니다.
-        const base64 = await readImageForAnalysis(storedUri);
+        //
+        // 정리를 끄고 담는 경우에는 읽지 않습니다. 사진을 그대로 두겠다는 뜻이라
+        // 여기서 AI를 부르면 껐다는 말이 무색해집니다. 나중에 상세 화면에서
+        // '정리하기'를 누르면 그때 이 조각들까지 함께 읽습니다.
+        const base64 = options?.skipAi ? null : await readImageForAnalysis(storedUri);
         const ocr = base64 ? await fetchImageMetadataPatch(base64, item.createdAt) : null;
         const extracted = ocr?.contentText?.trim() ?? '';
 
@@ -555,14 +581,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
 
       // 종합은 마지막에 한 번만. 장마다 돌리면 호출이 장 수만큼 늘어납니다.
-      if (added > 0) {
+      if (added > 0 && !options?.skipAi) {
         await reenrichFromSources(itemId, set, get);
       }
 
       return { ok: added > 0, added, skipped };
     } catch (error) {
       // 도중에 실패해도 그때까지 붙인 것은 살립니다. 다시 고르게 만들 이유가 없습니다.
-      if (added > 0) {
+      if (added > 0 && !options?.skipAi) {
         await reenrichFromSources(itemId, set, get).catch(() => {});
       }
       const message = error instanceof Error ? error.message : '스크린샷을 붙이지 못했습니다.';
@@ -644,6 +670,34 @@ export const useAppStore = create<AppStore>((set, get) => ({
       await queueUpsertItemSyncAsync(itemToQueue);
     }
     void runSyncWorker(set, get);
+  },
+  /**
+   * 분야의 이름을 고칩니다.
+   *
+   * 아이템은 건드리지 않습니다. 이름과 식별자가 따로라 표시만 바뀌고, 그
+   * 이름이 다음 정리 요청의 프롬프트에 실려 분류를 그쪽으로 모읍니다.
+   */
+  async renameDomain(key, label) {
+    const trimmed = label.trim();
+    if (!get().isReady || !trimmed) return;
+
+    await renameDomainAsync(key, trimmed);
+    await refreshTaxonomyAsync(set);
+  },
+  /**
+   * 두 분야를 하나로 합칩니다. 옮긴 아이템 수를 돌려줍니다.
+   *
+   * 아이템의 구조화 데이터가 통째로 바뀌므로 목록을 다시 읽습니다. 들고 있는
+   * 것만 고치면 화면은 맞아 보여도 facet 색인이 옛 분야로 남습니다.
+   */
+  async mergeDomains(fromKey, into) {
+    if (!get().isReady || fromKey === into.key) return 0;
+
+    const { movedItems } = await mergeDomainsAsync(fromKey, into);
+    await refreshTaxonomyAsync(set);
+    await get().reloadItems();
+
+    return movedItems;
   },
   /**
    * 마감일을 직접 고칩니다. null이면 지정을 해제하고 AI 값을 따릅니다.
@@ -921,6 +975,35 @@ async function fillMissingSourceTexts(
   }
 
   for (const source of item.sources) {
+    /*
+     * 스크린샷 조각인데 읽어둔 글이 없으면 여기서 읽습니다.
+     *
+     * 사진 여러 장으로 만든 아이템의 첫 장이 이 경우입니다. 나머지 장은 붙일 때
+     * 읽히는데 첫 장은 아이템 자신이라 그 과정을 안 거칩니다. 그대로 종합하면
+     * 첫 장의 내용만 쏙 빠진 정리본이 나옵니다.
+     */
+    if (!source.sourceUrl && source.imageUri && !(source.rawText ?? '').trim()) {
+      const base64 = await readImageForAnalysis(source.imageUri);
+      const ocr = base64 ? await fetchImageMetadataPatch(base64, item.createdAt) : null;
+      const text = ocr?.contentText?.trim();
+      if (!text) continue;
+
+      await updateItemSourceTextAsync(source.id, text).catch(() => {});
+      set((state) => ({
+        items: state.items.map((entry) =>
+          entry.id === itemId
+            ? {
+                ...entry,
+                sources: entry.sources.map((current) =>
+                  current.id === source.id ? { ...current, rawText: text } : current
+                ),
+              }
+            : entry
+        ),
+      }));
+      continue;
+    }
+
     if (!needsBodyFetch(source)) continue;
 
     const body = await fetchSourceBodyText(source.sourceUrl!).catch(() => null);

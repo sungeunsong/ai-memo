@@ -7,7 +7,15 @@ export type ItemType = 'url' | 'text' | 'image';
  * 앱이 죽어서 끊긴 것'으로 보고 실패 처리한 뒤 재개하는데(store의 회수 로직),
  * 입력을 기다리는 항목도 겉모습이 똑같아서 그대로 두면 멋대로 AI가 돌아갑니다.
  */
-export type AIStatus = 'pending' | 'awaiting_input' | 'completed' | 'failed';
+/**
+ * AI 정리의 상태.
+ *
+ * 'skipped'는 사용자가 정리를 안 돌리기로 하고 저장한 것입니다. 실패도 대기도
+ * 아니라 따로 둡니다. 'completed'로 두면 정리한 게 없는데 '정리 완료'라고
+ * 적히고, 'awaiting_input'으로 두면 화면이 계속 덧붙일 내용을 요구합니다.
+ * 나중에 마음이 바뀌면 상세 화면에서 정리를 돌릴 수 있습니다.
+ */
+export type AIStatus = 'pending' | 'awaiting_input' | 'completed' | 'failed' | 'skipped';
 
 /**
  * Source의 종류.

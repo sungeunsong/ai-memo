@@ -19,6 +19,8 @@ type Props = {
   /** 탭에 못 세운 분야가 남아 있는지 */
   hasHiddenTabs: boolean;
   onOpenTabPicker: () => void;
+  /** 탭을 길게 눌렀을 때. 그 분야의 이름을 고치거나 합치는 자리로 갑니다. */
+  onManageTab: (key: string) => void;
   /** 선택된 facet 키. 서로 AND로 묶입니다. */
   selectedFacets: string[];
   onToggleFacet: (key: string) => void;
@@ -48,6 +50,7 @@ export function SearchFilterBar({
   tabs,
   hasHiddenTabs,
   onOpenTabPicker,
+  onManageTab,
   selectedFacets,
   onToggleFacet,
   onClearFacets,
@@ -129,6 +132,14 @@ export function SearchFilterBar({
             <Pressable
               key={tab.key}
               onPress={() => onCategoryChange(tab.key)}
+              /*
+               * 분야를 고치는 자리는 시트 안에 있는데, 시트를 여는 '더보기'는
+               * 숨은 탭이 있을 때만 뜹니다. 분야가 적으면 들어갈 길이 없습니다.
+               * 고치고 싶은 분야는 대개 지금 눈앞에 보이는 그 탭이라, 여기서
+               * 곧바로 열어줍니다.
+               */
+              onLongPress={() => onManageTab(tab.key)}
+              delayLongPress={350}
               style={({ pressed }) => [
                 styles.tab,
                 isActive && styles.tabActive,

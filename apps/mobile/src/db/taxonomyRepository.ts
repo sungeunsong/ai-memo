@@ -105,8 +105,11 @@ export async function insertFactDefinitionIfAbsentAsync(
  * 소유한 값이라 앱이 고치면 반영되어야 합니다. 실제로 몇 개 항목의 검색 축을
  * 잘못 잡아 고쳤는데, 넣지 않고 건너뛰면 이미 앱을 쓰던 기기만 옛 규칙으로 남습니다.
  *
- * 쓰인 횟수와 만든 시각은 그대로 둡니다. 사용 이력은 사전이 아니라 사용자의 것입니다.
- * 사용자가 정의를 직접 고치는 기능이 생기면, 그때는 소유자를 구분해야 합니다.
+ * 다만 분야의 이름은 이제 사용자가 고칠 수 있는 값이라 여기서 덮지 않습니다.
+ * 심기는 앱이 뜰 때마다 도는데, 덮으면 사용자가 '육아'를 다른 이름으로 바꿔둬도
+ * 다음 실행에서 원래대로 돌아갑니다. 앱이 소유한 것은 이름이 아니라 규칙입니다.
+ *
+ * 쓰인 횟수와 만든 시각도 그대로 둡니다. 사용 이력은 사전이 아니라 사용자의 것입니다.
  */
 export async function upsertSeedDomainDefinitionAsync(
   db: SQLiteDatabase,
@@ -116,7 +119,6 @@ export async function upsertSeedDomainDefinitionAsync(
     `INSERT INTO domain_definitions (key, label, status, use_count, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET
-       label = excluded.label,
        status = excluded.status,
        updated_at = excluded.updated_at`,
     definition.key,
@@ -228,4 +230,77 @@ function mapFactRow(row: FactRow): FactDefinition {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/**
+ * 분야의 표시 이름을 바꿉니다.
+ *
+ * key는 건드리지 않습니다. 아이템과 항목 정의가 전부 key로 물려 있어서,
+ * 이름을 바꾸는 일이 저장된 것을 하나도 건드리지 않게 됩니다.
+ */
+export async function updateDomainDefinitionLabelAsync(
+  db: SQLiteDatabase,
+  key: string,
+  label: string,
+  updatedAt: string
+) {
+  await db.runAsync(
+    `UPDATE domain_definitions SET label = ?, updated_at = ? WHERE key = ?`,
+    label,
+    updatedAt,
+    key
+  );
+}
+
+/** 합치기로 새로 계산한 분야 정의를 그대로 씁니다. */
+export async function replaceDomainDefinitionAsync(
+  db: SQLiteDatabase,
+  definition: DomainDefinition
+) {
+  await db.runAsync(
+    `UPDATE domain_definitions
+     SET label = ?, status = ?, use_count = ?, created_at = ?, updated_at = ?
+     WHERE key = ?`,
+    definition.label,
+    definition.status,
+    definition.useCount,
+    definition.createdAt,
+    definition.updatedAt,
+    definition.key
+  );
+}
+
+export async function deleteDomainDefinitionAsync(db: SQLiteDatabase, key: string) {
+  await db.runAsync(`DELETE FROM domain_definitions WHERE key = ?`, key);
+}
+
+export async function deleteFactDefinitionAsync(
+  db: SQLiteDatabase,
+  domainKey: string,
+  key: string
+) {
+  await db.runAsync(
+    `DELETE FROM fact_definitions WHERE domain_key = ? AND key = ?`,
+    domainKey,
+    key
+  );
+}
+
+/** 항목 정의를 다른 분야로 옮깁니다. 옮길 자리에 같은 이름이 없을 때만 부릅니다. */
+export async function moveFactDefinitionAsync(
+  db: SQLiteDatabase,
+  fromDomainKey: string,
+  key: string,
+  intoDomainKey: string,
+  updatedAt: string
+) {
+  await db.runAsync(
+    `UPDATE fact_definitions
+     SET domain_key = ?, updated_at = ?
+     WHERE domain_key = ? AND key = ?`,
+    intoDomainKey,
+    updatedAt,
+    fromDomainKey,
+    key
+  );
 }

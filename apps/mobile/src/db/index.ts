@@ -3,6 +3,11 @@ import { openDatabaseAsync, SQLiteDatabase } from 'expo-sqlite';
 
 import { createTablesStatement } from '@/db/schema';
 import {
+  mergeDomainDefinition,
+  planFactMove,
+  rewriteSerializedContentForMerge,
+} from '@/features/taxonomy/merge';
+import {
   deleteItemRowAsync as deleteItemRowInRepositoryAsync,
   listItemContentsAsync,
   updateItemContentAsync,
@@ -13,6 +18,7 @@ import {
   updateItemMetadataAsync as updateItemMetadataInRepositoryAsync,
   updateItemSyncStatusAsync as updateItemSyncStatusInRepositoryAsync,
   deleteItemAsync as deleteItemInRepositoryAsync,
+  replaceUserCategoryAsync,
 } from '@/db/itemsRepository';
 import {
   getNextSyncRetryAtAsync as getNextSyncRetryAtInRepositoryAsync,
@@ -35,6 +41,11 @@ import {
 } from '@/db/sourcesRepository';
 import {
   bumpDomainDefinitionUseAsync as bumpDomainUseInRepositoryAsync,
+  updateDomainDefinitionLabelAsync,
+  replaceDomainDefinitionAsync,
+  deleteDomainDefinitionAsync,
+  deleteFactDefinitionAsync,
+  moveFactDefinitionAsync,
   bumpFactDefinitionUseAsync as bumpFactUseInRepositoryAsync,
   insertDomainDefinitionIfAbsentAsync,
   insertFactDefinitionIfAbsentAsync,
@@ -437,9 +448,42 @@ export async function migrateItemContentsToV2Async(): Promise<{ migrated: number
 }
 
 export async function seedTaxonomyAsync(now = Date.now()) {
-  if (Platform.OS === 'web') return;
-
   const stamp = new Date(now).toISOString();
+
+  if (Platform.OS === 'web') {
+    // 규칙(status·정책)은 앱이 소유하니 심고, 이름과 사용 이력은 그대로 둡니다.
+    // 사용자가 고친 이름이 앱을 열 때마다 되돌아가면 고칠 이유가 없어집니다.
+    const domains = getWebDomains();
+    for (const seed of SEED_DOMAINS) {
+      const found = domains.find((domain) => domain.key === seed.key);
+      if (found) {
+        found.status = 'confirmed';
+        found.updatedAt = stamp;
+        continue;
+      }
+      domains.push({ ...seed, status: 'confirmed', useCount: 0, createdAt: stamp, updatedAt: stamp });
+    }
+    saveWebDomains(domains);
+
+    const facts = getWebFacts();
+    for (const seed of SEED_FACTS) {
+      const index = facts.findIndex(
+        (fact) => fact.domainKey === seed.domainKey && fact.key === seed.key
+      );
+      const previous = index >= 0 ? facts[index] : null;
+      const next: FactDefinition = {
+        ...seed,
+        status: 'confirmed',
+        useCount: previous?.useCount ?? 0,
+        createdAt: previous?.createdAt ?? stamp,
+        updatedAt: stamp,
+      };
+      if (index >= 0) facts[index] = next;
+      else facts.push(next);
+    }
+    saveWebFacts(facts);
+    return;
+  }
 
   await runWriteAsync((database) =>
     database.withTransactionAsync(async () => {
@@ -470,7 +514,13 @@ export async function getTaxonomyAsync(): Promise<{
   domains: DomainDefinition[];
   facts: FactDefinition[];
 }> {
-  if (Platform.OS === 'web') return { domains: [], facts: [] };
+  if (Platform.OS === 'web') {
+    // 많이 쓰인 순. 탭을 세우는 쪽이 이 순서를 그대로 씁니다.
+    const domains = [...getWebDomains()].sort(
+      (a, b) => b.useCount - a.useCount || a.key.localeCompare(b.key)
+    );
+    return { domains, facts: getWebFacts() };
+  }
 
   const database = await getDatabaseAsync();
   const [domains, facts] = await Promise.all([
@@ -485,7 +535,30 @@ export async function registerProvisionalDefinitionsAsync(
   domain: DomainDefinition | null,
   facts: FactDefinition[]
 ) {
-  if (Platform.OS === 'web') return;
+  if (Platform.OS === 'web') {
+    if (domain) {
+      const domains = getWebDomains();
+      if (!domains.some((entry) => entry.key === domain.key)) {
+        domains.push(domain);
+        saveWebDomains(domains);
+      }
+    }
+
+    if (facts.length > 0) {
+      const stored = getWebFacts();
+      let added = false;
+      for (const fact of facts) {
+        const exists = stored.some(
+          (entry) => entry.domainKey === fact.domainKey && entry.key === fact.key
+        );
+        if (exists) continue;
+        stored.push(fact);
+        added = true;
+      }
+      if (added) saveWebFacts(stored);
+    }
+    return;
+  }
 
   await runWriteAsync((database) =>
     database.withTransactionAsync(async () => {
@@ -499,9 +572,32 @@ export async function registerProvisionalDefinitionsAsync(
 
 /** 쓰인 횟수를 올립니다. 임계치를 넘으면 확정으로 올라갑니다. */
 export async function bumpTaxonomyUseAsync(domainKey: string, factKeys: string[]) {
-  if (Platform.OS === 'web') return;
-
   const stamp = new Date().toISOString();
+
+  if (Platform.OS === 'web') {
+    const domains = getWebDomains();
+    const domain = domains.find((entry) => entry.key === domainKey);
+    if (domain) {
+      domain.useCount += 1;
+      if (domain.useCount >= CONFIRM_THRESHOLD) domain.status = 'confirmed';
+      domain.updatedAt = stamp;
+      saveWebDomains(domains);
+    }
+
+    if (factKeys.length > 0) {
+      const facts = getWebFacts();
+      for (const key of factKeys) {
+        const fact = facts.find((entry) => entry.domainKey === domainKey && entry.key === key);
+        if (!fact) continue;
+        fact.useCount += 1;
+        if (fact.useCount >= CONFIRM_THRESHOLD) fact.status = 'confirmed';
+        fact.updatedAt = stamp;
+      }
+      saveWebFacts(facts);
+    }
+    return;
+  }
+
   await runWriteAsync((database) =>
     database.withTransactionAsync(async () => {
       await bumpDomainUseInRepositoryAsync(database, domainKey, CONFIRM_THRESHOLD, stamp);
@@ -510,6 +606,166 @@ export async function bumpTaxonomyUseAsync(domainKey: string, factKeys: string[]
       }
     })
   );
+}
+
+/**
+ * 분야의 표시 이름을 바꿉니다.
+ *
+ * key는 그대로 둡니다. 아이템도 항목 정의도 전부 key로 물려 있어서, 이름을
+ * 바꾸는 일이 저장된 것을 하나도 건드리지 않습니다. 아이템 안에 박힌 이름은
+ * 저장 시점의 사본인데, 화면은 사전을 먼저 보므로 그쪽을 고칠 이유는 없습니다.
+ *
+ * 이름은 다음 정리 요청의 프롬프트에도 실립니다. 그래서 이름을 넓게 고쳐두면
+ * 모델이 다음 글을 같은 분야로 모읍니다. 표시만 바꾸는 일이 아닙니다.
+ */
+export async function renameDomainAsync(key: string, label: string): Promise<void> {
+  const stamp = new Date().toISOString();
+
+  // 사전에 없는 분야일 수 있습니다. 웹이 사전을 저장하기 전에 만들어진 아이템이
+  // 그렇습니다. 그때는 이름만 바꿀 데가 없으니 정의부터 만들어 둡니다.
+  // 없다고 그냥 돌아가면 사용자에게는 눌러도 아무 일이 없는 것으로 보입니다.
+  const created: DomainDefinition = {
+    key,
+    label,
+    status: 'provisional',
+    useCount: 0,
+    createdAt: stamp,
+    updatedAt: stamp,
+  };
+
+  if (Platform.OS === 'web') {
+    const domains = getWebDomains();
+    const domain = domains.find((entry) => entry.key === key);
+    if (domain) {
+      domain.label = label;
+      domain.updatedAt = stamp;
+    } else {
+      domains.push(created);
+    }
+    saveWebDomains(domains);
+    return;
+  }
+
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      await insertDomainDefinitionIfAbsentAsync(database, created);
+      await updateDomainDefinitionLabelAsync(database, key, label, stamp);
+    })
+  );
+}
+
+/**
+ * 두 분야를 하나로 합칩니다. fromKey가 사라지고 intoKey만 남습니다.
+ *
+ * 되돌릴 수 없습니다. 사라지는 쪽을 남겨두면 아이템이 어느 쪽을 가리키는지가
+ * 흐려지고, 그 상태로 다음 정리가 돌면 다시 갈라집니다. 부르는 쪽에서 확인을
+ * 받고 옵니다.
+ *
+ * 손대는 곳이 다섯입니다. 하나라도 빠지면 합친 뒤에 유령이 남습니다.
+ * 아이템의 구조화 데이터, 사용자가 직접 지정한 분류, 분야 정의, 항목 정의,
+ * 그리고 고정해둔 탭입니다. 마지막 하나는 화면이 들고 있어 부르는 쪽이 맡습니다.
+ */
+export async function mergeDomainsAsync(
+  fromKey: string,
+  into: { key: string; label: string }
+): Promise<{ movedItems: number }> {
+  if (fromKey === into.key) return { movedItems: 0 };
+
+  const stamp = new Date().toISOString();
+
+  if (Platform.OS === 'web') {
+    let movedItems = 0;
+    const items = getWebItems().map((item) => {
+      const content = rewriteSerializedContentForMerge(item.content, fromKey, into);
+      const category = item.userCategory === fromKey ? into.key : item.userCategory;
+
+      if (!content && category === item.userCategory) return item;
+
+      movedItems += 1;
+      return {
+        ...item,
+        content: content ?? item.content,
+        userCategory: category,
+        updatedAt: stamp,
+      };
+    });
+    if (movedItems > 0) saveWebItems(items);
+
+    const facts = getWebFacts();
+    const { move, drop } = planFactMove(
+      facts.filter((fact) => fact.domainKey === fromKey),
+      facts,
+      into.key
+    );
+    const dropped = new Set(drop.map((fact) => `${fact.domainKey}.${fact.key}`));
+    const movedKeys = new Set(move.map((fact) => fact.key));
+    saveWebFacts(
+      facts
+        .filter((fact) => !dropped.has(`${fact.domainKey}.${fact.key}`))
+        .map((fact) =>
+          fact.domainKey === fromKey && movedKeys.has(fact.key)
+            ? { ...fact, domainKey: into.key, updatedAt: stamp }
+            : fact
+        )
+    );
+
+    const domains = getWebDomains();
+    const absorbed = domains.find((entry) => entry.key === fromKey);
+    const surviving = domains.find((entry) => entry.key === into.key);
+    if (surviving && absorbed) {
+      Object.assign(surviving, mergeDomainDefinition(surviving, absorbed, CONFIRM_THRESHOLD, stamp));
+    }
+    saveWebDomains(domains.filter((entry) => entry.key !== fromKey));
+
+    return { movedItems };
+  }
+
+  const database = await getDatabaseAsync();
+  const allFacts = await listFactDefinitionsAsync(database);
+  const { move, drop } = planFactMove(
+    allFacts.filter((fact) => fact.domainKey === fromKey),
+    allFacts,
+    into.key
+  );
+
+  let movedItems = 0;
+
+  await runWriteAsync((db) =>
+    db.withTransactionAsync(async () => {
+      const rows = await listItemContentsAsync(db);
+      for (const row of rows) {
+        const rewritten = rewriteSerializedContentForMerge(row.content, fromKey, into);
+        if (!rewritten) continue;
+        await updateItemContentAsync(db, row.id, rewritten);
+        movedItems += 1;
+      }
+
+      await replaceUserCategoryAsync(db, fromKey, into.key, stamp);
+
+      for (const fact of move) {
+        await moveFactDefinitionAsync(db, fromKey, fact.key, into.key, stamp);
+      }
+      for (const fact of drop) {
+        await deleteFactDefinitionAsync(db, fromKey, fact.key);
+      }
+
+      // 정의는 없을 수도 있습니다(사전에 등록되기 전의 분야). 아이템을 옮기는
+      // 일이 본체이므로, 정의가 없다고 합치기 자체를 그만두지는 않습니다.
+      const domains = await listDomainDefinitionsAsync(db);
+      const absorbed = domains.find((entry) => entry.key === fromKey);
+      const surviving = domains.find((entry) => entry.key === into.key);
+
+      if (surviving && absorbed) {
+        await replaceDomainDefinitionAsync(
+          db,
+          mergeDomainDefinition(surviving, absorbed, CONFIRM_THRESHOLD, stamp)
+        );
+      }
+      await deleteDomainDefinitionAsync(db, fromKey);
+    })
+  );
+
+  return { movedItems };
 }
 
 export async function recoverStalledSyncJobsAsync(now = Date.now()) {
@@ -806,6 +1062,62 @@ async function getDatabaseAsync() {
   }
 
   return databasePromise;
+}
+
+/*
+ * 웹의 사전 저장소.
+ *
+ * 예전에는 웹에서 사전을 통째로 건너뛰었습니다(빈 목록 반환). 그래서 웹에서
+ * 저장한 글은 AI가 만든 분야가 어디에도 남지 않았고, 다음 요청의 프롬프트에도
+ * 실리지 않아 같은 대상이 매번 다른 이름으로 들어왔습니다. 이름을 고치거나
+ * 합치는 일은 애초에 가리킬 대상이 없었습니다.
+ *
+ * 아이템과 설정이 이미 localStorage에 있으니 사전도 같은 자리에 둡니다.
+ * 정의는 몇십 개 수준이라 통짜로 읽고 쓰는 것으로 충분합니다.
+ */
+const WEB_TAXONOMY_DOMAINS_KEY = 'ai-memo.taxonomy-domains';
+const WEB_TAXONOMY_FACTS_KEY = 'ai-memo.taxonomy-facts';
+
+let memoryDomains: DomainDefinition[] = [];
+let memoryFacts: FactDefinition[] = [];
+
+function readWebList<T>(storageKey: string, fallback: T[]): T[] {
+  if (typeof globalThis.localStorage === 'undefined') return [...fallback];
+
+  const raw = globalThis.localStorage.getItem(storageKey);
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    globalThis.localStorage.removeItem(storageKey);
+    return [];
+  }
+}
+
+function getWebDomains(): DomainDefinition[] {
+  return readWebList(WEB_TAXONOMY_DOMAINS_KEY, memoryDomains);
+}
+
+function saveWebDomains(domains: DomainDefinition[]) {
+  if (typeof globalThis.localStorage === 'undefined') {
+    memoryDomains = domains;
+    return;
+  }
+  globalThis.localStorage.setItem(WEB_TAXONOMY_DOMAINS_KEY, JSON.stringify(domains));
+}
+
+function getWebFacts(): FactDefinition[] {
+  return readWebList(WEB_TAXONOMY_FACTS_KEY, memoryFacts);
+}
+
+function saveWebFacts(facts: FactDefinition[]) {
+  if (typeof globalThis.localStorage === 'undefined') {
+    memoryFacts = facts;
+    return;
+  }
+  globalThis.localStorage.setItem(WEB_TAXONOMY_FACTS_KEY, JSON.stringify(facts));
 }
 
 function ensureWebStorageAvailable() {

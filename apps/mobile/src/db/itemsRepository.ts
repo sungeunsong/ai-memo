@@ -264,3 +264,24 @@ function mapItemRow(row: ItemRow): SavedItem {
     sources: [],
   };
 }
+
+/**
+ * 사용자가 직접 지정한 분류를 다른 분야로 옮깁니다. 분야를 합칠 때 씁니다.
+ *
+ * 이 값은 AI 분류보다 우선하는 자리라, 여기를 안 옮기면 사용자가 직접 고른
+ * 아이템만 사라진 분야에 남습니다. 사람이 정한 것이 먼저 깨지는 셈입니다.
+ */
+export async function replaceUserCategoryAsync(
+  db: SQLiteDatabase,
+  fromCategory: string,
+  intoCategory: string,
+  updatedAt: string
+) {
+  await db.runAsync(
+    `UPDATE items SET user_category = ?, updated_at = ? WHERE user_category = ?`,
+    intoCategory,
+    updatedAt,
+    fromCategory
+  );
+}
+

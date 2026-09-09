@@ -55,12 +55,14 @@ import {
 import { parseFacetKey } from '@/features/facets/extract';
 import { facetLabel } from '@/features/facets/labels';
 import {
+  TabOption,
   buildTabOptions,
   loadPinnedTabs,
   resolveVisibleTabs,
   savePinnedTabs,
   togglePinned,
 } from '@/features/facets/tabs';
+import { rewritePinnedTabs } from '@/features/taxonomy/merge';
 import { TabPickerModal } from '@/components/TabPickerModal';
 import { CaptureModal, CaptureFloatingButton } from '@/components/CaptureModal';
 import { DetailScreen, DetailContent } from '@/components/DetailScreen';
@@ -124,6 +126,8 @@ export function HomeScreen() {
   const attachSourceToItem = useAppStore((s) => s.attachSourceToItem);
   const attachScreenshotsToItem = useAppStore((s) => s.attachScreenshotsToItem);
   const resolveAwaitingInput = useAppStore((s) => s.resolveAwaitingInput);
+  const renameDomain = useAppStore((s) => s.renameDomain);
+  const mergeDomains = useAppStore((s) => s.mergeDomains);
 
   // Share intent
   const { hasShareIntent, shareIntent, resetShareIntent, error: shareIntentError } =
@@ -174,33 +178,37 @@ export function HomeScreen() {
     setSelectedFacets([]);
   }, []);
 
-  /** 갤러리에서 이미지를 골라 저장합니다. */
-  const handlePickImage = useCallback(async () => {
+  /**
+   * 갤러리에서 사진을 고릅니다. 저장은 하지 않고 경로만 돌려줍니다.
+   *
+   * 예전에는 고르는 순간 저장하고 시트를 닫았습니다. 이미지가 곧 저장할 내용
+   * 전부이던 시절의 흐름인데, 제목칸과 AI 토글이 생기면서 사진이 마지막 단계가
+   * 아니게 됐습니다. 한 시트 안에서 텍스트는 저장 버튼이, 사진은 고르는 행위가
+   * 확정하는 셈이라 규칙이 둘이었습니다. 확정은 저장 버튼 하나로 모읍니다.
+   */
+  const handlePickImages = useCallback(async (): Promise<string[]> => {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
         setToastMessage('사진 접근 권한이 필요합니다.');
-        return;
+        return [];
       }
 
       const picked = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         quality: 1,
+        // 긴 DM은 한 화면에 안 들어와 두세 장으로 나눠 찍게 됩니다.
+        allowsMultipleSelection: true,
       });
-      if (picked.canceled || !picked.assets?.[0]?.uri) return;
+      if (picked.canceled) return [];
 
-      setIsCaptureVisible(false);
-      const result = await saveImage(picked.assets[0].uri, 'gallery');
-      if (result.ok) {
-        setToastMessage('이미지를 저장했습니다. 내용을 읽는 중입니다.');
-        const nextId = useAppStore.getState().selectedItemId;
-        if (nextId) setHighlightedItemId(nextId);
-      }
+      return (picked.assets ?? []).map((asset) => asset.uri).filter(Boolean);
     } catch (error) {
       console.warn('[Home] 이미지 선택 실패:', error);
       setToastMessage('이미지를 불러오지 못했습니다.');
+      return [];
     }
-  }, [saveImage]);
+  }, []);
 
   // ==========================================
   // 분야 탭
@@ -209,6 +217,18 @@ export function HomeScreen() {
   // ==========================================
   const [pinnedTabs, setPinnedTabs] = useState<string[]>([]);
   const [isTabPickerVisible, setIsTabPickerVisible] = useState(false);
+  /** 시트를 열면서 곧바로 관리 화면을 볼 분야. 상단 탭을 길게 누르면 채워집니다. */
+  const [manageDomainKey, setManageDomainKey] = useState<string | null>(null);
+
+  const handleManageTab = useCallback((key: string) => {
+    setManageDomainKey(key);
+    setIsTabPickerVisible(true);
+  }, []);
+
+  const handleCloseTabPicker = useCallback(() => {
+    setIsTabPickerVisible(false);
+    setManageDomainKey(null);
+  }, []);
 
   useEffect(() => {
     void (async () => setPinnedTabs(await loadPinnedTabs()))();
@@ -221,6 +241,55 @@ export function HomeScreen() {
       await savePinnedTabs(next);
     },
     [pinnedTabs]
+  );
+
+  const handleRenameDomain = useCallback(
+    async (key: string, label: string) => {
+      await renameDomain(key, label);
+      setToastMessage(`분야 이름을 '${label}'로 바꿨습니다.`);
+    },
+    [renameDomain]
+  );
+
+  /**
+   * 분야 합치기.
+   *
+   * 되돌릴 수 없어서 먼저 확인을 받습니다. 백업은 있지만 그건 통째로 되돌리는
+   * 것이라, 합치기 하나 무르자고 쓸 만한 수단이 아닙니다.
+   *
+   * 고정해둔 탭은 화면이 들고 있어 여기서 같이 고칩니다. 안 고치면 사라진 분야가
+   * 탭에 남아 건수 0으로 서 있게 됩니다.
+   */
+  const handleMergeDomains = useCallback(
+    (from: TabOption, into: TabOption) => {
+      const message = `'${from.label}'을 '${into.label}'에 합칩니다. 글 ${from.count}건이 옮겨가고 '${from.label}'은 사라집니다. 되돌릴 수 없습니다.`;
+
+      const run = async () => {
+        const moved = await mergeDomains(from.key, { key: into.key, label: into.label });
+
+        const nextPinned = rewritePinnedTabs(pinnedTabs, from.key, into.key);
+        if (nextPinned.join('\u0000') !== pinnedTabs.join('\u0000')) {
+          setPinnedTabs(nextPinned);
+          await savePinnedTabs(nextPinned);
+        }
+
+        // 보고 있던 탭이 사라졌으면 남는 쪽으로 따라갑니다. 그대로 두면
+        // 아무것도 없는 목록에 갇힙니다.
+        setActiveCategory((current) => (current === from.key ? into.key : current));
+        setToastMessage(`'${into.label}'로 ${moved}건을 옮겼습니다.`);
+      };
+
+      if (Platform.OS === 'web') {
+        if (window.confirm(message)) void run();
+        return;
+      }
+
+      Alert.alert('분야 합치기', message, [
+        { text: '취소', style: 'cancel' },
+        { text: '합치기', style: 'destructive', onPress: () => void run() },
+      ]);
+    },
+    [mergeDomains, pinnedTabs]
   );
 
   // ==========================================
@@ -564,8 +633,43 @@ export function HomeScreen() {
     if (!isWideLayout) setIsDetailVisible(true);
   }
 
-  async function handleSaveFromCapture(input: string) {
-    const result = await saveUrl(input);
+  /**
+   * 수집 창의 저장.
+   *
+   * 사진이 있으면 첫 장으로 아이템을 만들고 나머지는 조각으로 붙입니다.
+   * 정리를 켜뒀으면 첫 장에서는 미루고(deferEnrich) 붙이기가 끝난 뒤 한 번만
+   * 종합합니다. 장마다 돌리면 AI 호출이 장 수만큼 늘어납니다.
+   */
+  async function handleSaveFromCapture(
+    input: string,
+    options: { skipAi: boolean; imageUris: string[] }
+  ) {
+    const [firstImage, ...restImages] = options.imageUris;
+
+    if (firstImage) {
+      const result = await saveImage(firstImage, 'gallery', {
+        skipAi: options.skipAi,
+        title: input,
+        deferEnrich: !options.skipAi && restImages.length > 0,
+      });
+      if (!result.ok) return result;
+
+      const itemId = useAppStore.getState().selectedItemId;
+      if (itemId && restImages.length > 0) {
+        await attachScreenshotsToItem(itemId, restImages, { skipAi: options.skipAi });
+      }
+
+      setToastMessage(
+        options.skipAi ? '수집함에 담았습니다' : '수집함에 저장됨 · 내용을 읽는 중입니다'
+      );
+      if (itemId) {
+        setHighlightedItemId(itemId);
+        if (!isWideLayout) setIsDetailVisible(true);
+      }
+      return result;
+    }
+
+    const result = await saveUrl(input, 'manual', { skipAi: options.skipAi });
     if (result.ok) {
       const nextId = useAppStore.getState().selectedItemId;
       const savedItem = useAppStore.getState().items.find((i) => i.id === nextId) ?? null;
@@ -832,7 +936,11 @@ export function HomeScreen() {
               onSaveFilter={handleSaveFilter}
               tabs={visibleTabs}
               hasHiddenTabs={tabOptions.length > visibleTabs.length}
-              onOpenTabPicker={() => setIsTabPickerVisible(true)}
+              onOpenTabPicker={() => {
+                setManageDomainKey(null);
+                setIsTabPickerVisible(true);
+              }}
+              onManageTab={handleManageTab}
               canSaveFilter={isFilterSaveable(activeCategory, selectedFacets, searchQuery)}
               describeFacetKey={(key) => {
                 const parsed = parseFacetKey(key);
@@ -925,7 +1033,7 @@ export function HomeScreen() {
 
       {/* 캡처 모달 */}
       <CaptureModal
-        onPickImage={handlePickImage}
+        onPickImages={handlePickImages}
         visible={isCaptureVisible}
         onClose={() => setIsCaptureVisible(false)}
         onSave={handleSaveFromCapture}
@@ -998,9 +1106,12 @@ export function HomeScreen() {
         options={tabOptions}
         activeKey={activeCategory}
         pinned={pinnedTabs}
+        manageKey={manageDomainKey}
         onSelect={setActiveCategory}
         onTogglePin={(key) => void handleTogglePinnedTab(key)}
-        onClose={() => setIsTabPickerVisible(false)}
+        onRename={(key, label) => void handleRenameDomain(key, label)}
+        onMerge={(from, into) => handleMergeDomains(from, into)}
+        onClose={handleCloseTabPicker}
       />
 
       {/* 냉장고 털기 (보유 재료 -> 만들 수 있는 것) */}

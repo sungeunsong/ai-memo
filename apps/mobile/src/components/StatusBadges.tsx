@@ -54,7 +54,7 @@ export function StatusPills({
         tone={
           item.aiStatus === 'failed'
             ? 'failed'
-            : item.aiStatus === 'completed'
+            : item.aiStatus === 'completed' || item.aiStatus === 'skipped'
               ? 'saved'
               : 'pending'
         }

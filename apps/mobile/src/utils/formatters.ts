@@ -96,6 +96,11 @@ export function getAiStatusLabel(item: SavedItem) {
     return '추가 입력 대기';
   }
 
+  // 정리를 안 돌리기로 하고 담아둔 것. 기다리는 중이 아니므로 그렇게 보이면 안 됩니다.
+  if (item.aiStatus === 'skipped') {
+    return '직접 저장';
+  }
+
   return '요약 정리 중';
 }
 
@@ -191,8 +196,20 @@ export function describeInputCandidate(input: string) {
   return `텍스트 ${input.trim().length}자`;
 }
 
+/**
+ * 원문 카드를 세울지.
+ *
+ * 예전 기준은 `rawInput !== content`였습니다. 그때는 content에 긁어온 본문이
+ * 들어 있어서 "원문과 본문이 다르면 원문도 보여준다"는 뜻이었는데, 지금 content에는
+ * 구조화 JSON이 들어갑니다. 그래서 이 비교가 정리를 마친 모든 아이템에서 참이 됐고,
+ * 링크만 붙여넣은 글에도 URL 한 줄짜리 '공유 원문' 카드가 늘 따라붙었습니다.
+ * 바로 위 출처와 아래 링크에 같은 주소가 이미 있어서 같은 것이 세 번 보였습니다.
+ *
+ * 기준을 다시 세웁니다. 링크를 걷어내고 **남는 글이 있을 때만** 원문입니다.
+ * 링크 그 자체는 원문이 아니라 주소입니다.
+ */
 export function shouldShowRawInputFirst(item: SavedItem) {
-  return item.type === 'text' || item.extractedUrls.length > 1 || item.rawInput.trim() !== item.content.trim();
+  return textWithoutUrls(item.rawInput).length > 0;
 }
 
 // ==========================================
@@ -372,28 +389,52 @@ function classifyByKeyword(title: string, userNote: string, content: string): st
   return null;
 }
 
-/** 카테고리를 화면에 보여줄 때 쓰는 라벨. */
+/**
+ * 기본 분야의 아이콘.
+ *
+ * 이름과 갈라두었습니다. 이름은 사용자가 고칠 수 있는 값이 됐지만 아이콘은
+ * 아닙니다. 하나로 묶어두면 이름을 고치는 순간 아이콘까지 같이 사라집니다.
+ */
+const CATEGORY_ICONS: Record<string, string> = {
+  recipe: '🍳',
+  workout: '💪',
+  travel: '✈️',
+  parenting: '🍼',
+  shopping: '🛍️',
+  interior: '🛋️',
+  other: '🏷️',
+};
+
+/** 사전을 읽지 못했을 때 쓰는 기본 분야의 이름. */
 export const CATEGORY_LABELS: Record<string, string> = {
-  recipe: '레시피 🍳',
-  workout: '운동 💪',
-  travel: '여행 ✈️',
-  parenting: '육아 🍼',
-  shopping: '공구·꿀템 🛍️',
-  interior: '인테리어 🛋️',
-  other: '미분류 🏷️',
+  recipe: '레시피',
+  workout: '운동',
+  travel: '여행',
+  parenting: '육아',
+  shopping: '공구·꿀템',
+  interior: '인테리어',
+  other: '미분류',
 };
 
 /**
  * 분야 이름.
  *
- * 목록에 없는 분야는 사전이 알려준 이름을 씁니다. 목록을 여섯 개로 고정해두면
- * 낚시 글은 분야를 제대로 받고도 화면에서는 '미분류'로 보입니다.
+ * 사전이 먼저입니다. 예전에는 위 목록이 먼저였는데, 그러면 기본 분야는 사용자가
+ * 이름을 바꿔도 화면이 그대로였습니다. 사전에 없는 분야만 사전 이름을 쓰는
+ * 셈이라, 정작 고칠 수 있는 것과 화면에 보이는 것이 어긋났습니다.
+ *
+ * 위 목록은 사전을 못 읽었을 때의 대비로 남깁니다. 아이콘만 붙이는 자리를
+ * 겸하는데, 아이콘은 분야의 성격이라 이름을 바꿔도 그대로 따라갑니다.
  */
 export function getCategoryLabel(category: string, fallbackLabel?: string): string {
-  const known = CATEGORY_LABELS[category];
-  if (known) return known;
-  if (fallbackLabel && fallbackLabel !== category) return `${fallbackLabel} 🏷️`;
-  return CATEGORY_LABELS.other;
+  const name =
+    fallbackLabel && fallbackLabel !== category
+      ? fallbackLabel
+      : CATEGORY_LABELS[category];
+
+  if (!name) return `${CATEGORY_LABELS.other} ${CATEGORY_ICONS.other}`;
+
+  return `${name} ${CATEGORY_ICONS[category] ?? '🏷️'}`;
 }
 
 // ==========================================
@@ -433,6 +474,38 @@ function matchBodyText(text: string | null | undefined, query: string): boolean 
  * 사용자가 고친 제목이 있으면 그쪽이 우선입니다. AI 제목은 그대로 두기 때문에
  * 재분석을 돌려도 사용자가 고친 것이 덮이지 않습니다.
  */
+/**
+ * 사용자가 제목으로 쓰라고 적은 글.
+ *
+ * AI를 끄고 저장할 때 씁니다. 링크와 설명을 같이 적는 일이 흔해서
+ * (`https://... 아이방 인테리어`), 링크로 보이는 조각을 걷어낸 나머지를 제목으로
+ * 봅니다. 링크만 적었으면 제목이 없는 것이라 null이고, 그때는 링크에서 만든
+ * 기본 제목이 그대로 남습니다.
+ */
+export function extractManualTitle(rawInput: string): string | null {
+  const rest = textWithoutUrls(rawInput);
+
+  if (!rest) return null;
+
+  // 긴 글을 통째로 붙여넣고 정리를 끈 경우가 있습니다. 그걸 그대로 제목에 넣으면
+  // 목록이 한 줄로 뭉갭니다. 원문은 rawInput에 남으니 제목만 줄입니다.
+  return rest.length > MANUAL_TITLE_LIMIT ? `${rest.slice(0, MANUAL_TITLE_LIMIT)}…` : rest;
+}
+
+const MANUAL_TITLE_LIMIT = 80;
+
+/** 링크로 보이는 조각을 걷어낸 나머지 글. 없으면 빈 문자열입니다. */
+export function textWithoutUrls(raw: string): string {
+  return raw
+    .split(/\s+/)
+    .filter((token) => token && !URL_LIKE.test(token))
+    .join(' ')
+    .trim();
+}
+
+const URL_LIKE =
+  /^(?:https?:\/\/|www\.)|^(?:m\.)?(?:youtube\.com|youtu\.be|instagram\.com|notion\.so|notion\.site|app\.notion\.com)\//i;
+
 export function getItemTitle(item: SavedItem): string {
   return item.userTitle?.trim() || item.title;
 }
