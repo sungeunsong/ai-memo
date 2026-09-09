@@ -5,6 +5,7 @@ import {
   Modal,
   Image,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -20,6 +21,7 @@ import { SavedItem } from '@/features/items/types';
 import { readContentV2 } from '@/features/items/contentV2';
 import { DomainSection, FactRow, buildDomainSections, factValues, legacyText } from '@/features/items/factView';
 import { resolveDomainLabel } from '@/features/taxonomy/registry';
+import { resolveImageUri } from '@/features/capture/imageCapture';
 import { isEnrichStalled } from '@/features/items/staleEnrich';
 import { StatusPills } from '@/components/StatusBadges';
 import { useAppStore } from '@/store';
@@ -161,6 +163,9 @@ export function DetailContent({
   }, [toastMessage]);
 
   const content = readContentV2(selectedItem.content);
+
+  // 원격 썸네일은 그대로, 우리가 보관한 이미지는 그릴 수 있는 주소로 바꿉니다.
+  const thumbnailUri = resolveImageUri(selectedItem.thumbnailUrl);
 
   // 화면은 사전이 알려주는 대로 그립니다. 분야마다 카드를 따로 두면
   // 목록에 없는 분야는 아무것도 보이지 않습니다.
@@ -529,41 +534,45 @@ export function DetailContent({
           </Text>
         ) : null}
 
-        {selectedItem.sources.map((source) => (
-          <View key={source.id} style={styles.sourceRow}>
-            {source.imageUri ? (
-              <Pressable
-                onPress={() => setExpandedImageUri(source.imageUri)}
-                style={({ pressed }) => pressed && { opacity: 0.6 }}
-              >
-                <Image source={{ uri: source.imageUri }} style={styles.sourceThumb as any} />
-              </Pressable>
-            ) : null}
-            <View style={styles.sourceRowText}>
-              <Text style={styles.sourceKind}>
-                {SOURCE_KIND_LABELS[source.kind] ?? source.kind}
-              </Text>
-              <Text style={styles.sourceExcerpt} numberOfLines={2}>
-                {describeSourceBody(source)}
-              </Text>
-              {source.sourceUrl ? (
-                <Pressable onPress={() => openOriginal(source.sourceUrl!)} hitSlop={6}>
-                  <Text style={styles.sourceOpenText}>원본 열기 🔗</Text>
+        {selectedItem.sources.map((source) => {
+          const sourceImageUri = resolveImageUri(source.imageUri);
+
+          return (
+            <View key={source.id} style={styles.sourceRow}>
+              {sourceImageUri ? (
+                <Pressable
+                  onPress={() => setExpandedImageUri(sourceImageUri)}
+                  style={({ pressed }) => pressed && { opacity: 0.6 }}
+                >
+                  <Image source={{ uri: sourceImageUri }} style={styles.sourceThumb as any} />
+                </Pressable>
+              ) : null}
+              <View style={styles.sourceRowText}>
+                <Text style={styles.sourceKind}>
+                  {SOURCE_KIND_LABELS[source.kind] ?? source.kind}
+                </Text>
+                <Text style={styles.sourceExcerpt} numberOfLines={2}>
+                  {describeSourceBody(source)}
+                </Text>
+                {source.sourceUrl ? (
+                  <Pressable onPress={() => openOriginal(source.sourceUrl!)} hitSlop={6}>
+                    <Text style={styles.sourceOpenText}>원본 열기 🔗</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              {/* 조각이 하나뿐이면 뗄 수 없습니다. 그건 저장물 자체를 지우는 일입니다. */}
+              {selectedItem.sources.length > 1 ? (
+                <Pressable
+                  onPress={() => confirmDetachSource(source.id)}
+                  hitSlop={8}
+                  style={({ pressed }) => [styles.sourceRemove, pressed && { opacity: 0.5 }]}
+                >
+                  <Text style={styles.sourceRemoveText}>떼기</Text>
                 </Pressable>
               ) : null}
             </View>
-            {/* 조각이 하나뿐이면 뗄 수 없습니다. 그건 저장물 자체를 지우는 일입니다. */}
-            {selectedItem.sources.length > 1 ? (
-              <Pressable
-                onPress={() => confirmDetachSource(source.id)}
-                hitSlop={8}
-                style={({ pressed }) => [styles.sourceRemove, pressed && { opacity: 0.5 }]}
-              >
-                <Text style={styles.sourceRemoveText}>떼기</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ))}
+          );
+        })}
 
         <TextInput
           value={sourceDraft}
@@ -735,12 +744,12 @@ export function DetailContent({
       ) : null}
 
       {/* 6. 썸네일 */}
-      {(selectedItem.type === 'url' || selectedItem.type === 'image') && selectedItem.thumbnailUrl ? (
+      {(selectedItem.type === 'url' || selectedItem.type === 'image') && thumbnailUri ? (
         <View style={styles.thumbnailPanel}>
           <Text style={styles.detailLabel}>썸네일</Text>
           <View style={styles.thumbnailPreview}>
             <Image
-              source={{ uri: selectedItem.thumbnailUrl }}
+              source={{ uri: thumbnailUri }}
               style={styles.thumbnailImage as any}
               resizeMode="cover"
             />
@@ -1164,11 +1173,62 @@ function DeadlineEditor({
   onSubmit: (value: string | null) => void;
 }) {
   const styles = useThemedStyles(createStyles);
+  const { palette, mode } = useTheme();
 
   const parsed = /^\d{4}-\d{2}-\d{2}$/.test(current) ? new Date(current) : null;
   const initial = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date();
 
   if (!visible) return null;
+
+  /*
+   * 브라우저에는 위의 선택기가 없습니다. @react-native-community/datetimepicker에
+   * 웹 구현이 없어서 폴백이 잡히는데, 그 폴백은 경고 한 줄을 찍고 null을
+   * 돌려줍니다. 그래서 마감일을 눌러도 아무 일도 일어나지 않았습니다.
+   *
+   * 대신 브라우저가 가진 날짜 입력을 씁니다. 사파리는 이걸 네이티브 휠 선택기로
+   * 띄워주므로, 달력을 직접 그리지 않는다는 위의 판단은 웹에서도 그대로입니다.
+   */
+  if (Platform.OS === 'web') {
+    return (
+      <Modal transparent visible animationType="fade">
+        <Pressable style={styles.deadlineResetBackdrop} onPress={onClose}>
+          <Pressable style={styles.deadlineResetSheet} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.webDatePickerRow}>
+              <input
+                type="date"
+                defaultValue={toDateKey(initial)}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  // 입력을 지우면 빈 문자열이 옵니다. 그건 해제가 아니라 미완성이라
+                  // 아래 버튼과 뜻이 다릅니다. 온전한 날짜만 받습니다.
+                  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) onSubmit(value);
+                }}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  padding: '12px 14px',
+                  fontSize: 16,
+                  fontWeight: 700,
+                  borderRadius: 12,
+                  border: `1px solid ${palette.borderStrong}`,
+                  background: palette.surface,
+                  color: palette.textPrimary,
+                  // 브라우저가 그리는 달력 아이콘과 팝업까지 테마를 따라가게 합니다.
+                  colorScheme: mode,
+                }}
+              />
+            </View>
+
+            <Pressable onPress={() => onSubmit(null)} style={styles.pickerReset}>
+              <Text style={styles.pickerResetText}>
+                {isManual ? 'AI가 읽은 값으로 되돌리기' : '마감일 지우기'}
+              </Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    );
+  }
 
   return (
     <>
@@ -1348,6 +1408,10 @@ const createStyles = (palette: Palette) =>
     color: palette.accentText,
     fontSize: 13,
     fontWeight: '900',
+  },
+  webDatePickerRow: {
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[4],
   },
   pickerReset: {
     marginTop: spacing[2],

@@ -1,6 +1,7 @@
 import { Image, StyleSheet, Text, View } from 'react-native';
 
 import { SavedItem } from '@/features/items/types';
+import { resolveImageUri } from '@/features/capture/imageCapture';
 import { StatusPills } from '@/components/StatusBadges';
 import {
   getItemTitle,
@@ -68,10 +69,12 @@ function ThumbnailThumb({ item }: { item: SavedItem }) {
     return null;
   }
 
-  if (item.thumbnailUrl) {
+  const thumbnailUri = resolveImageUri(item.thumbnailUrl);
+
+  if (thumbnailUri) {
     return (
       <Image
-        source={{ uri: item.thumbnailUrl }}
+        source={{ uri: thumbnailUri }}
         style={styles.cardThumbnail as any}
         resizeMode="cover"
       />

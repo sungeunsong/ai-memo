@@ -33,6 +33,7 @@ import {
   persistImage,
   readImageForAnalysis,
   deletePersistedImage,
+  hydratePersistedImagesAsync,
 } from '@/features/capture/imageCapture';
 import {
   ItemMetadataPatch,
@@ -180,6 +181,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     initializationPromise = (async () => {
       try {
         await initializeDatabase();
+
+        // 웹은 이미지를 IndexedDB에 두고 아이템에는 키만 적습니다. 그리는 쪽이
+        // 동기라, 목록을 올리기 전에 키마다 주소를 만들어 둬야 첫 화면부터
+        // 그림이 보입니다. 안드로이드에서는 하는 일이 없습니다.
+        await hydratePersistedImagesAsync();
 
         // 분야·항목 사전의 출발점을 심습니다. 이미 있는 것은 건드리지 않으므로
         // 여러 번 불려도 같고, 사용자가 고쳐둔 이름은 그대로 남습니다.

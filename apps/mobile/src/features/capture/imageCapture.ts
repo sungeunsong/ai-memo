@@ -11,9 +11,20 @@
  * 긴 변 1600px면 글자를 읽기에 충분하고 용량은 1/5~1/10로 줄어듭니다.
  */
 
-import { Image } from 'react-native';
+import { Image, Platform } from 'react-native';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
+
+import {
+  WEB_IMAGE_PREFIX,
+  base64ToBlob,
+  blobToBase64Async,
+  deleteWebImageAsync,
+  getWebImageBlobAsync,
+  hydrateWebImagesAsync,
+  putWebImageAsync,
+  resolveWebImageUri,
+} from '@/features/capture/webImageStore';
 
 /** 보관용 최대 가로 길이. 이보다 넓을 때만 줄입니다. */
 const MAX_WIDTH = 1600;
@@ -26,7 +37,15 @@ const MAX_WIDTH = 1600;
  */
 const ANALYSIS_WIDTH = 1024;
 
-const IMAGE_DIR = `${FileSystem.documentDirectory}captured-images/`;
+/**
+ * 보관 위치.
+ *
+ * 웹에는 앱 폴더가 없어(`documentDirectory`가 null) 파일 대신 IndexedDB에 담고,
+ * 여기에는 그 키의 머리표를 둡니다. 자리를 맞춰두면 '우리가 보관한 것인지'를
+ * 가리는 아래 검사들을 플랫폼마다 따로 쓰지 않아도 됩니다.
+ */
+const IMAGE_DIR =
+  Platform.OS === 'web' ? WEB_IMAGE_PREFIX : `${FileSystem.documentDirectory}captured-images/`;
 
 /**
  * 가로가 기준보다 넓을 때만 줄이는 리사이즈 지시를 만듭니다.
@@ -72,6 +91,23 @@ async function ensureDirectory() {
  * 공유로 넘어온 URI는 임시 경로라 그대로 두면 나중에 접근할 수 없습니다.
  */
 export async function persistImage(sourceUri: string, itemId: string): Promise<string> {
+  const target = `${IMAGE_DIR}${itemId}.jpg`;
+
+  // 웹은 옮길 폴더가 없어서 결과를 base64로 받아 IndexedDB에 담습니다.
+  if (Platform.OS === 'web') {
+    const prepared = await manipulateAsync(
+      sourceUri,
+      await buildResizeActions(sourceUri, MAX_WIDTH),
+      { compress: 0.8, format: SaveFormat.JPEG, base64: true }
+    );
+
+    if (!prepared.base64) {
+      throw new Error('이미지를 변환하지 못했습니다.');
+    }
+
+    return putWebImageAsync(target, base64ToBlob(prepared.base64));
+  }
+
   await ensureDirectory();
 
   const resized = await manipulateAsync(
@@ -80,18 +116,47 @@ export async function persistImage(sourceUri: string, itemId: string): Promise<s
     { compress: 0.8, format: SaveFormat.JPEG }
   );
 
-  const target = `${IMAGE_DIR}${itemId}.jpg`;
   await FileSystem.moveAsync({ from: resized.uri, to: target });
 
   return target;
 }
 
+/**
+ * 화면에 그릴 수 있는 주소로 바꿉니다.
+ *
+ * 웹에서 아이템에 적히는 값은 보관소의 키라 그대로는 그려지지 않습니다.
+ * 원격 썸네일 주소와 안드로이드의 파일 경로는 손대지 않고 지나갑니다.
+ */
+export function resolveImageUri(uri: string | null | undefined): string | null {
+  if (!uri) return null;
+  if (Platform.OS !== 'web') return uri;
+  return resolveWebImageUri(uri);
+}
+
+/**
+ * 보관된 이미지를 그릴 준비를 합니다. 앱이 뜰 때 한 번 부릅니다.
+ *
+ * 웹에서만 할 일이 있습니다. 그리는 쪽이 동기라 목록을 올리기 전에 미리
+ * 주소를 만들어 두지 않으면 첫 화면에서 그림이 비어 보입니다.
+ */
+export async function hydratePersistedImagesAsync(): Promise<void> {
+  if (Platform.OS !== 'web') return;
+  await hydrateWebImagesAsync();
+}
+
 /** 분석용 base64. 원본을 그대로 보내면 요청이 커지고 느려집니다. */
 export async function readImageForAnalysis(uri: string): Promise<string | null> {
   try {
+    // 웹에서 넘어오는 값은 보관소 키입니다. 캔버스가 읽을 수 있는 주소로 바꿉니다.
+    const source = Platform.OS === 'web' ? resolveImageUri(uri) : uri;
+    if (!source) {
+      console.warn('[ImageCapture] 분석할 이미지를 찾지 못했습니다:', uri);
+      return null;
+    }
+
     const prepared = await manipulateAsync(
-      uri,
-      await buildResizeActions(uri, ANALYSIS_WIDTH),
+      source,
+      await buildResizeActions(source, ANALYSIS_WIDTH),
       { compress: 0.7, format: SaveFormat.JPEG, base64: true }
     );
     return prepared.base64 ?? null;
@@ -105,6 +170,11 @@ export async function readImageForAnalysis(uri: string): Promise<string | null> 
 /** 저장해둔 이미지를 그대로 base64로 읽습니다. 백업에 담을 때 씁니다. */
 export async function readImageForBackup(uri: string): Promise<string | null> {
   try {
+    if (Platform.OS === 'web') {
+      const blob = await getWebImageBlobAsync(uri);
+      return blob ? await blobToBase64Async(blob) : null;
+    }
+
     return await FileSystem.readAsStringAsync(uri, {
       encoding: FileSystem.EncodingType.Base64,
     });
@@ -125,8 +195,13 @@ export async function restoreImageFromBackup(
   itemId: string
 ): Promise<string | null> {
   try {
-    await ensureDirectory();
     const target = `${IMAGE_DIR}${itemId}.jpg`;
+
+    if (Platform.OS === 'web') {
+      return await putWebImageAsync(target, base64ToBlob(base64));
+    }
+
+    await ensureDirectory();
     await FileSystem.writeAsStringAsync(target, base64, {
       encoding: FileSystem.EncodingType.Base64,
     });
@@ -140,6 +215,11 @@ export async function restoreImageFromBackup(
 export async function deletePersistedImage(uri: string | null) {
   if (!uri || !uri.startsWith(IMAGE_DIR)) return;
   try {
+    if (Platform.OS === 'web') {
+      await deleteWebImageAsync(uri);
+      return;
+    }
+
     await FileSystem.deleteAsync(uri, { idempotent: true });
   } catch (error) {
     console.log('[ImageCapture] 이미지 삭제 실패(무시):', error);
