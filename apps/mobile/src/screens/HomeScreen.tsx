@@ -441,6 +441,20 @@ export function HomeScreen() {
   }, [resumeEnrich, resumeSync]);
 
   async function checkClipboard() {
+    /*
+     * 브라우저에서는 클립보드를 몰래 들여다볼 수 없습니다.
+     *
+     * `getStringAsync`는 웹에서 `navigator.clipboard.readText()`가 되는데,
+     * 사파리는 그때마다 '붙여넣기' 확인 버튼을 띄웁니다. 이 검사는 화면이
+     * 돌아올 때와 `items`가 바뀔 때마다 돌아서, 저장을 누를 때마다 목록이
+     * 갱신되고 그 확인 버튼이 같이 떴습니다.
+     *
+     * 클립보드를 미리 알려주는 건 편의일 뿐인데 그 대가로 저장할 때마다
+     * 손이 하나 더 갑니다. 웹에서는 접습니다. 붙여넣기는 수집 창에서
+     * 직접 하면 되고, 그건 사용자의 동작이라 확인 버튼도 뜨지 않습니다.
+     */
+    if (Platform.OS === 'web') return;
+
     // 무시 기록을 읽기 전에 검사하면 이미 거절한 내용이 잠깐 다시 뜹니다.
     if (!ignoredClipboardLoadedRef.current) return;
 
