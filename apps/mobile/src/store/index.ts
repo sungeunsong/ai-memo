@@ -12,7 +12,9 @@ import {
   recoverStalledEnrichAsync,
   recoverStalledSyncJobsAsync,
   getTaxonomyAsync,
-  renameDomainAsync,
+  bumpTaxonomyUseAsync,
+  upsertDomainAsync,
+  deleteDomainAsync,
   mergeDomainsAsync,
   migrateItemContentsToV2Async,
   seedTaxonomyAsync,
@@ -46,6 +48,7 @@ import {
 } from '@/features/items/types';
 import { STALLED_ENRICH_MESSAGE } from '@/features/items/staleEnrich';
 import { applyItemPatch } from '@/features/items/patch';
+import { normalizeDefinitionKey } from '@/features/taxonomy/inference';
 import { SEED_REGISTRY, TaxonomyRegistry, buildRegistry } from '@/features/taxonomy/registry';
 import { classifySourceType } from '@/features/capture/normalizeSharedInput';
 import { buildInitialSource, buildItemSource, toSourceKind } from '@/features/items/sources';
@@ -147,6 +150,15 @@ type AppStore = {
   resolveAwaitingInput: (itemId: string, input?: string) => Promise<void>;
   setItemCategory: (itemId: string, category: string | null) => Promise<void>;
   renameDomain: (key: string, label: string) => Promise<void>;
+  /**
+   * 사용자가 분야를 직접 만듭니다.
+   *
+   * 같은 이름이 이미 있으면 만들지 않고 그것을 돌려줍니다(existed=true).
+   * 이름을 못 쓰면 null입니다.
+   */
+  createDomain: (label: string) => Promise<{ key: string; label: string; existed: boolean } | null>;
+  /** 빈 분야를 지웁니다. 글이 남아 있으면 아무 일도 하지 않고 false를 돌려줍니다. */
+  deleteDomain: (key: string) => Promise<boolean>;
   mergeDomains: (fromKey: string, into: { key: string; label: string }) => Promise<number>;
   setItemDeadline: (itemId: string, deadline: string | null) => Promise<void>;
   deleteItem: (itemId: string) => Promise<void>;
@@ -660,6 +672,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     await updateItemMetadataAsync(itemId, patch);
 
+    // 사람이 고른 분야는 쓰인 것으로 셉니다.
+    //
+    // 사전은 많이 쓰인 순으로 프롬프트에 실리고 상한에서 잘립니다. 방금 만든 분야는
+    // 쓰인 횟수가 0이라 목록 맨 끝에 서고, 분야가 많아지면 정작 알려줘야 할 새 분야가
+    // 가장 먼저 잘려 나갑니다. AI가 뽑아준 분야는 이미 이렇게 세고 있습니다.
+    if (category) {
+      await bumpTaxonomyUseAsync(category, []).catch(() => {});
+      await refreshTaxonomyAsync(set);
+    }
+
     const nextItems = get().items.map((item) =>
       item.id === itemId ? { ...item, userCategory: category, updatedAt: patch.updatedAt } : item
     );
@@ -681,8 +703,65 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const trimmed = label.trim();
     if (!get().isReady || !trimmed) return;
 
-    await renameDomainAsync(key, trimmed);
+    await upsertDomainAsync(key, trimmed);
     await refreshTaxonomyAsync(set);
+  },
+  /**
+   * 사용자가 분야를 직접 만듭니다.
+   *
+   * AI가 새 분야를 만드는 통로는 이미 있었습니다. 여기는 그 통로를 사람에게도
+   * 열어주는 것뿐이라, 만들어지는 것의 모양은 AI가 만든 것과 똑같습니다.
+   * 그래야 탭도 검색도 프롬프트도 따로 손댈 필요가 없습니다.
+   *
+   * 같은 이름이 있으면 새로 만들지 않습니다. '여행'을 또 만들면 키가 달라
+   * 별개의 분야가 되고, 이름이 같은 탭이 두 개 서서 글이 양쪽으로 갈립니다.
+   * 이름을 비교할 때 사이 공백을 지우는 이유는 '주말 요리'와 '주말요리'가
+   * 사용자에게는 같은 말이기 때문입니다.
+   */
+  async createDomain(label) {
+    const trimmed = label.trim();
+    if (!get().isReady || !trimmed) return null;
+
+    const key = normalizeDefinitionKey(trimmed);
+    if (!key) return null;
+
+    const flatten = (value: string) => value.replace(/\s+/g, '').toLowerCase();
+    const taxonomy = get().taxonomy;
+
+    for (const domain of taxonomy.domains.values()) {
+      if (domain.key === key || flatten(domain.label) === flatten(trimmed)) {
+        return { key: domain.key, label: domain.label, existed: true };
+      }
+    }
+
+    await upsertDomainAsync(key, trimmed);
+
+    // 만든 것을 한 번 쓴 것으로 셉니다.
+    //
+    // 사전은 많이 쓰인 순으로 프롬프트에 실리고 상한에서 잘립니다. 갓 만든 분야는
+    // 0이라 맨 끝에 서는데, 하필 미리 만들어둔 분야야말로 AI에게 꼭 알려줘야 하는
+    // 것입니다. 글이 하나도 없는 동안에는 그것 말고 순서를 매길 근거도 없습니다.
+    await bumpTaxonomyUseAsync(key, []).catch(() => {});
+    await refreshTaxonomyAsync(set);
+
+    return { key, label: trimmed, existed: false };
+  },
+  /**
+   * 빈 분야를 지웁니다.
+   *
+   * 글이 하나라도 남아 있으면 거절합니다. 글이 있는 분야를 없애는 일은 합치기가
+   * 맡습니다. 여기서 글까지 옮기면 되돌릴 수 없는 길이 두 개가 되고, 사용자는
+   * 어느 쪽을 눌렀느냐에 따라 다른 결과를 얻습니다.
+   *
+   * 판정은 지금 들고 있는 목록으로 합니다. 직접 지정한 분류까지 함께 봐야 하는데
+   * 그 계산은 이미 facet 색인이 하고 있어, 부르는 쪽에서 건수를 넘겨받습니다.
+   */
+  async deleteDomain(key) {
+    if (!get().isReady || !key || key === 'other') return false;
+
+    await deleteDomainAsync(key);
+    await refreshTaxonomyAsync(set);
+    return true;
   },
   /**
    * 두 분야를 하나로 합칩니다. 옮긴 아이템 수를 돌려줍니다.

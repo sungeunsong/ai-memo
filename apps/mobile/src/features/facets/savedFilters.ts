@@ -96,6 +96,17 @@ export async function addSavedFilter(
   return next;
 }
 
+/**
+ * 목록을 통째로 갈아끼웁니다.
+ *
+ * 분야를 합치거나 지울 때 여러 조건이 한꺼번에 바뀝니다. 하나씩 지웠다 넣으면
+ * 중간에 앱이 죽었을 때 반만 고쳐진 목록이 남습니다.
+ */
+export async function replaceSavedFilters(filters: SavedFilter[]): Promise<SavedFilter[]> {
+  await persist(filters);
+  return filters;
+}
+
 export async function removeSavedFilter(
   filters: SavedFilter[],
   id: string
@@ -110,10 +121,22 @@ export function isFilterSaveable(category: string, facetKeys: string[], searchQu
   return Boolean(category) || facetKeys.length > 0 || Boolean(searchQuery.trim());
 }
 
-/** 저장된 조건을 사람이 읽을 수 있는 한 줄로. */
-export function describeSavedFilter(filter: SavedFilter, labelOf: (key: string) => string) {
+/**
+ * 저장된 조건을 사람이 읽을 수 있는 한 줄로.
+ *
+ * 분야도 조건입니다. 빼놓으면 '레시피 탭에서 두부'로 저장한 것과 '전체에서 두부'로
+ * 저장한 것이 화면에 똑같이 적히고, 둘 다 눌러본 뒤에야 다르다는 걸 알게 됩니다.
+ * 분야만 걸어둔 조건은 적을 것이 하나도 없어 '전체'라고 적히기까지 했습니다.
+ *
+ * 분야는 키가 아니라 이름으로 적습니다. 사전을 읽을 수 있는 쪽에서 넘겨받습니다.
+ */
+export function describeSavedFilter(
+  filter: SavedFilter,
+  labelOf: (key: string) => string,
+  categoryLabelOf: (key: string) => string
+) {
   const parts: string[] = [];
-  if (filter.category) parts.push(filter.category);
+  if (filter.category) parts.push(categoryLabelOf(filter.category));
   parts.push(...filter.facetKeys.map(labelOf));
   if (filter.searchQuery.trim()) parts.push(`"${filter.searchQuery.trim()}"`);
   return parts.join(' · ');

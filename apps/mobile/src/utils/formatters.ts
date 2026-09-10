@@ -425,12 +425,17 @@ export const CATEGORY_LABELS: Record<string, string> = {
  *
  * 위 목록은 사전을 못 읽었을 때의 대비로 남깁니다. 아이콘만 붙이는 자리를
  * 겸하는데, 아이콘은 분야의 성격이라 이름을 바꿔도 그대로 따라갑니다.
+ *
+ * 이름이 키와 같아도 이름으로 인정합니다. 예전에는 같으면 '이름이 없구나'로 보고
+ * 미분류로 돌렸는데, 그 판단이 두 자리에서 틀렸습니다. AI가 이름을 빼먹고 키만
+ * 보내면 fishing 분야가 미분류로 보였고, 사용자가 '캠핑'이라고 만든 분야는 키도
+ * 이름도 '캠핑'이라 만들자마자 미분류가 됐습니다.
+ *
+ * 정 모르겠으면 키라도 보여줍니다. 'fishing'은 낯설어도 어느 분야인지 짐작은
+ * 되지만, 미분류는 다른 분야인 척하는 거짓말이고 진짜 미분류와 한 칸에 섞입니다.
  */
 export function getCategoryLabel(category: string, fallbackLabel?: string): string {
-  const name =
-    fallbackLabel && fallbackLabel !== category
-      ? fallbackLabel
-      : CATEGORY_LABELS[category];
+  const name = fallbackLabel?.trim() || CATEGORY_LABELS[category] || category.trim();
 
   if (!name) return `${CATEGORY_LABELS.other} ${CATEGORY_ICONS.other}`;
 

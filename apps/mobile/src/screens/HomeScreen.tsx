@@ -51,10 +51,12 @@ import {
   isFilterSaveable,
   loadSavedFilters,
   removeSavedFilter,
+  replaceSavedFilters,
 } from '@/features/facets/savedFilters';
 import { parseFacetKey } from '@/features/facets/extract';
 import { facetLabel } from '@/features/facets/labels';
 import {
+  OTHER_TAB_KEY,
   TabOption,
   buildTabOptions,
   loadPinnedTabs,
@@ -62,7 +64,8 @@ import {
   savePinnedTabs,
   togglePinned,
 } from '@/features/facets/tabs';
-import { rewritePinnedTabs } from '@/features/taxonomy/merge';
+import { rewritePinnedTabs, rewriteSavedFilters } from '@/features/taxonomy/merge';
+import { resolveDomainLabel } from '@/features/taxonomy/registry';
 import { TabPickerModal } from '@/components/TabPickerModal';
 import { CaptureModal, CaptureFloatingButton } from '@/components/CaptureModal';
 import { DetailScreen, DetailContent } from '@/components/DetailScreen';
@@ -71,6 +74,7 @@ import {
   CaptureNotice,
   describeInputCandidate,
   filterItems,
+  getCategoryLabel,
   getSourceTheme,
   formatRelativeTime,
 } from '@/utils/formatters';
@@ -128,6 +132,8 @@ export function HomeScreen() {
   const resolveAwaitingInput = useAppStore((s) => s.resolveAwaitingInput);
   const renameDomain = useAppStore((s) => s.renameDomain);
   const mergeDomains = useAppStore((s) => s.mergeDomains);
+  const deleteDomain = useAppStore((s) => s.deleteDomain);
+  const createDomain = useAppStore((s) => s.createDomain);
 
   // Share intent
   const { hasShareIntent, shareIntent, resetShareIntent, error: shareIntentError } =
@@ -251,6 +257,51 @@ export function HomeScreen() {
     [renameDomain]
   );
 
+  /*
+   * 저장해둔 조건은 아래 '스마트 폴더'에서 쓰지만 상태는 여기 있습니다.
+   * 분야를 합치거나 지우면 그 조건들도 같이 고쳐야 해서, 분야를 다루는 자리보다
+   * 먼저 만들어져 있어야 합니다.
+   */
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
+
+  useEffect(() => {
+    void (async () => setSavedFilters(await loadSavedFilters()))();
+  }, []);
+
+  /**
+   * 분야가 사라진 뒤의 뒷정리.
+   *
+   * 사라진 분야를 가리키는 것이 두 군데 남습니다. 고정해둔 탭과 저장해둔 조건입니다.
+   * 둘 다 화면이 들고 있어 DB 쪽 작업만으로는 안 고쳐집니다. 안 고치면 탭에는 건수 0인
+   * 유령이 남고, 스마트 폴더는 눌러도 늘 0건인 채로 이유를 알려주지 않습니다.
+   *
+   * intoKey가 null이면 지운 것입니다. 그때는 조건에서 분야를 빼기만 합니다.
+   */
+  const followDomainChange = useCallback(
+    async (fromKey: string, intoKey: string | null) => {
+      const nextPinned = intoKey
+        ? rewritePinnedTabs(pinnedTabs, fromKey, intoKey)
+        : pinnedTabs.filter((key) => key !== fromKey);
+
+      if (nextPinned.join('\u0000') !== pinnedTabs.join('\u0000')) {
+        setPinnedTabs(nextPinned);
+        await savePinnedTabs(nextPinned);
+      }
+
+      const nextFilters = rewriteSavedFilters(savedFilters, fromKey, intoKey);
+      const changed = nextFilters.some((filter, index) => {
+        const before = savedFilters[index];
+        return (
+          filter.category !== before.category ||
+          filter.facetKeys.join('\u0000') !== before.facetKeys.join('\u0000')
+        );
+      });
+
+      if (changed) setSavedFilters(await replaceSavedFilters(nextFilters));
+    },
+    [pinnedTabs, savedFilters]
+  );
+
   /**
    * 분야 합치기.
    *
@@ -267,11 +318,7 @@ export function HomeScreen() {
       const run = async () => {
         const moved = await mergeDomains(from.key, { key: into.key, label: into.label });
 
-        const nextPinned = rewritePinnedTabs(pinnedTabs, from.key, into.key);
-        if (nextPinned.join('\u0000') !== pinnedTabs.join('\u0000')) {
-          setPinnedTabs(nextPinned);
-          await savePinnedTabs(nextPinned);
-        }
+        await followDomainChange(from.key, into.key);
 
         // 보고 있던 탭이 사라졌으면 남는 쪽으로 따라갑니다. 그대로 두면
         // 아무것도 없는 목록에 갇힙니다.
@@ -289,18 +336,74 @@ export function HomeScreen() {
         { text: '합치기', style: 'destructive', onPress: () => void run() },
       ]);
     },
-    [mergeDomains, pinnedTabs]
+    [mergeDomains, followDomainChange]
+  );
+
+  /**
+   * 분야 미리 만들어두기.
+   *
+   * 글에 붙이지 않고 이름만 정해둡니다. 글이 없으니 탭에는 안 서지만, 사전에는
+   * 들어가서 다음 정리 요청부터 AI에게 후보로 실려 나갑니다. 이게 이 기능의 값어치라
+   * 상세 화면에서 글에 붙이며 만드는 길과 별개로 있어야 합니다.
+   */
+  const handleCreateDomain = useCallback(
+    async (label: string) => {
+      const result = await createDomain(label);
+      if (!result) {
+        setToastMessage('쓸 수 없는 이름입니다.');
+        return;
+      }
+
+      setToastMessage(
+        result.existed
+          ? `'${result.label}'은 이미 있습니다.`
+          : `'${result.label}' 분야를 만들었습니다. 다음에 저장하는 글부터 AI가 여기로 보냅니다.`
+      );
+    },
+    [createDomain]
+  );
+
+  /**
+   * 빈 분야 지우기.
+   *
+   * 글이 있는 분야는 여기로 오지 않습니다(버튼이 서지 않습니다). 그래도 한 번 더
+   * 확인하는 이유는, 시트를 여는 사이에 다른 곳에서 정리가 끝나 글이 붙었을 수
+   * 있기 때문입니다. 건수는 화면이 세고 있는 값을 그대로 씁니다.
+   */
+  const handleDeleteDomain = useCallback(
+    (target: TabOption) => {
+      if (target.count > 0) {
+        setToastMessage(`'${target.label}'에 글 ${target.count}건이 있어 지울 수 없습니다.`);
+        return;
+      }
+
+      const message = `'${target.label}' 분야를 지웁니다. 글이 없는 분야라 사라지는 것은 이름뿐입니다.`;
+
+      const run = async () => {
+        const removed = await deleteDomain(target.key);
+        if (!removed) return;
+
+        await followDomainChange(target.key, null);
+        setActiveCategory((current) => (current === target.key ? '' : current));
+        setToastMessage(`'${target.label}' 분야를 지웠습니다.`);
+      };
+
+      if (Platform.OS === 'web') {
+        if (window.confirm(message)) void run();
+        return;
+      }
+
+      Alert.alert('분야 지우기', message, [
+        { text: '취소', style: 'cancel' },
+        { text: '지우기', style: 'destructive', onPress: () => void run() },
+      ]);
+    },
+    [deleteDomain, followDomainChange]
   );
 
   // ==========================================
   // 스마트 폴더 (조합 조건 저장)
   // ==========================================
-  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
-
-  useEffect(() => {
-    void (async () => setSavedFilters(await loadSavedFilters()))();
-  }, []);
-
   const handleSaveFilter = useCallback(
     async (name: string) => {
       const next = await addSavedFilter(savedFilters, {
@@ -396,6 +499,32 @@ export function HomeScreen() {
     [facetIndex, taxonomy, pinnedTabs]
   );
 
+  /**
+   * 시트에 세울 분야. 글이 없는 것까지 담습니다.
+   *
+   * 탭은 글이 있는 분야만 세웁니다. 한 번도 안 쓴 분야가 자리를 차지하면 안 되니까요.
+   * 그런데 그 규칙을 시트에까지 적용하면, 마지막 한 건을 다른 데로 옮긴 분야가 화면
+   * 어디에도 안 남습니다. 이름을 고칠 수도, 지울 수도, 글을 도로 넣을 수도 없어집니다.
+   *
+   * 그래서 탭에 세우는 목록과 시트에 담는 목록을 나눕니다.
+   */
+  const sheetOptions = useMemo(() => {
+    const seen = new Set(tabOptions.map((option) => option.key));
+    const empties: TabOption[] = [];
+
+    for (const domain of taxonomy.domains.values()) {
+      if (seen.has(domain.key) || domain.key === OTHER_TAB_KEY) continue;
+      empties.push({ key: domain.key, label: getCategoryLabel(domain.key, domain.label), count: 0 });
+    }
+
+    empties.sort((a, b) => a.label.localeCompare(b.label));
+
+    // 미분류는 늘 끝자리를 지킵니다. 빈 분야가 그 뒤로 가면 안 됩니다.
+    const otherIndex = tabOptions.findIndex((option) => option.key === OTHER_TAB_KEY);
+    if (otherIndex < 0) return [...tabOptions, ...empties];
+    return [...tabOptions.slice(0, otherIndex), ...empties, tabOptions[otherIndex]];
+  }, [tabOptions, taxonomy]);
+
   const visibleTabs = useMemo(
     () => resolveVisibleTabs(tabOptions, pinnedTabs, activeCategory),
     [tabOptions, pinnedTabs, activeCategory]
@@ -448,6 +577,19 @@ export function HomeScreen() {
       matchesCategoryTab(facetIndex, item, activeCategory)
     );
     const ids = new Set(withoutSearch.map((item) => item.id));
+    return selectByFacets(facetIndex, selectedFacets, ids).size;
+  }, [items, activeCategory, searchQuery, facetIndex, selectedFacets]);
+
+  /**
+   * 결과를 죽인 것이 분야일 수도 있습니다.
+   *
+   * 없어진 분야를 가리키는 저장된 조건을 누르면 0건이 나오는데, 분야는 뺄 수 있는
+   * 조건으로 제안되지 않아 화면에서 빠져나올 길이 없었습니다. 검색어와 같은 방식으로
+   * 분야만 풀었을 때의 건수를 미리 셉니다.
+   */
+  const withoutCategoryCount = useMemo(() => {
+    if (!activeCategory) return 0;
+    const ids = new Set(filterItems(items, searchQuery).map((item) => item.id));
     return selectByFacets(facetIndex, selectedFacets, ids).size;
   }, [items, activeCategory, searchQuery, facetIndex, selectedFacets]);
 
@@ -946,6 +1088,9 @@ export function HomeScreen() {
                 const parsed = parseFacetKey(key);
                 return parsed ? facetLabel(parsed.axis, parsed.value) : key;
               }}
+              describeCategoryKey={(key) =>
+                getCategoryLabel(key, resolveDomainLabel(taxonomy, key))
+              }
             />
           </View>
 
@@ -973,15 +1118,23 @@ export function HomeScreen() {
           ) : filteredItems.length === 0 ? (
             <EmptyResultGuide
               isCollectionEmpty={items.length === 0}
-              hasConditions={selectedFacets.length > 0}
+              hasConditions={selectedFacets.length > 0 || Boolean(activeCategory)}
               relaxations={relaxations}
               searchQuery={searchQuery}
               withoutSearchCount={withoutSearchCount}
+              categoryLabel={
+                activeCategory
+                  ? getCategoryLabel(activeCategory, resolveDomainLabel(taxonomy, activeCategory))
+                  : ''
+              }
+              withoutCategoryCount={withoutCategoryCount}
               onDropFacet={handleToggleFacet}
               onClearSearch={() => setSearchQuery('')}
+              onClearCategory={() => setActiveCategory('')}
               onClearAll={() => {
                 handleClearFacets();
                 setSearchQuery('');
+                setActiveCategory('');
               }}
             />
           ) : (
@@ -1103,7 +1256,7 @@ export function HomeScreen() {
       {/* 분야 전체 보기. 탭에 못 세운 것들이 갈 자리입니다. */}
       <TabPickerModal
         visible={isTabPickerVisible}
-        options={tabOptions}
+        options={sheetOptions}
         activeKey={activeCategory}
         pinned={pinnedTabs}
         manageKey={manageDomainKey}
@@ -1111,6 +1264,8 @@ export function HomeScreen() {
         onTogglePin={(key) => void handleTogglePinnedTab(key)}
         onRename={(key, label) => void handleRenameDomain(key, label)}
         onMerge={(from, into) => handleMergeDomains(from, into)}
+        onDelete={handleDeleteDomain}
+        onCreate={(label) => void handleCreateDomain(label)}
         onClose={handleCloseTabPicker}
       />
 

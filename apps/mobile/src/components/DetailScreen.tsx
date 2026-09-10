@@ -20,6 +20,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { SavedItem } from '@/features/items/types';
 import { readContentV2 } from '@/features/items/contentV2';
 import { DomainSection, FactRow, buildDomainSections, factValues, legacyText } from '@/features/items/factView';
+import { OTHER_TAB_KEY } from '@/features/facets/tabs';
+import { useKeyboardHeight } from '@/hooks/useKeyboardHeight';
 import { TaxonomyRegistry, resolveDomainLabel } from '@/features/taxonomy/registry';
 import { resolveImageUri } from '@/features/capture/imageCapture';
 import { isEnrichStalled } from '@/features/items/staleEnrich';
@@ -900,13 +902,14 @@ export function DetailContent({
         isManual={Boolean(selectedItem.userCategory)}
         taxonomy={taxonomy}
         onClose={() => setIsCategoryPickerVisible(false)}
-        onSelect={(category) => {
+        onSelect={(category, notice) => {
           setIsCategoryPickerVisible(false);
           void setItemCategory(selectedItem.id, category);
           setToastMessage(
-            category
-              ? `${getCategoryLabel(category, resolveDomainLabel(taxonomy, category))}(으)로 변경했습니다`
-              : 'AI 분류를 따르도록 되돌렸습니다'
+            notice ??
+              (category
+                ? `${getCategoryLabel(category, resolveDomainLabel(taxonomy, category))}(으)로 변경했습니다`
+                : 'AI 분류를 따르도록 되돌렸습니다')
           );
         }}
       />
@@ -1366,36 +1369,116 @@ function CategoryPicker({
   isManual: boolean;
   taxonomy: TaxonomyRegistry;
   onClose: () => void;
-  onSelect: (category: string | null) => void;
+  onSelect: (category: string | null, notice?: string) => void;
 }) {
   const styles = useThemedStyles(createStyles);
-  const options = ['recipe', 'workout', 'travel', 'parenting', 'shopping', 'interior', 'other'];
+  const keyboardHeight = useKeyboardHeight();
+  const createDomain = useAppStore((state) => state.createDomain);
+  const [draft, setDraft] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+
+  // 시트를 닫았다 열면 쓰다 만 이름은 지웁니다. 남겨두면 다른 글을 옮기러 열었을 때
+  // 엉뚱한 이름이 입력칸에 들어 있습니다.
+  useEffect(() => {
+    if (!visible) {
+      setDraft('');
+      setIsCreating(false);
+    }
+  }, [visible]);
+
+  const options = useMemo(() => {
+    const keys: string[] = [];
+    for (const key of taxonomy.domains.keys()) {
+      if (key === OTHER_TAB_KEY) continue;
+      keys.push(key);
+    }
+
+    // 지금 지정된 분야가 사전에 없을 수 있습니다. 다른 기기에서 만든 분야를
+    // 아이템만 따라온 경우입니다. 목록에서 빠지면 지금 어디에 있는지가 안 보입니다.
+    if (current && current !== OTHER_TAB_KEY && !keys.includes(current)) keys.unshift(current);
+
+    // 미분류는 늘 끝입니다. 분야를 못 정한 것들의 자리라 다른 분야와 나란히 서면
+    // 고를 만한 것처럼 보입니다.
+    keys.push(OTHER_TAB_KEY);
+    return keys;
+  }, [taxonomy, current]);
+
+  async function commitDraft() {
+    const label = draft.trim();
+    if (!label) return;
+
+    const result = await createDomain(label);
+    if (!result) return;
+
+    setDraft('');
+    setIsCreating(false);
+    onSelect(
+      result.key,
+      result.existed
+        ? `이미 있는 '${result.label}'으로 옮겼습니다`
+        : `'${result.label}'을 만들고 옮겼습니다`
+    );
+  }
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.pickerBackdrop} onPress={onClose}>
+      {/* 가운데 뜨는 시트라 키보드가 올라오면 아래쪽 입력칸이 가려집니다.
+          키보드 높이만큼 아래 여백을 줘서 시트 전체를 위로 밀어 올립니다. */}
+      <Pressable
+        style={[styles.pickerBackdrop, { paddingBottom: keyboardHeight }]}
+        onPress={onClose}
+      >
         <Pressable style={styles.pickerSheet} onPress={(e) => e.stopPropagation()}>
           <Text style={styles.pickerTitle}>카테고리 바꾸기</Text>
 
-          {options.map((option) => {
-            const isCurrent = option === current;
-            return (
-              <Pressable
-                key={option}
-                onPress={() => onSelect(option)}
-                style={({ pressed }) => [
-                  styles.pickerRow,
-                  isCurrent && styles.pickerRowActive,
-                  pressed && { opacity: 0.7 },
-                ]}
-              >
-                <Text style={[styles.pickerRowText, isCurrent && styles.pickerRowTextActive]}>
-                  {getCategoryLabel(option, resolveDomainLabel(taxonomy, option))}
-                </Text>
-                {isCurrent ? <Text style={styles.pickerCheck}>✓</Text> : null}
+          {/* 분야는 사용자가 저장하는 대로 늘어납니다. 예전처럼 여섯 개를 박아두면
+              AI가 만든 분야도, 직접 만든 분야도 여기서는 고를 수 없습니다. */}
+          <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled">
+            {options.map((option) => {
+              const isCurrent = option === current;
+              return (
+                <Pressable
+                  key={option}
+                  onPress={() => onSelect(option)}
+                  style={({ pressed }) => [
+                    styles.pickerRow,
+                    isCurrent && styles.pickerRowActive,
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <Text style={[styles.pickerRowText, isCurrent && styles.pickerRowTextActive]}>
+                    {getCategoryLabel(option, resolveDomainLabel(taxonomy, option))}
+                  </Text>
+                  {isCurrent ? <Text style={styles.pickerCheck}>✓</Text> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+
+          {isCreating ? (
+            <View style={styles.pickerCreateRow}>
+              <TextInput
+                value={draft}
+                onChangeText={setDraft}
+                placeholder="새 분야 이름"
+                placeholderTextColor={styles.pickerCreateHint.color}
+                style={styles.pickerCreateInput}
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={() => void commitDraft()}
+              />
+              <Pressable onPress={() => void commitDraft()} hitSlop={8}>
+                <Text style={styles.pickerCreateSubmit}>만들기</Text>
               </Pressable>
-            );
-          })}
+            </View>
+          ) : (
+            <Pressable
+              onPress={() => setIsCreating(true)}
+              style={({ pressed }) => [styles.pickerRow, pressed && { opacity: 0.7 }]}
+            >
+              <Text style={styles.pickerCreateText}>+ 새 분야 만들기</Text>
+            </Pressable>
+          )}
 
           {isManual ? (
             <Pressable onPress={() => onSelect(null)} style={styles.pickerReset}>
@@ -1464,6 +1547,42 @@ const createStyles = (palette: Palette) =>
     borderRadius: 20,
     padding: spacing[5],
     gap: spacing[1],
+  },
+  /**
+   * 분야 목록은 늘어납니다. 높이를 안 묶어두면 시트가 화면 밖으로 자라
+   * 아래쪽의 '새 분야 만들기'와 '되돌리기'가 손에 닿지 않습니다.
+   */
+  pickerList: {
+    maxHeight: 320,
+  },
+  pickerCreateText: {
+    color: palette.accent,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  pickerCreateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[4],
+  },
+  pickerCreateInput: {
+    flex: 1,
+    color: palette.textPrimary,
+    fontSize: 14,
+    fontWeight: '700',
+    borderBottomWidth: 1,
+    borderBottomColor: palette.accent,
+    paddingVertical: 0,
+  },
+  pickerCreateSubmit: {
+    color: palette.accent,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  pickerCreateHint: {
+    color: palette.textMuted,
   },
   pickerTitle: {
     color: palette.textPrimary,

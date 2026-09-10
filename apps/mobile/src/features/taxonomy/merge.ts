@@ -144,6 +144,45 @@ export function mergeDomainDefinition(
   };
 }
 
+/**
+ * 저장해둔 조건에서 사라진 분야를 손봅니다.
+ *
+ * 합치면 남는 쪽으로 바꾸고, 지우면 그 조건에서 분야를 뺍니다(intoKey가 null).
+ * 안 고치면 스마트 폴더가 없는 분야를 가리킨 채 남아, 눌러도 늘 0건이 나옵니다.
+ * 조건은 사용자가 손으로 만든 것이라 통째로 지우지는 않습니다. 분야만 손봅니다.
+ *
+ * 조합 조건도 같이 봅니다. 축은 `분야.항목` 모양이라 분야가 옮겨가면 축 이름도
+ * 따라 바뀌는데, 한쪽만 고치면 폴더는 살아 있는데 조건 하나가 영영 안 걸립니다.
+ */
+export function rewriteSavedFilters<T extends { category: string; facetKeys: string[] }>(
+  filters: T[],
+  fromKey: string,
+  intoKey: string | null
+): T[] {
+  const rewriteAxis = (key: string): string | null => {
+    const boundary = key.indexOf(':');
+    if (boundary <= 0) return key;
+
+    const axis = key.slice(0, boundary);
+    if (axis !== fromKey && !axis.startsWith(`${fromKey}.`)) return key;
+    if (!intoKey) return null;
+
+    return `${intoKey}${axis.slice(fromKey.length)}${key.slice(boundary)}`;
+  };
+
+  return filters.map((filter) => {
+    const category = filter.category === fromKey ? (intoKey ?? '') : filter.category;
+
+    const facetKeys: string[] = [];
+    for (const key of filter.facetKeys) {
+      const next = rewriteAxis(key);
+      if (next && !facetKeys.includes(next)) facetKeys.push(next);
+    }
+
+    return { ...filter, category, facetKeys };
+  });
+}
+
 /** 고정해둔 탭에서 사라진 분야를 남는 분야로 바꿉니다. 이미 있으면 중복을 버립니다. */
 export function rewritePinnedTabs(pinned: string[], fromKey: string, intoKey: string): string[] {
   const next: string[] = [];

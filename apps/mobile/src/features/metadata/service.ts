@@ -1352,8 +1352,22 @@ const MAX_VALUES_PER_FACT = 24;
 /** 값 하나의 길이 상한. 이보다 길면 값이 아니라 문단입니다. */
 const MAX_VALUE_LENGTH = 200;
 
-/** 프롬프트에 넣을 사전 크기. 다 넣으면 토큰만 먹고 모델이 흘려 읽습니다. */
-const MAX_PROMPT_DOMAINS = 12;
+/**
+ * 프롬프트에 넣을 사전 크기.
+ *
+ * 분야 이름과 항목 이름은 하는 일도, 길이도 다릅니다. 이름은 '- camping(캠핑)'
+ * 한 줄이면 되고 같은 분야가 둘로 갈라지는 것을 막습니다. 항목은 분야마다 열 개씩
+ * 붙어 열 배쯤 길고, 같은 정보가 다른 키로 들어오는 것을 막습니다.
+ *
+ * 예전에는 둘을 한 상한으로 묶어서, 열세 번째 분야는 이름조차 실리지 않았습니다.
+ * 모델은 그 분야가 없는 줄 알고 같은 뜻의 분야를 새로 만들었습니다. 사용자가 분야를
+ * 직접 만들기 시작하면 열두 개는 금방 넘습니다.
+ *
+ * 그래서 이름은 넉넉히 싣고 항목만 조입니다. 분야가 열두 개 이하면 예전과 똑같이
+ * 나가서 비용도 그대로입니다.
+ */
+const MAX_PROMPT_DOMAINS = 40;
+const MAX_PROMPT_DOMAINS_WITH_FACTS = 12;
 const MAX_PROMPT_FACTS_PER_DOMAIN = 10;
 
 /**
@@ -1364,22 +1378,35 @@ const MAX_PROMPT_FACTS_PER_DOMAIN = 10;
  * 못했습니다. 무엇이 맞느냐가 아니라 하나로 모이느냐의 문제입니다.
  */
 function describeRegistryForPrompt(registry: TaxonomyRegistry): string {
-  const byDomain = new Map<string, string[]>();
+  const factsByDomain = new Map<string, string[]>();
 
   for (const definition of registry.facts.values()) {
-    const list = byDomain.get(definition.domainKey) ?? [];
+    const list = factsByDomain.get(definition.domainKey) ?? [];
     if (list.length < MAX_PROMPT_FACTS_PER_DOMAIN) {
       list.push(`${definition.key}(${definition.label})`);
     }
-    byDomain.set(definition.domainKey, list);
+    factsByDomain.set(definition.domainKey, list);
   }
 
+  // 항목이 아니라 분야를 훑습니다.
+  //
+  // 예전에는 항목을 훑으면서 분야별로 묶었습니다. 그러면 항목이 하나도 없는 분야는
+  // 줄이 아예 안 만들어집니다. 사용자가 방금 만든 분야가 정확히 그 상태라, 알려줘야
+  // 할 때 알려주지 못하고 모델은 같은 뜻의 분야를 새로 만들었습니다.
+  //
+  // 순서도 여기서 갈립니다. 사전은 많이 쓰인 순으로 옵니다. 항목을 훑으면 그 순서가
+  // 분야 키의 사전순으로 뒤집히고, 한글 키는 뒤로 밀려 상한에서 가장 먼저 잘립니다.
   const lines: string[] = [];
-  for (const [domainKey, facts] of byDomain) {
+  for (const domain of registry.domains.values()) {
     if (lines.length >= MAX_PROMPT_DOMAINS) break;
-    if (domainKey === 'other') continue;
-    const label = registry.domains.get(domainKey)?.label ?? domainKey;
-    lines.push(`- ${domainKey}(${label}): ${facts.join(', ')}`);
+    if (domain.key === 'other') continue;
+
+    // 항목은 앞쪽 분야에만 붙입니다. 사전은 많이 쓰인 순으로 와서, 뒤로 갈수록
+    // 어쩌다 한 번 쓴 분야입니다. 그런 분야의 항목까지 외우게 할 이유는 없습니다.
+    const facts =
+      lines.length < MAX_PROMPT_DOMAINS_WITH_FACTS ? (factsByDomain.get(domain.key) ?? []) : [];
+    const tail = facts.length > 0 ? `: ${facts.join(', ')}` : '';
+    lines.push(`- ${domain.key}(${domain.label})${tail}`);
   }
 
   return lines.join('\n');
@@ -1539,6 +1566,8 @@ async function callGeminiApi(
 목록에서 고르는 것이 아니라 글에 맞는 것을 직접 정해라. 낚시 글이면 fishing(낚시),
 캠핑 글이면 camping(캠핑)이다. 억지로 기존 분야에 밀어 넣지 마라.
 다만 아래 '이미 쓰고 있는 이름'에 뜻이 같은 것이 있으면 반드시 그 키를 그대로 써라.
+목록의 키는 위 형식 규칙과 달라 보여도 한 글자도 바꾸지 말고 그대로 옮겨 적어라.
+사용자가 직접 만든 분야가 목록에 섞여 있고, 그 키를 고쳐 쓰면 같은 분야가 둘로 갈라진다.
 
 항목(facts)은 그 글에서 건진 정보다. 다음을 지켜라.
 

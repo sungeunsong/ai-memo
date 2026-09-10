@@ -609,7 +609,11 @@ export async function bumpTaxonomyUseAsync(domainKey: string, factKeys: string[]
 }
 
 /**
- * 분야의 표시 이름을 바꿉니다.
+ * 분야를 만들거나, 이미 있으면 표시 이름을 바꿉니다.
+ *
+ * 두 일을 한 함수가 맡습니다. 없으면 만들고 있으면 이름만 고치는 동작이 원래부터
+ * 하나였고(사전에 없는 분야의 이름을 고치려는 경우가 있어서), 사용자가 분야를
+ * 직접 만들 때 필요한 것도 정확히 그것입니다.
  *
  * key는 그대로 둡니다. 아이템도 항목 정의도 전부 key로 물려 있어서, 이름을
  * 바꾸는 일이 저장된 것을 하나도 건드리지 않습니다. 아이템 안에 박힌 이름은
@@ -618,7 +622,7 @@ export async function bumpTaxonomyUseAsync(domainKey: string, factKeys: string[]
  * 이름은 다음 정리 요청의 프롬프트에도 실립니다. 그래서 이름을 넓게 고쳐두면
  * 모델이 다음 글을 같은 분야로 모읍니다. 표시만 바꾸는 일이 아닙니다.
  */
-export async function renameDomainAsync(key: string, label: string): Promise<void> {
+export async function upsertDomainAsync(key: string, label: string): Promise<void> {
   const stamp = new Date().toISOString();
 
   // 사전에 없는 분야일 수 있습니다. 웹이 사전을 저장하기 전에 만들어진 아이템이
@@ -766,6 +770,35 @@ export async function mergeDomainsAsync(
   );
 
   return { movedItems };
+}
+
+/**
+ * 빈 분야를 지웁니다. 그 분야의 항목 정의도 함께 사라집니다.
+ *
+ * 글이 들어 있는 분야에는 쓰지 않습니다. 그 경우는 합치기가 맡습니다. 여기서까지
+ * 글을 옮기면 되돌릴 수 없는 길이 두 개가 되고, 둘의 동작이 조금씩 달라집니다.
+ * 글이 남아 있는데 정의만 지우면 그 글들은 이름 없는 분야를 가리키게 됩니다.
+ *
+ * 항목 정의를 같이 지우는 이유는, 남겨두면 주인 없는 정의가 프롬프트에 계속
+ * 실려 모델에게 없는 분야를 가르치기 때문입니다.
+ */
+export async function deleteDomainAsync(key: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    saveWebDomains(getWebDomains().filter((domain) => domain.key !== key));
+    saveWebFacts(getWebFacts().filter((fact) => fact.domainKey !== key));
+    return;
+  }
+
+  await runWriteAsync((database) =>
+    database.withTransactionAsync(async () => {
+      const facts = await listFactDefinitionsAsync(database);
+      for (const fact of facts) {
+        if (fact.domainKey !== key) continue;
+        await deleteFactDefinitionAsync(database, key, fact.key);
+      }
+      await deleteDomainDefinitionAsync(database, key);
+    })
+  );
 }
 
 export async function recoverStalledSyncJobsAsync(now = Date.now()) {

@@ -60,9 +60,21 @@ export function buildFacetIndex(
       domainLabels.set(domainLabel.key, domainLabel.label);
     }
 
-    // 사용자가 직접 고친 분류는 사전보다 우선합니다. 탭에서도 그래야
-    // 손으로 옮겨둔 것이 다음 렌더에 제자리로 돌아가지 않습니다.
-    domainKeys.add(getItemCategory(item));
+    // 사용자가 직접 고친 분류는 그것만 남깁니다.
+    //
+    // 예전에는 AI가 정한 분야에 더하기만 했습니다. 그러면 여행 글을 캠핑으로 옮겨도
+    // 여행 탭에 그대로 남아서, 옮긴 사람 눈에는 아무 일도 안 일어난 것으로 보입니다.
+    // 사람이 손으로 정한 것은 AI의 추측을 밀어냅니다.
+    //
+    // 검색과 조합 조건은 그대로입니다. 칩은 탭이 아니라 아이템이 들고 있는 facet에서
+    // 나오므로, 옮긴 글의 재료나 장소는 새 탭에서도 그대로 걸립니다.
+    const chosen = item.userCategory?.trim();
+    if (chosen) {
+      domainKeys.clear();
+      domainKeys.add(chosen);
+    } else {
+      domainKeys.add(getItemCategory(item));
+    }
 
     // 분야가 하나라도 잡혔으면 미분류에서는 뺍니다. 양쪽에 다 보이면
     // 미분류가 '아직 정리 안 된 것'이라는 뜻을 잃습니다.

@@ -15,6 +15,7 @@ import { Palette } from '@/theme/palette';
 import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
 import { useBackHandler } from '@/hooks/useBackHandler';
+import { useKeyboardHeight } from '@/hooks/useKeyboardHeight';
 
 type Props = {
   visible: boolean;
@@ -27,6 +28,16 @@ type Props = {
   manageKey?: string | null;
   onRename: (key: string, label: string) => void;
   onMerge: (from: TabOption, into: TabOption) => void;
+  /** 글이 하나도 없는 분야를 지웁니다. 글이 있으면 이 자리에 버튼이 서지 않습니다. */
+  onDelete: (target: TabOption) => void;
+  /**
+   * 분야를 새로 만듭니다.
+   *
+   * 상세 화면에도 만드는 자리가 있지만 그쪽은 글에 붙이면서 만드는 길입니다.
+   * 글보다 분야를 먼저 정해두고 싶은 경우가 있어서 — 그래야 다음에 저장하는 글부터
+   * AI가 그 분야로 보냅니다 — 고치고 합치는 이 자리에도 둡니다.
+   */
+  onCreate: (label: string) => void;
   onClose: () => void;
 };
 
@@ -35,7 +46,8 @@ type SheetMode =
   | { kind: 'list' }
   | { kind: 'manage'; target: TabOption }
   | { kind: 'rename'; target: TabOption }
-  | { kind: 'merge'; target: TabOption };
+  | { kind: 'merge'; target: TabOption }
+  | { kind: 'create' };
 
 /**
  * 분야 전체를 보는 시트.
@@ -59,11 +71,14 @@ export function TabPickerModal({
   onTogglePin,
   onRename,
   onMerge,
+  onDelete,
+  onCreate,
   onClose,
 }: Props) {
   const styles = useThemedStyles(createStyles);
   const { palette } = useTheme();
   const insets = useSafeAreaInsets();
+  const keyboardHeight = useKeyboardHeight();
 
   const [mode, setMode] = useState<SheetMode>({ kind: 'list' });
   const [draftLabel, setDraftLabel] = useState('');
@@ -95,7 +110,7 @@ export function TabPickerModal({
       onClose();
       return;
     }
-    if (mode.kind === 'manage') {
+    if (mode.kind === 'manage' || mode.kind === 'create') {
       setMode({ kind: 'list' });
       return;
     }
@@ -112,6 +127,13 @@ export function TabPickerModal({
     setMode({ kind: 'manage', target: option });
   }
 
+  function submitCreate() {
+    const trimmed = draftLabel.trim();
+    if (trimmed) onCreate(trimmed);
+    setDraftLabel('');
+    setMode({ kind: 'list' });
+  }
+
   function submitRename(target: TabOption) {
     const trimmed = draftLabel.trim();
     if (trimmed && trimmed !== target.label) onRename(target.key, trimmed);
@@ -120,9 +142,13 @@ export function TabPickerModal({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+      <Pressable style={[styles.backdrop, { paddingBottom: keyboardHeight }]} onPress={onClose}>
         <Pressable
-          style={[styles.sheet, { paddingBottom: insets.bottom + spacing[4] }]}
+          style={[
+            styles.sheet,
+            // 키보드가 올라와 있으면 시트 아래는 키보드라 내비게이션 바 몫이 필요 없습니다.
+            { paddingBottom: keyboardHeight > 0 ? spacing[4] : insets.bottom + spacing[4] },
+          ]}
           onPress={(event) => event.stopPropagation()}
         >
           <View style={styles.header}>
@@ -133,7 +159,9 @@ export function TabPickerModal({
                   ? '이름 바꾸기'
                   : mode.kind === 'manage'
                     ? mode.target.label
-                    : '분야'}
+                    : mode.kind === 'create'
+                      ? '새 분야 만들기'
+                      : '분야'}
             </Text>
             <Pressable
               onPress={() => (mode.kind === 'list' ? onClose() : setMode({ kind: 'list' }))}
@@ -198,8 +226,46 @@ export function TabPickerModal({
                     </View>
                   );
                 })}
+
+                {/* 글보다 분야를 먼저 정해두는 길. 만들어두면 다음에 저장하는 글부터
+                    AI가 이 분야를 후보로 씁니다. */}
+                <Pressable
+                  onPress={() => {
+                    setDraftLabel('');
+                    setMode({ kind: 'create' });
+                  }}
+                  style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+                >
+                  <Text style={styles.createText}>+ 새 분야 만들기</Text>
+                </Pressable>
               </ScrollView>
             </>
+          ) : null}
+
+          {mode.kind === 'create' ? (
+            <View style={styles.menu}>
+              <TextInput
+                value={draftLabel}
+                onChangeText={setDraftLabel}
+                placeholder="분야 이름 (예: 캠핑)"
+                placeholderTextColor={palette.textMuted}
+                style={styles.input}
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={submitCreate}
+              />
+              <Text style={styles.hint}>
+                만들어두면 다음에 저장하는 글부터 AI가 이 분야로 보냅니다. 글이 없는
+                동안에는 탭에 서지 않고 이 목록에만 있습니다.
+              </Text>
+
+              <Pressable
+                style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.8 }]}
+                onPress={submitCreate}
+              >
+                <Text style={styles.primaryBtnText}>만들기</Text>
+              </Pressable>
+            </View>
           ) : null}
 
           {mode.kind === 'manage' ? (
@@ -228,6 +294,20 @@ export function TabPickerModal({
                   이 분야는 사라지고 글은 고른 분야로 옮겨갑니다. 되돌릴 수 없습니다.
                 </Text>
               </Pressable>
+
+              {/* 빈 분야에만 섭니다. 글이 있는 분야를 없애는 일은 합치기가 맡습니다.
+                  잘못 만든 이름을 남겨두면 다음 정리 때 AI에게 계속 실려 나갑니다. */}
+              {mode.target.count === 0 ? (
+                <Pressable
+                  style={({ pressed }) => [styles.menuBtn, pressed && { opacity: 0.7 }]}
+                  onPress={() => onDelete(mode.target)}
+                >
+                  <Text style={styles.menuBtnText}>이 분야 지우기</Text>
+                  <Text style={styles.menuBtnHint}>
+                    글이 없는 분야입니다. 지우면 AI에게 더 이상 알려주지 않습니다.
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
           ) : null}
 
@@ -327,7 +407,12 @@ const createStyles = (palette: Palette) =>
     rowCount: { color: palette.textMuted, fontSize: 12, fontWeight: '700' },
     rowArrow: { color: palette.accentText, fontSize: 12, fontWeight: '800' },
     pinBtn: { paddingLeft: spacing[3] },
-    pinText: { fontSize: 16, opacity: 0.35 },
+    createText: {
+    color: palette.accent,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  pinText: { fontSize: 16, opacity: 0.35 },
     pinTextOn: { opacity: 1 },
     menu: { gap: spacing[3], paddingBottom: spacing[2] },
     menuBtn: {

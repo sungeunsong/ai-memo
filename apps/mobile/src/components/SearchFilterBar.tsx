@@ -4,7 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { FacetOption } from '@/features/facets/query';
 import { TabOption } from '@/features/facets/tabs';
 import { facetLabel } from '@/features/facets/labels';
-import { SavedFilter } from '@/features/facets/savedFilters';
+import { SavedFilter, describeSavedFilter } from '@/features/facets/savedFilters';
 import { Palette } from '@/theme/palette';
 import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
@@ -37,6 +37,8 @@ type Props = {
   onSaveFilter: (name: string) => void;
   canSaveFilter: boolean;
   describeFacetKey: (key: string) => string;
+  /** 저장된 조건에 적힌 분야를 이름으로 바꿉니다. 사전은 화면 쪽이 들고 있습니다. */
+  describeCategoryKey: (key: string) => string;
 };
 
 /** 추천 칩이 너무 많으면 고르는 것 자체가 일이 됩니다. */
@@ -61,6 +63,7 @@ export function SearchFilterBar({
   onSaveFilter,
   canSaveFilter,
   describeFacetKey,
+  describeCategoryKey,
 }: Props) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -249,7 +252,7 @@ export function SearchFilterBar({
                 >
                   <Text style={styles.savedFilterName}>⭐ {filter.name}</Text>
                   <Text style={styles.savedFilterDesc} numberOfLines={1}>
-                    {filter.facetKeys.map(describeFacetKey).join(' · ') || '전체'}
+                    {describeSavedFilter(filter, describeFacetKey, describeCategoryKey) || '전체'}
                   </Text>
                 </Pressable>
               ))}

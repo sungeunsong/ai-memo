@@ -9,7 +9,7 @@
  * 냉장고 앞이 아니라 마트에서 쓰는 기능이 되기 때문입니다.
  */
 
-import { readContentV2 } from '@/features/items/contentV2';
+import { ItemFactV2, readContentV2 } from '@/features/items/contentV2';
 import { SavedItem } from '@/features/items/types';
 import { SEED_REGISTRY, TaxonomyRegistry, factRef, resolveFact } from '@/features/taxonomy/registry';
 import { NormalizationPolicy } from '@/features/taxonomy/types';
@@ -17,15 +17,41 @@ import { NormalizationPolicy } from '@/features/taxonomy/types';
 import { canonicalize, expand } from './normalize';
 
 /**
- * 냉장고 털기가 보는 축.
+ * 재료를 담는 항목의 이름.
  *
- * 재료에는 globalRole을 안 붙였습니다. 이 기능이 그 축 하나만 보고 동작하는데,
- * 다른 분야의 값이 같은 축으로 흘러 들어오면 '뜰채'가 있어야 만들 수 있는
- * 요리가 생깁니다.
+ * 분야는 보지 않습니다. 예전에는 'recipe' 분야의 재료만 봤는데, AI가 캠핑 요리 글을
+ * 'camping' 분야로 분류하는 순간 그 글의 재료가 통째로 빠졌습니다. 사용자가 분야를
+ * 직접 만들기 시작하면 더 자주 새어 나갑니다. 재료는 어디에 적혀 있든 재료입니다.
+ *
+ * 대신 항목 이름은 봅니다. 이걸 놓으면 캠핑의 '장비'나 낚시의 '대상어'까지 흘러들어
+ * '뜰채'가 있어야 만들 수 있는 요리가 생깁니다.
+ *
+ * 키와 이름표를 둘 다 보는 이유는 AI가 같은 뜻을 'ingredient'로도 '재료'로도
+ * 'food_ingredient'로도 적어 보내기 때문입니다. 키는 표기가 흔들리고 이름표는
+ * 한국어 한 낱말이라 덜 흔들립니다. 둘 중 하나만 맞아도 재료로 봅니다.
+ *
+ * 공예 글의 '재료'(원목·타공판)가 같이 걸릴 수 있습니다. 그래도 이 기능은 사용자가
+ * 직접 적어 넣은 보유 재료와 겹치는 것만 내놓으므로, 감자를 넣은 사람에게 원목이
+ * 뜨려면 원목을 직접 쳐 넣어야 합니다. 실제로 섞일 통로가 없습니다.
+ */
+export const PANTRY_FACT_KEY = 'ingredient';
+export const PANTRY_FACT_LABEL = '재료';
+
+/**
+ * 값을 다듬는 규칙을 가져올 기준 정의.
+ *
+ * 어느 분야의 재료든 같은 규칙으로 다듬어야 '두부 반 모'와 '두부'가 한 값으로 모입니다.
+ * 분야마다 제 규칙을 쓰게 두면, 정의가 아직 없는 새 분야의 재료만 안 다듬어져
+ * 보유 재료와 영영 안 만납니다.
  */
 export const PANTRY_DOMAIN = 'recipe';
-export const PANTRY_FACT_KEY = 'ingredient';
 export const PANTRY_AXIS = factRef(PANTRY_DOMAIN, PANTRY_FACT_KEY);
+
+/** 이 항목이 재료를 담고 있는지. 키가 맞거나 이름표가 '재료'면 재료로 봅니다. */
+function isPantryFact(registry: TaxonomyRegistry, fact: ItemFactV2): boolean {
+  if (fact.key === PANTRY_FACT_KEY) return true;
+  return resolveFact(registry, fact.domainKey, fact.key).label === PANTRY_FACT_LABEL;
+}
 
 export type PantryMatch = {
   item: SavedItem;
@@ -90,7 +116,7 @@ export function matchPantry(
   const matches: PantryMatch[] = [];
 
   for (const item of items) {
-    // 분야로 거르지 않습니다.
+    // 아이템의 분야로도, 항목의 분야로도 거르지 않습니다.
     // 아이템의 분야는 하나뿐이라 여행과 레시피가 한 메모에 섞이면 분야가 'travel'로
     // 찍히는데, 재료 항목은 자기 정의를 들고 있으므로 그대로 살아 있습니다.
     // 재료가 있으면 레시피로 취급하는 것으로 충분합니다.
@@ -100,7 +126,7 @@ export function matchPantry(
     // 정규화 후 중복을 제거해야 '감자 2개'와 '감자'가 두 번 세어지지 않습니다.
     const required: string[] = [];
     for (const fact of content.facts) {
-      if (fact.domainKey !== PANTRY_DOMAIN || fact.key !== PANTRY_FACT_KEY) continue;
+      if (!isPantryFact(registry, fact)) continue;
       for (const raw of fact.values) {
         if (typeof raw !== 'string') continue;
         const unit = pantryValue(raw, definition.normalizationPolicy);

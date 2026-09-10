@@ -15,8 +15,18 @@ type Props = {
   searchQuery: string;
   /** 검색어만 지웠을 때 남는 건수 */
   withoutSearchCount: number;
+  /**
+   * 지금 보고 있는 분야의 이름. 전체를 보고 있으면 빈 문자열입니다.
+   *
+   * 분야도 조건입니다. 그런데 여기서 뺄 수 없던 탓에, 없어진 분야를 가리키는
+   * 조건을 눌렀을 때 0건만 뜨고 빠져나올 길이 화면에 하나도 없었습니다.
+   */
+  categoryLabel: string;
+  /** 분야만 풀었을 때 남는 건수 */
+  withoutCategoryCount: number;
   onDropFacet: (key: string) => void;
   onClearSearch: () => void;
+  onClearCategory: () => void;
   onClearAll: () => void;
 };
 
@@ -33,12 +43,16 @@ export function EmptyResultGuide({
   relaxations,
   searchQuery,
   withoutSearchCount,
+  categoryLabel,
+  withoutCategoryCount,
   onDropFacet,
   onClearSearch,
+  onClearCategory,
   onClearAll,
 }: Props) {
   const styles = useThemedStyles(createStyles);
   const canDropSearch = searchQuery.trim().length > 0 && withoutSearchCount > 0;
+  const canDropCategory = categoryLabel.length > 0 && withoutCategoryCount > 0;
   if (isCollectionEmpty) {
     return (
       <View style={styles.container}>
@@ -50,7 +64,7 @@ export function EmptyResultGuide({
     );
   }
 
-  if (relaxations.length > 0 || canDropSearch) {
+  if (relaxations.length > 0 || canDropSearch || canDropCategory) {
     return (
       <View style={styles.container}>
         <Text style={styles.title}>조건이 조금 빡빡해요</Text>
@@ -69,6 +83,19 @@ export function EmptyResultGuide({
                 검색어 &quot;{searchQuery.trim()}&quot; 빼기
               </Text>
               <Text style={styles.suggestionCount}>{withoutSearchCount}건</Text>
+            </Pressable>
+          ) : null}
+
+          {canDropCategory ? (
+            <Pressable
+              onPress={onClearCategory}
+              style={({ pressed }) => [
+                styles.suggestion,
+                { transform: [{ scale: pressed ? 0.97 : 1 }] },
+              ]}
+            >
+              <Text style={styles.suggestionText}>{categoryLabel} 분야 빼기</Text>
+              <Text style={styles.suggestionCount}>{withoutCategoryCount}건</Text>
             </Pressable>
           ) : null}
 
