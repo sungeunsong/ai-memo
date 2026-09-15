@@ -32,7 +32,11 @@ import {
   fetchTextMetadataPatch,
   fetchImageMetadataPatch,
 } from '@/features/metadata/service';
-import { createEnrichRequestId, EnrichOptions } from '@/features/items/enrichRequest';
+import {
+  createEnrichRequestId,
+  EnrichOptions,
+  EnrichRequestExpiredError,
+} from '@/features/items/enrichRequest';
 import { buildFallbackItem, buildFallbackImageItem, normalizeUrl } from '@/features/items/fallback';
 import { extractManualTitle } from '@/utils/formatters';
 import {
@@ -392,9 +396,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (!options?.deferEnrich && !options?.skipAi) {
         void enrichSavedItemMetadata(
           fallbackItem.id,
-          async () => {
+          async (requestId) => {
             const base64 = await readImageForAnalysis(storedUri);
-            return fetchImageMetadataPatch(base64 ?? '');
+            return fetchImageMetadataPatch(requestId, base64 ?? '');
           },
           set,
           get
@@ -1143,7 +1147,7 @@ async function reenrichFromSources(
   await enrichSavedItemMetadata(
     itemId,
     // 날짜 해석의 기준은 지금이 아니라 저장한 때입니다.
-    () => fetchTextMetadataPatch(composed, item.createdAt),
+    (requestId) => fetchTextMetadataPatch(requestId, composed, item.createdAt),
     set,
     get,
     options
@@ -1185,9 +1189,9 @@ async function runEnrichForItem(
     const imageUri = item.imageUri;
     await enrichSavedItemMetadata(
       itemId,
-      async () => {
+      async (requestId) => {
         const base64 = await readImageForAnalysis(imageUri);
-        return fetchImageMetadataPatch(base64 ?? '', item.createdAt);
+        return fetchImageMetadataPatch(requestId, base64 ?? '', item.createdAt);
       },
       set,
       get,
@@ -1214,7 +1218,7 @@ async function runEnrichForItem(
     // 2026년에 저장한 공구를 2027년에 재분석하면 마감일이 밀려버립니다.
     await enrichSavedItemMetadata(
       itemId,
-      () => fetchMetadataPatch(targetUrl, item.createdAt),
+      (requestId) => fetchMetadataPatch(requestId, targetUrl, item.createdAt),
       set,
       get,
       options
@@ -1225,7 +1229,7 @@ async function runEnrichForItem(
   // 링크가 없는 텍스트도 재분석 대상입니다.
   await enrichSavedItemMetadata(
     itemId,
-    () => fetchTextMetadataPatch(item.rawInput, item.createdAt),
+    (requestId) => fetchTextMetadataPatch(requestId, item.rawInput, item.createdAt),
     set,
     get,
     options
@@ -1239,7 +1243,7 @@ async function runEnrichForItem(
  */
 async function enrichSavedItemMetadata(
   itemId: string,
-  fetchPatch: () => Promise<ItemMetadataPatch>,
+  fetchPatch: (requestId: string) => Promise<ItemMetadataPatch>,
   set: SetAppState,
   get: () => AppStore,
   options?: EnrichOptions
@@ -1257,7 +1261,7 @@ async function enrichSavedItemMetadata(
   // 화면에는 요약이 그대로 보이는데 뱃지만 빨간, 설명할 수 없는 상태가 됐습니다.
   let patch: ItemMetadataPatch;
   try {
-    patch = await fetchPatch();
+    patch = await fetchWithFreshRequestIdOnExpiry(itemId, fetchPatch, requestId, set, get);
   } catch (error) {
     // 'failed'를 남기는 건 여기뿐입니다. AI 보강 자체가 실패한 경우입니다.
     console.error('[Enrich] 메타데이터 보강 실패, 기본 저장 유지:', error);
@@ -1326,6 +1330,37 @@ async function enrichSavedItemMetadata(
 
     console.log('[Enrich] 메타데이터 보강 단계 완료. 동기화 워커를 구동합니다.');
     void runSyncWorker(set, get);
+  }
+}
+
+/**
+ * 이름표가 만료됐으면 새로 받아 한 번 더 겁니다.
+ *
+ * 서버는 받아둔 결과를 기간이 지나면 비웁니다. 그 뒤로는 같은 이름표로 몇 번을 물어도
+ * '만료됐다'는 답만 오는데, 앱이 그것을 실패로 처리하면 그 저장물은 영영 정리되지
+ * 않습니다. 회수가 켤 때마다 같은 이름표로 다시 묻고 같은 답을 받기 때문입니다.
+ *
+ * 한 번만 다시 겁니다. 새 이름표로도 실패하면 그때는 진짜 실패라, 계속 걸어봐야
+ * 사용자 몫만 축냅니다.
+ */
+async function fetchWithFreshRequestIdOnExpiry(
+  itemId: string,
+  fetchPatch: (requestId: string) => Promise<ItemMetadataPatch>,
+  requestId: string,
+  set: SetAppState,
+  get: () => AppStore
+) {
+  try {
+    return await fetchPatch(requestId);
+  } catch (error) {
+    if (!(error instanceof EnrichRequestExpiredError)) {
+      throw error;
+    }
+
+    console.log(`[Enrich] 이름표가 만료됐습니다. 새로 받아 다시 겁니다. item: ${itemId}`);
+    const freshRequestId = await beginEnrichRequestAsync(itemId, set, get);
+
+    return fetchPatch(freshRequestId);
   }
 }
 

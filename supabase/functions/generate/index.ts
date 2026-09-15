@@ -56,6 +56,24 @@ const GEMINI_TIMEOUT_MS = numberFromEnv('GEMINI_TIMEOUT_MS', 20000);
 const OPERATION = 'generate';
 
 /**
+ * 브라우저에서 부를 수 있게 하는 응답 머리.
+ *
+ * 웹에서 이 함수를 부르면 브라우저가 진짜 요청 앞에 OPTIONS 예비 요청을 먼저 보냅니다.
+ * Authorization처럼 기본이 아닌 헤더를 붙이기 때문인데, 여기에 허용을 돌려주지 않으면
+ * 실제 요청은 나가지도 못합니다. curl로는 이 단계가 없어 시험에서 걸리지 않습니다.
+ *
+ * Origin을 열어두는 것이 위험하지 않은 이유는, 여기서 문을 지키는 것이 출처가 아니라
+ * 사용자 토큰이기 때문입니다. 쿠키를 쓰지 않으므로 남의 브라우저 세션이 실려올 일도
+ * 없습니다. 앱이 웹과 안드로이드 양쪽에서 도는 마당에 출처를 특정하기도 어렵습니다.
+ */
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Max-Age': '86400',
+};
+
+/**
  * 스키마는 이름으로만 받습니다.
  *
  * 앱이 스키마를 통째로 보내게 두면 출력 형태를 클라이언트가 정하게 됩니다.
@@ -128,6 +146,10 @@ Deno.serve(async (req) => {
 });
 
 async function handle(req: Request) {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
+
   if (req.method !== 'POST') {
     return json(405, { status: 'method_not_allowed' });
   }
@@ -378,6 +400,6 @@ function numberFromEnv(name: string, fallback?: number) {
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 }

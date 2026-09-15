@@ -28,9 +28,10 @@ API 키·모델·출력 상한·스키마는 서버가 소유합니다. V2 프�
   - [x] web: 브라우저 localStorage (기본값) / android: `expo-sqlite/localStorage/install`
         — 새 의존성 없음. SecureStore와 2048바이트 청킹 문제를 통째로 피함
   - [x] AppState 연동 `startAutoRefresh` / `stopAutoRefresh` (없으면 복귀 시 401)
-- [ ] Edge Function `/generate`, `/read` 두 개
-  - [ ] "Supabase 키가 있나"가 아니라 **실제 로그인된 user JWT인가**를 검증
-        (정확한 설정 옵션명은 현재 문서에서 확인할 것)
+- [~] Edge Function `/generate`, `/read` 두 개 — `/generate` 완료, `/read` 남음
+  - [x] "Supabase 키가 있나"가 아니라 **실제 로그인된 user JWT인가**를 검증
+        — `auth.getUser()`로 실제 사용자를 읽어 확인합니다. anon 키도 이 프로젝트가
+        서명한 멀쩡한 JWT라 그것만 검사하면 번들에서 키를 뽑은 누구나 통과합니다
 - [x] `items.enrich_request_id` — **한 번의 정리 작업 전체 ID** (read + generate 공통)
   - [x] 정리 시작 시 발급·저장, **전체 성공 후에만** 비움
   - [x] 앱이 죽었다 살아나면 회수(`staleEnrich`)가 **같은 ID로** 재요청 → 중복 과금 없음
@@ -39,31 +40,35 @@ API 키·모델·출력 상한·스키마는 서버가 소유합니다. V2 프�
         물려받으면 서버가 바뀐 줄 모르고 예전 결과를 돌려줍니다)
   - [x] 안드로이드 SQLite와 웹 localStorage 양쪽 스키마
   - [x] **백업에서는 제외** (`syncStatus`와 같은 이유 — 기기 사정이라 옮기면 안 됨)
-- [ ] `ai_requests` 테이블 — 멱등성과 계측을 겸함
-  - [ ] `UNIQUE(user_id, request_id, operation)`
-  - [ ] 행은 영구 보관(월 사용량 분석용), `result_json`만 기간 후 비움
-  - [ ] 보관 기간은 operation별로: read 24시간(용량 큼) / generate 7일(돈 드는 쪽)
+- [x] `ai_requests` 테이블 — 멱등성과 계측을 겸함
+  - [x] `UNIQUE(user_id, request_id, operation)` (기본키로)
+  - [x] 행은 영구 보관(월 사용량 분석용), `result_json`만 기간 후 비움
+  - [x] 보관 기간은 operation별로: read 24시간(용량 큼) / generate 7일(돈 드는 쪽)
   - [ ] 프롬프트 전문·Jina 원문은 장기 보관하지 않음
   - [ ] **`result_json`은 재시도·멱등성을 위한 임시 운영 캐시이지 개인 시렁의 영구
         클라우드 저장소가 아닙니다.** local-first 원칙과 충돌하지 않는다는 뜻입니다
-- [ ] `/generate` — 서버가 최종 Gemini body를 **재구성**
-  - [ ] `schemaId` allowlist (`content-v2`) — 클라이언트가 임의 스키마를 못 보내게.
-        `RESPONSE_SCHEMA`는 이미 모듈 상수라 서버로 옮길 수 있음
-  - [ ] 모델·`thinkingBudget`·출력 상한은 서버 환경변수로 고정
-  - [ ] 입력 길이·이미지 크기 상한 (앱의 24,000자 절단을 서버도 강제)
-- [ ] 새 Gemini 키를 Supabase Secret에만 등록
-- [ ] 앱 호출을 `/generate`로 전환, `EXPO_PUBLIC_GEMINI_API_KEY` 제거
+- [x] `/generate` — 서버가 최종 Gemini body를 **재구성**
+  - [x] `schemaId` allowlist (`content-v2`) — 클라이언트가 임의 스키마를 못 보내게.
+        앱에서는 지웠습니다. 두 벌이 생기면 언젠가 어긋나고, 어긋난 쪽을 앱이 들고
+        있으면 고치는 데 앱 재배포가 필요합니다
+  - [x] 모델·`thinkingBudget`·출력 상한은 서버 환경변수로 고정
+  - [x] 입력 길이·이미지 크기 상한 — 프롬프트 전체 길이로 막습니다. 본문만 떼어 재려면 프롬프트 형식을 서버가 알아야 해서, 정확한 절단은 앱이 하고 서버는 터무니없이 긴 것만 자릅니다
+- [x] Gemini 키를 Supabase Secret에만 등록
+- [x] 앱 호출을 `/generate`로 전환, `EXPO_PUBLIC_GEMINI_API_KEY` 제거
 - [ ] `adapter.ts`의 `IS_ITEMS_SYNC_READY` — items 테이블·RLS가 생기면 켬.
       켜기 전에 `Authorization`을 anon 키에서 **로그인한 사용자 토큰**으로 바꿔야 함
       (지금대로면 `auth.uid()`가 비어 정책을 못 통과합니다)
 - [ ] `/read` — Jina Reader 이전 (**사용자 간 공용 캐시는 하지 않음**.
       signed URL·토큰 URL·개인화 페이지가 섞여 들어옴)
-- [ ] atomic 하드캡 — **외부 호출 전에 1건 예약**, 예약 실패면 호출 안 함
-  - [ ] `UPDATE ... WHERE used < :cap RETURNING` 한 문장. 읽고-검사-쓰기는 뚫림
-  - [ ] read / generate 상한 분리 (비용원이 다름)
+- [x] atomic 하드캡 — **외부 호출 전에 1건 예약**, 예약 실패면 호출 안 함
+  - [x] `UPDATE ... WHERE used < :cap RETURNING` 한 문장. 읽고-검사-쓰기는 뚫림
+  - [x] read / generate 상한 분리 (비용원이 다름). 여기에 더해 **사용자 몫**과 **실제 호출 수**도 나눴습니다 — 재시도로 사용자 몫이 깎이면 앱이 죽은 대가를 사용자가 치릅니다. 전체 합산 상한도 추가(익명 계정은 무한정 만들 수 있어 1인당 상한이 계정 수만큼 곱해짐)
 - [ ] 계측: 사용량 · 지연(read/generate 분리) · payload 크기
 - [ ] 회귀 테스트
-  - [ ] HTTP 재시도 / 지수 백오프
+  - [x] HTTP 재시도 / 지수 백오프 — **앱이** 합니다. 서버가 자기 안에서 재시도하면
+        실제 호출 세 번이 사용량 한 번으로 세어져 계수기가 실제와 어긋납니다
+  - [ ] **CORS** — 브라우저는 진짜 요청 앞에 OPTIONS를 보냅니다. curl 시험은 이 단계가
+        없어 통과했고, 웹에서만 실패했습니다. 새 함수를 만들 때마다 걸릴 자리입니다
   - [ ] **프록시 다운 시 로컬 요약기 폴백** — 프록시는 단일 장애점이 됨
   - [ ] 이미지(base64) 경로, 실제 payload 크기 실측
   - [ ] 12초 타임아웃 재측정 (홉이 하나 늘어남)

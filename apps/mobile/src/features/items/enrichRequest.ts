@@ -28,3 +28,17 @@ export type EnrichOptions = {
    */
   resumeRequestId?: boolean;
 };
+
+/**
+ * 서버가 그 이름표로 받아둔 결과를 이미 비웠다는 뜻입니다.
+ *
+ * 보관 기간이 지난 이름표로는 몇 번을 물어도 같은 답만 옵니다. 그대로 두면 그 저장물은
+ * 영영 정리되지 않으므로, 새 이름표를 받아 한 번 더 걸어야 합니다. 실패와 구별해야
+ * 하는 이유가 이것이라, 사유 문자열이 아니라 따로 둡니다.
+ */
+export class EnrichRequestExpiredError extends Error {
+  constructor() {
+    super('정리 요청의 보관 기간이 지났습니다. 새 요청으로 다시 겁니다.');
+    this.name = 'EnrichRequestExpiredError';
+  }
+}

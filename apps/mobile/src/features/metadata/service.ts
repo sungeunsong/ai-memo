@@ -34,6 +34,8 @@
  */
 
 import { ItemMetadataPatch } from '@/features/items/types';
+import { EnrichRequestExpiredError } from '@/features/items/enrichRequest';
+import { ensureAnonymousSessionAsync } from '@/supabase/client';
 import { getHostname } from '@/features/items/fallback';
 import { classifySourceType } from '@/features/capture/normalizeSharedInput';
 import { ITEM_CONTENT_VERSION, ItemContentV2, migrateContentToV2 } from '@/features/items/contentV2';
@@ -120,6 +122,7 @@ function deriveTitleFromContent(content: string | null): string | null {
 }
 
 export async function fetchMetadataPatch(
+  requestId: string,
   sourceUrl: string,
   referenceDate?: string
 ): Promise<ItemMetadataPatch> {
@@ -129,7 +132,7 @@ export async function fetchMetadataPatch(
     const normalizedSourceUrl = normalizeSourceUrl(sourceUrl);
     const metadata = isYouTubeUrl(normalizedSourceUrl)
       ? await fetchYouTubeMetadata(normalizedSourceUrl)
-      : await fetchGenericMetadata(normalizedSourceUrl, referenceDate);
+      : await fetchGenericMetadata(requestId, normalizedSourceUrl, referenceDate);
 
     return {
       sourceUrl: metadata.sourceUrl,
@@ -225,6 +228,7 @@ export function composeSourcesForAI(
 }
 
 export async function fetchTextMetadataPatch(
+  requestId: string,
   rawText: string,
   referenceDate?: string
 ): Promise<ItemMetadataPatch> {
@@ -235,7 +239,7 @@ export async function fetchTextMetadataPatch(
     return { aiStatus: 'failed', updatedAt };
   }
 
-  const result = await callGeminiApi('', trimmed, undefined, referenceDate);
+  const result = await callGeminiApi(requestId, '', trimmed, undefined, referenceDate);
 
   if (!result.ok) {
     // API 키가 없거나 호출에 실패한 경우. 원문에서 발췌한 정리본만이라도 붙입니다.
@@ -282,6 +286,7 @@ export async function fetchTextMetadataPatch(
  * 비용이 다르지 않습니다.
  */
 export async function fetchImageMetadataPatch(
+  requestId: string,
   base64Image: string,
   referenceDate?: string
 ): Promise<ItemMetadataPatch> {
@@ -291,7 +296,7 @@ export async function fetchImageMetadataPatch(
     return { aiStatus: 'failed', aiError: '이미지를 읽지 못했습니다.', updatedAt };
   }
 
-  const result = await callGeminiApi('', '', base64Image, referenceDate);
+  const result = await callGeminiApi(requestId, '', '', base64Image, referenceDate);
 
   if (!result.ok) {
     return { aiStatus: 'failed', aiError: result.reason, updatedAt };
@@ -506,6 +511,7 @@ export function isPlaceholderBody(text: string): boolean {
 }
 
 async function fetchGenericMetadata(
+  requestId: string,
   sourceUrl: string,
   referenceDate?: string
 ): Promise<MetadataResult> {
@@ -568,7 +574,7 @@ async function fetchGenericMetadata(
         let aiError: string | null = null;
 
         // 1. 진짜 AI 요약 API 호출 시도
-        const aiResult = await callGeminiApi(title, rawContent, undefined, referenceDate);
+        const aiResult = await callGeminiApi(requestId, title, rawContent, undefined, referenceDate);
         if (aiResult.ok) {
           console.log('[MetadataService] Gemini API를 활용한 실제 AI 요약 및 구조화 파싱에 성공했습니다.');
           summary = aiResult.data.summary;
@@ -634,7 +640,7 @@ async function fetchGenericMetadata(
   // 예전에는 sanitizeText()로 그 개행을 모두 뭉갠 뒤 summary에만 넣어서,
   // 원문도 사라지고 그 통짜 문자열이 AI 요약처럼 보였습니다.
   if (instagramCaption) {
-    const aiResult = await callGeminiApi(htmlMetadata.title, instagramCaption, undefined, referenceDate);
+    const aiResult = await callGeminiApi(requestId, htmlMetadata.title, instagramCaption, undefined, referenceDate);
     let title = htmlMetadata.title;
     let summary = buildExcerptSummary(title, instagramCaption);
     let parsedStructure: any = {
@@ -1310,38 +1316,10 @@ function extractFirstJsonObject(text: string): string | null {
  * 구조화 출력 스키마. 모델이 형식을 지키도록 API 차원에서 강제해
  * 파싱 실패 자체가 생기지 않게 합니다.
  */
-const RESPONSE_SCHEMA = {
-  type: 'object',
-  properties: {
-    title: { type: 'string' },
-    summary: { type: 'string' },
-    detailedAnalysis: { type: 'string' },
-    domain: {
-      type: 'object',
-      properties: {
-        key: { type: 'string' },
-        label: { type: 'string' },
-      },
-      required: ['key', 'label'],
-    },
-    facts: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          key: { type: 'string' },
-          label: { type: 'string' },
-          // 이 글의 분야가 아닌 항목이면 그 분야 키. 여행 글에 나온 요리 재료 같은 경우입니다.
-          domain: { type: 'string' },
-          values: { type: 'array', items: { type: 'string' } },
-        },
-        required: ['key', 'label', 'values'],
-      },
-    },
-    extractedText: { type: 'string' },
-  },
-  required: ['title', 'summary', 'detailedAnalysis', 'domain', 'facts'],
-};
+// 출력 스키마는 서버가 가집니다.
+//
+// 앱에도 한 벌 두면 둘이 언젠가 어긋나고, 어긋난 쪽을 앱이 들고 있으면 고치려면
+// 앱을 다시 배포해야 합니다. 스키마는 이제 이름(schemaId)으로만 지목합니다.
 
 /** 한 아이템에서 받을 항목 수 상한. 넘치면 화면도 사전도 지저분해집니다. */
 const MAX_FACTS_PER_ITEM = 14;
@@ -1425,27 +1403,22 @@ function describeRegistryForPrompt(registry: TaxonomyRegistry): string {
  */
 const MAX_CONTENT_CHARS = 24000;
 
-/**
- * 사용할 모델.
- *
- * 무료 등급의 하루 한도는 모델별로 따로 셉니다(quotaId가 PerProjectPerModel).
- * 이전에 쓰던 gemini-2.5-flash는 하루 20건이라 몇 번 시험하면 동났습니다.
- *
- * 이 모델은 같은 요청 형식을 그대로 받고, 실측 응답이 4.8초에서 2.0초로
- * 빨라졌습니다. 빨라지면 시한 초과로 인한 재시도도 줄어드는데, 실패한 요청도
- * 할당량은 똑같이 먹기 때문에 그 차이가 작지 않습니다.
- */
-const GEMINI_MODEL = 'gemini-3.1-flash-lite';
+// 모델도 서버가 정합니다. 앱이 정하면 번들을 뜯어 더 비싼 모델로 바꿔 부를 수 있고,
+// 그러면 키를 숨긴 의미가 사라집니다.
 
 /**
- * Gemini 응답 대기 한계.
+ * 프록시 응답 대기 한계.
  *
- * 성공하는 호출은 실측 5초 안팎입니다. 문제는 폰에서 구글 API로 가는 첫 연결이
- * 종종 통째로 물린다는 것인데, 재시도하면 대개 곧바로 붙습니다.
- * 한계를 길게 잡으면 물릴 때마다 그만큼을 버리고 나서야 재시도합니다.
- * 짧게 끊고 다시 거는 편이 훨씬 빨리 성공합니다.
+ * 앱에서 구글을 직접 부를 때는 12초였습니다. 폰에서 구글 API로 가는 첫 연결이 종종
+ * 통째로 물려서, 짧게 끊고 다시 거는 편이 빨랐기 때문입니다.
+ *
+ * 지금은 홉이 하나 늘었고, 기다리는 대상도 다릅니다. 프록시는 자기 쪽에서 구글을
+ * 부르며 20초까지 기다리므로, 여기서 그보다 먼저 끊으면 서버는 멀쩡히 일하고 있는데
+ * 앱만 포기합니다. 그래도 돈은 이미 나갔고 결과는 서버에 남으니, 다시 걸면 받아둔
+ * 것을 공짜로 가져옵니다. 잃는 것은 시간뿐이지만 그래도 넉넉히 잡습니다.
+ * 실측 후 조정할 값입니다.
  */
-const GEMINI_TIMEOUT_MS = 12000;
+const PROXY_TIMEOUT_MS = 30000;
 
 /**
  * 값만 들어와야 하는 분류·발췌 필드들.
@@ -1514,17 +1487,14 @@ function dropRamblingValues(facts: IncomingFact[]): IncomingFact[] {
 }
 
 async function callGeminiApi(
+  /** 이 정리 작업의 이름표. 서버가 '아까 그 요청'을 알아보는 근거입니다. */
+  requestId: string,
   title: string,
   rawContent: string,
   base64Image?: string,
   /** 날짜 해석의 기준. 아이템을 저장한 시점이며 없으면 지금입니다. */
   referenceDate: string = new Date().toISOString()
 ): Promise<GeminiResult> {
-  const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
-  if (!apiKey) {
-    console.log('[GeminiAPI] EXPO_PUBLIC_GEMINI_API_KEY 환경변수가 설정되지 않아 로컬 요약기로 폴백합니다.');
-    return { ok: false, reason: 'API 키 없음 (EXPO_PUBLIC_GEMINI_API_KEY 미주입)' };
-  }
 
   // 모델은 오늘이 며칠인지 모릅니다. 알려주지 않으면 '8/31까지' 같은 표기의 연도를
   // 학습 시점 근처로 찍어버려, 방금 저장한 공구가 몇백 일 지난 것으로 표시됩니다.
@@ -1607,107 +1577,140 @@ ${rawContent.slice(0, MAX_CONTENT_CHARS)}`}
   let delay = 1000; // 1초 대기부터 시작
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-      // 타임아웃 없이 부르면 응답이 안 올 때 보강이 영원히 매달립니다.
-      // 그러면 아이템은 '요약 정리 중'에 갇히고, 재분석 버튼도 눌리지 않습니다.
-      const response = await fetchWithTimeout(url, {
+    const outcome = await callGenerateProxy(requestId, prompt, base64Image);
+
+    if (outcome.kind === 'ok') {
+      try {
+        const { content, facts } = buildAiContent(outcome.data, registry, rawContent, referenceDate);
+
+        // 사전은 여기서 자랍니다. 처음 보는 분야와 항목이 잠정으로 등록되고,
+        // 여러 번 쓰이면 확정으로 올라갑니다.
+        await registerDefinitionsAsync(registry, content.domain, facts);
+
+        return { ok: true, data: { ...outcome.data, contentV2: content } };
+      } catch (error) {
+        // 여기서 실패한 것은 AI가 아니라 우리 쪽 해석입니다. 다시 불러도 같은 결과가
+        // 올 테니 재시도하지 않습니다. 서버에는 이미 결과가 남아 있어 돈도 안 듭니다.
+        const message = error instanceof Error ? error.message : String(error);
+        console.log('[GeminiAPI] 응답을 해석하지 못했습니다:', message);
+        return { ok: false, reason: `응답 해석 실패: ${message}` };
+      }
+    }
+
+    if (outcome.kind === 'expired') {
+      // 실패가 아니라 '이 이름표로는 더 못 묻는다'입니다. 부르는 쪽이 새 이름표를
+      // 받아 다시 걸어야 하므로, 사유 문자열에 섞지 않고 따로 던집니다.
+      throw new EnrichRequestExpiredError();
+    }
+
+    if (outcome.kind === 'retryable' && attempt < maxAttempts) {
+      console.log(`[GeminiAPI] ${outcome.reason} ${delay}ms 후 다시 겁니다. (시도 ${attempt}/${maxAttempts})`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay *= 2; // 지수 백오프
+      continue;
+    }
+
+    return { ok: false, reason: outcome.reason };
+  }
+
+  return { ok: false, reason: '재시도 횟수를 모두 소진했습니다.' };
+}
+
+type ProxyOutcome =
+  | { kind: 'ok'; data: any }
+  | { kind: 'expired' }
+  /** 다시 걸면 될 수 있는 것. 네트워크 문제이거나, 서버가 아직 돌고 있는 경우입니다. */
+  | { kind: 'retryable'; reason: string }
+  /** 다시 걸어도 같은 답이 오는 것. 상한 초과나 잘못된 요청입니다. */
+  | { kind: 'fatal'; reason: string };
+
+/**
+ * AI 정리를 서버에 맡깁니다.
+ *
+ * 앱이 보내는 것은 재료(프롬프트·이미지)와 이름표뿐입니다. 모델도 출력 스키마도
+ * 서버가 정하고, 키는 애초에 앱에 없습니다.
+ *
+ * 재시도는 여기서 하지 않고 부르는 쪽에서 합니다. 서버가 자기 안에서 재시도하면
+ * 실제 호출이 세 번 나가도 사용량은 한 번으로 세어, 돈을 세는 계수기가 실제와
+ * 어긋나기 때문입니다. 한 번 부르는 것이 한 번 세어지는 편이 맞습니다.
+ */
+async function callGenerateProxy(
+  requestId: string,
+  prompt: string,
+  base64Image?: string
+): Promise<ProxyOutcome> {
+  const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { kind: 'fatal', reason: 'Supabase 설정이 없어 AI 정리를 부를 수 없습니다.' };
+  }
+
+  // 서버는 '누구의 몫인가'를 알아야 상한을 매길 수 있습니다. 세션이 없으면 부를 수
+  // 없고, 비행기 모드였거나 서버가 잠깐 흔들린 것일 수 있어 다시 걸어볼 만합니다.
+  const session = await ensureAnonymousSessionAsync();
+  if (!session) {
+    return { kind: 'retryable', reason: '로그인 상태를 확보하지 못했습니다.' };
+  }
+
+  try {
+    const response = await fetchWithTimeout(
+      `${supabaseUrl}/functions/v1/generate`,
+      {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          contents: [{
-            parts: base64Image
-              ? [
-                  { text: prompt },
-                  { inline_data: { mime_type: 'image/jpeg', data: base64Image } },
-                ]
-              : [{ text: prompt }],
-          }],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            responseSchema: RESPONSE_SCHEMA,
-            // 모델은 기본적으로 '사고' 토큰을 쓰는데, 짧은 입력에도 2000토큰이 넘게
-            // 소모돼 무료 할당량을 빠르게 갉아먹습니다. 이 작업은 추출/요약이라 필요 없습니다.
-            // 주의: 3.5 이후 모델은 thinkingBudget 0을 거부합니다(HTTP 400).
-            // 모델을 올릴 때는 이 항목이 받아들여지는지 먼저 확인해야 합니다.
-            thinkingConfig: { thinkingBudget: 0 },
-          }
+          requestId,
+          prompt,
+          schemaId: 'content-v2',
+          ...(base64Image ? { imageBase64: base64Image } : null),
         }),
-      }, GEMINI_TIMEOUT_MS);
+      },
+      PROXY_TIMEOUT_MS
+    );
 
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => '');
+    const payload = await response.json().catch(() => null);
+    const status = typeof payload?.status === 'string' ? payload.status : '';
 
-        // 할당량 소진은 기다린다고 풀리지 않습니다. 재시도하면 시간만 쓰고
-        // 남은 호출까지 갉아먹으므로 즉시 중단하고 사용자에게 그대로 알립니다.
-        const isQuotaExhausted =
-          response.status === 429 && /quota|billing/i.test(errorBody);
-        if (isQuotaExhausted) {
-          return {
-            ok: false,
-            reason:
-              'Gemini 무료 할당량을 모두 사용했습니다. 한도가 초기화된 뒤 다시 시도하거나 결제 설정을 확인하세요.',
-          };
-        }
-
-        // 503(과부하)이나 순간적인 rate limit은 잠시 후 풀릴 수 있어 재시도합니다.
-        if (response.status === 503 || response.status === 429) {
-          if (attempt < maxAttempts) {
-            console.log(`[GeminiAPI] 일시적 HTTP ${response.status} 에러 감지. ${delay}ms 후 재시도합니다. (시도 ${attempt}/${maxAttempts})`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            delay *= 2; // 지수 백오프
-            continue;
-          }
-        }
-
-        throw new Error(`HTTP ${response.status} ${errorBody.slice(0, 120)}`);
-      }
-
-      const resJson = await response.json();
-      const responseText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (responseText) {
-        const cleaned = extractFirstJsonObject(responseText);
-        if (!cleaned) {
-          return { ok: false, reason: '응답에서 JSON 객체를 찾지 못했습니다.' };
-        }
-
-        try {
-          const data = JSON.parse(cleaned);
-
-          const { content, facts } = buildAiContent(data, registry, rawContent, referenceDate);
-
-          // 사전은 여기서 자랍니다. 처음 보는 분야와 항목이 잠정으로 등록되고,
-          // 여러 번 쓰이면 확정으로 올라갑니다.
-          await registerDefinitionsAsync(registry, content.domain, facts);
-
-          return { ok: true, data: { ...data, contentV2: content } };
-        } catch (parseErr) {
-          const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
-          console.log(`[GeminiAPI] JSON 파싱 실패 (시도 ${attempt}/${maxAttempts}):`, message);
-          return { ok: false, reason: `JSON 파싱 실패: ${message}` };
-        }
-      }
-
-      // 응답은 왔는데 본문 텍스트가 없는 경우 (안전 필터, MAX_TOKENS 절단 등)
-      const finishReason = resJson?.candidates?.[0]?.finishReason ?? '알 수 없음';
-      return { ok: false, reason: `응답에 텍스트 없음 (finishReason: ${finishReason})` };
-    } catch (err) {
-      if (attempt < maxAttempts) {
-        console.log(`[GeminiAPI] API 호출 중 에러 발생. ${delay}ms 후 재시도합니다. (시도 ${attempt}/${maxAttempts}):`, err instanceof Error ? err.message : err);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        delay *= 2;
-        continue;
-      }
-      // 3회 모두 최종 실패 시에만 디버깅용 console.warn 출력 (로컬 폴백 처리 유도)
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn('[GeminiAPI] 최종 실패 (로컬 엔진 폴백):', message);
-      return { ok: false, reason: message };
+    if (response.ok && status === 'ok') {
+      return { kind: 'ok', data: payload.data };
     }
+
+    if (status === 'in_progress') {
+      // 실패가 아닙니다. 같은 이름표의 정리가 서버에서 돌고 있고, 끝나면 다음 시도가
+      // 받아둔 것을 그대로 가져옵니다. 다시 거는 데 돈이 들지 않습니다.
+      return { kind: 'retryable', reason: '서버가 같은 요청을 처리하고 있습니다.' };
+    }
+
+    if (status === 'expired') {
+      return { kind: 'expired' };
+    }
+
+    if (response.status === 429) {
+      return {
+        kind: 'fatal',
+        reason:
+          status === 'over_global_calls'
+            ? '오늘 전체 AI 정리 한도에 닿았습니다. 내일 다시 시도해 주세요.'
+            : '오늘 AI 정리 한도를 다 썼습니다. 내일 다시 시도해 주세요.',
+      };
+    }
+
+    if (response.status >= 500) {
+      const reason = typeof payload?.reason === 'string' ? payload.reason : `HTTP ${response.status}`;
+      return { kind: 'retryable', reason: `서버 오류: ${reason}` };
+    }
+
+    const reason = typeof payload?.reason === 'string' ? payload.reason : `HTTP ${response.status}`;
+    return { kind: 'fatal', reason };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { kind: 'retryable', reason: `프록시에 닿지 못했습니다: ${message}` };
   }
-  return { ok: false, reason: '재시도 횟수를 모두 소진했습니다.' };
 }
 
 /**
