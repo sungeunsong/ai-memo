@@ -26,6 +26,7 @@ type ItemRow = {
   thumbnail_url: string | null;
   ai_status: 'pending' | 'completed' | 'failed';
   sync_status: 'local_only' | 'queued' | 'synced' | 'failed';
+  enrich_request_id: string | null;
   user_note: string | null;
   extracted_urls: string | null;
   source_type: string;
@@ -38,9 +39,9 @@ export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayloa
   await db.runAsync(
     `INSERT INTO items (
       id, type, source_url, raw_input, title, summary, content, content_text, digest, ai_error, user_title, user_category, image_uri, user_deadline,
-      thumbnail_url, ai_status, sync_status, user_note, extracted_urls, source_type,
+      thumbnail_url, ai_status, sync_status, enrich_request_id, user_note, extracted_urls, source_type,
       saved_from, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     item.id,
     item.type,
     item.sourceUrl,
@@ -58,6 +59,7 @@ export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayloa
     item.thumbnailUrl,
     item.aiStatus,
     item.syncStatus,
+    item.enrichRequestId,
     item.userNote,
     JSON.stringify(item.extractedUrls),
     item.sourceType,
@@ -87,6 +89,7 @@ export async function listItemsAsync(db: SQLiteDatabase) {
       thumbnail_url,
       ai_status,
       sync_status,
+      enrich_request_id,
       user_note,
       extracted_urls,
       source_type,
@@ -254,6 +257,7 @@ function mapItemRow(row: ItemRow): SavedItem {
     thumbnailUrl: row.thumbnail_url,
     aiStatus: row.ai_status,
     syncStatus: row.sync_status,
+    enrichRequestId: row.enrich_request_id,
     userNote: row.user_note,
     extractedUrls: extractedUrls,
     sourceType: row.source_type,

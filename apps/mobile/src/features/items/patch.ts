@@ -22,6 +22,7 @@ export const ITEM_PATCH_COLUMNS = {
   userDeadline: 'user_deadline',
   thumbnailUrl: 'thumbnail_url',
   aiStatus: 'ai_status',
+  enrichRequestId: 'enrich_request_id',
   userNote: 'user_note',
   extractedUrls: 'extracted_urls',
   sourceType: 'source_type',

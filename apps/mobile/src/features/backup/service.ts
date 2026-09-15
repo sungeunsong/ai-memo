@@ -51,8 +51,9 @@ export async function exportBackupAsync(includeImages: boolean): Promise<ExportR
   const backupItems: BackupItem[] = [];
 
   for (const item of items) {
-    // syncStatus는 담지 않습니다. 어느 기기에서 전송을 마쳤는지는 그 기기의 사정입니다.
-    const { syncStatus, ...rest } = item;
+    // syncStatus와 enrichRequestId는 담지 않습니다. 어느 기기에서 전송을 마쳤는지,
+    // 무엇이 끝나지 않았는지는 그 기기의 사정입니다.
+    const { syncStatus, enrichRequestId, ...rest } = item;
     const entry: BackupItem = { ...rest };
 
     if (includeImages && item.imageUri) {
@@ -255,6 +256,8 @@ function normalizeImportedItem(raw: any): SavedItem | null {
     userDeadline: nullableText(raw.userDeadline),
     // 전송 상태는 물려받지 않습니다. 이 기기에서는 아직 아무것도 보내지 않았습니다.
     syncStatus: 'local_only',
+    // 끝내지 못한 정리도 물려받지 않습니다. 시작한 적이 없으니 이어받을 것도 없습니다.
+    enrichRequestId: null,
     userNote: nullableText(raw.userNote),
     extractedUrls: Array.isArray(raw.extractedUrls)
       ? raw.extractedUrls.filter((url: unknown): url is string => typeof url === 'string')

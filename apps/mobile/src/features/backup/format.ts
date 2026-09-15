@@ -18,8 +18,12 @@ const APP_TAG = 'sireong';
  *
  * syncStatus는 담지 않습니다. 어느 기기에서 전송을 마쳤는지는 그 기기의 사정이라,
  * 옮겨간 기기에서 물려받으면 보내지도 않은 것을 보냈다고 여기게 됩니다.
+ *
+ * enrichRequestId도 같은 이유로 담지 않습니다. 그 이름표는 '이 기기에서 시작했다가
+ * 끝내지 못한 정리'를 가리킵니다. 옮겨간 기기가 물려받으면 자기가 시작하지도 않은
+ * 작업을 이어서 요청하게 됩니다.
  */
-export type BackupItem = Omit<SavedItem, 'syncStatus' | 'sources'> & {
+export type BackupItem = Omit<SavedItem, 'syncStatus' | 'sources' | 'enrichRequestId'> & {
   /** 이미지 원본. 파일 경로는 기기마다 달라서 내용을 직접 담습니다. */
   imageBase64?: string;
   sources: BackupSource[];

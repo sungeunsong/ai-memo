@@ -98,6 +98,8 @@ export async function initializeDatabase() {
     'ALTER TABLE items ADD COLUMN content_text TEXT;',
     'ALTER TABLE items ADD COLUMN digest TEXT;',
     'ALTER TABLE items ADD COLUMN ai_error TEXT;',
+    // 끝나지 않은 정리의 이름표 (2026-09)
+    'ALTER TABLE items ADD COLUMN enrich_request_id TEXT;',
     'ALTER TABLE items ADD COLUMN user_category TEXT;',
     'ALTER TABLE items ADD COLUMN image_uri TEXT;',
     'ALTER TABLE items ADD COLUMN user_deadline TEXT;',
@@ -1182,7 +1184,11 @@ function getWebItems() {
     //
     // 안드로이드는 조각을 별도 테이블에서 읽어 `?? []`로 이미 메우고 있습니다.
     // 읽는 문이 하나뿐인 웹도 여기서 같은 보장을 해두면 아래쪽이 전부 안전해집니다.
-    const normalized = parsed.map((item) => ({ ...item, sources: item.sources ?? [] }));
+    const normalized = parsed.map((item) => ({
+      ...item,
+      sources: item.sources ?? [],
+      enrichRequestId: item.enrichRequestId ?? null,
+    }));
 
     return normalized.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch {

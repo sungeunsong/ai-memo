@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS items (
   thumbnail_url TEXT,
   ai_status TEXT NOT NULL,
   sync_status TEXT NOT NULL,
+  enrich_request_id TEXT,
   user_note TEXT,
   extracted_urls TEXT,
   source_type TEXT NOT NULL,

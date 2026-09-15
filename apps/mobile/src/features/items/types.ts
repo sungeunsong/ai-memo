@@ -106,6 +106,17 @@ export type SavedItem = {
    */
   userDeadline: string | null;
   syncStatus: SyncStatus;
+  /**
+   * 진행 중인 정리 작업의 이름표. 끝나면 비웁니다.
+   *
+   * 값이 남아 있으면 '끝나지 않은 정리가 있다'는 뜻이고, 이어서 돌릴 때 같은
+   * 이름표로 요청해 서버가 아까 그 작업임을 알아보게 합니다.
+   * 자세한 이유는 features/items/enrichRequest.ts에 적어두었습니다.
+   *
+   * syncStatus와 같은 성격이라 백업에는 담지 않습니다. 이 기기에서 무엇이
+   * 끝나지 않았는지는 그 기기의 사정입니다.
+   */
+  enrichRequestId: string | null;
   userNote: string | null;
   extractedUrls: string[];
   sourceType: string;
@@ -138,6 +149,7 @@ export type ItemMetadataPatch = {
   aiError?: string | null;
   userTitle?: string | null;
   userCategory?: string | null;
+  enrichRequestId?: string | null;
   imageUri?: string | null;
   userDeadline?: string | null;
   thumbnailUrl?: string | null;

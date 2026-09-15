@@ -32,6 +32,7 @@ import {
   fetchTextMetadataPatch,
   fetchImageMetadataPatch,
 } from '@/features/metadata/service';
+import { createEnrichRequestId, EnrichOptions } from '@/features/items/enrichRequest';
 import { buildFallbackItem, buildFallbackImageItem, normalizeUrl } from '@/features/items/fallback';
 import { extractManualTitle } from '@/utils/formatters';
 import {
@@ -971,7 +972,9 @@ async function resumeStalledEnrich(set: SetAppState, get: () => AppStore) {
 
   for (const item of targets) {
     try {
-      await reenrichFromSources(item.id, set, get);
+      // 끊겼던 그 작업을 이어서 하는 것이므로 이름표를 물려받습니다.
+      // 새로 발급하면 서버가 아까 그 요청인 줄 모르고 AI를 다시 부릅니다.
+      await reenrichFromSources(item.id, set, get, { resumeRequestId: true });
     } catch (error) {
       // 한 건이 실패해도 나머지는 계속합니다.
       // 실패 사유는 enrichSavedItemMetadata가 이미 아이템에 적어둡니다.
@@ -1113,13 +1116,18 @@ async function fillMissingSourceTexts(
  *
  * 사용자가 고친 값(userTitle 등)은 AI가 건드리지 않는 별도 컬럼이라 그대로 남습니다.
  */
-async function reenrichFromSources(itemId: string, set: SetAppState, get: () => AppStore) {
+async function reenrichFromSources(
+  itemId: string,
+  set: SetAppState,
+  get: () => AppStore,
+  options?: EnrichOptions
+) {
   const item = get().items.find((entry) => entry.id === itemId);
   if (!item) return;
 
   // 조각이 하나뿐이면 예전과 똑같이 처리합니다. 굳이 다른 길로 갈 이유가 없습니다.
   if (item.sources.length <= 1) {
-    await runEnrichForItem(item, set, get);
+    await runEnrichForItem(item, set, get, options);
     return;
   }
 
@@ -1128,7 +1136,7 @@ async function reenrichFromSources(itemId: string, set: SetAppState, get: () => 
   const filled = get().items.find((entry) => entry.id === itemId) ?? item;
   const composed = composeSourcesForAI(filled.sources);
   if (!composed) {
-    await runEnrichForItem(item, set, get);
+    await runEnrichForItem(item, set, get, options);
     return;
   }
 
@@ -1137,7 +1145,8 @@ async function reenrichFromSources(itemId: string, set: SetAppState, get: () => 
     // 날짜 해석의 기준은 지금이 아니라 저장한 때입니다.
     () => fetchTextMetadataPatch(composed, item.createdAt),
     set,
-    get
+    get,
+    options
   );
 }
 
@@ -1148,7 +1157,12 @@ async function reenrichFromSources(itemId: string, set: SetAppState, get: () => 
  * 사용자가 재분석을 누른 경우와 앱이 스스로 이어서 돌리는 경우가 이 함수를 공유합니다.
  * 화면에 어떻게 알릴지는(저장 중 표시, 실패 팝업) 부르는 쪽 사정이라 여기 두지 않습니다.
  */
-async function runEnrichForItem(item: SavedItem, set: SetAppState, get: () => AppStore) {
+async function runEnrichForItem(
+  item: SavedItem,
+  set: SetAppState,
+  get: () => AppStore,
+  options?: EnrichOptions
+) {
   const itemId = item.id;
 
   const initialPatch: ItemMetadataPatch = {
@@ -1176,7 +1190,8 @@ async function runEnrichForItem(item: SavedItem, set: SetAppState, get: () => Ap
         return fetchImageMetadataPatch(base64 ?? '', item.createdAt);
       },
       set,
-      get
+      get,
+      options
     );
     return;
   }
@@ -1201,7 +1216,8 @@ async function runEnrichForItem(item: SavedItem, set: SetAppState, get: () => Ap
       itemId,
       () => fetchMetadataPatch(targetUrl, item.createdAt),
       set,
-      get
+      get,
+      options
     );
     return;
   }
@@ -1211,7 +1227,8 @@ async function runEnrichForItem(item: SavedItem, set: SetAppState, get: () => Ap
     itemId,
     () => fetchTextMetadataPatch(item.rawInput, item.createdAt),
     set,
-    get
+    get,
+    options
   );
 }
 
@@ -1224,10 +1241,15 @@ async function enrichSavedItemMetadata(
   itemId: string,
   fetchPatch: () => Promise<ItemMetadataPatch>,
   set: SetAppState,
-  get: () => AppStore
+  get: () => AppStore,
+  options?: EnrichOptions
 ) {
-  console.log(`[Enrich] 메타데이터 보강을 시작합니다. item: ${itemId}`);
   enrichingItemIds.add(itemId);
+
+  // 이름표를 바깥 호출보다 먼저 적어둡니다. 나중에 적으면 그 사이에 앱이 죽었을 때
+  // 이미 나간 호출을 가리킬 이름이 없어, 회수가 처음부터 다시 사게 됩니다.
+  const requestId = await beginEnrichRequestAsync(itemId, set, get, options);
+  console.log(`[Enrich] 메타데이터 보강을 시작합니다. item: ${itemId}, 요청: ${requestId}`);
 
   // AI 단계와 저장·큐잉 단계를 나눠서 감쌉니다.
   // 예전에는 한 try가 셋을 다 덮고 있어서, 동기화 큐 쓰기가 실패하면
@@ -1244,6 +1266,8 @@ async function enrichSavedItemMetadata(
       aiError: error instanceof Error ? error.message : String(error),
       updatedAt: new Date().toISOString(),
     };
+    // 이름표는 지우지 않습니다. 실패한 정리는 회수가 이어서 돌릴 대상이고,
+    // 그때 같은 이름으로 물어봐야 이미 받아둔 결과가 있으면 그것을 씁니다.
     await updateItemMetadataAsync(itemId, failurePatch).catch(() => {});
     set((state) => ({
       items: state.items.map((item) => applyMetadataPatch(item, itemId, failurePatch)),
@@ -1256,10 +1280,14 @@ async function enrichSavedItemMetadata(
   }
 
   try {
-    await updateItemMetadataAsync(itemId, patch);
-    await cacheFetchedBodyIntoSource(itemId, patch, get);
+    // 이름표는 결과와 한 번에 지웁니다. 따로 쓰면 그 틈에 앱이 죽었을 때
+    // 요약은 있는데 아직 정리 중인 것처럼 남아, 회수가 끝난 일을 또 집어갑니다.
+    const completedPatch: ItemMetadataPatch = { ...patch, enrichRequestId: null };
 
-    const nextItems = get().items.map((item) => applyMetadataPatch(item, itemId, patch));
+    await updateItemMetadataAsync(itemId, completedPatch);
+    await cacheFetchedBodyIntoSource(itemId, completedPatch, get);
+
+    const nextItems = get().items.map((item) => applyMetadataPatch(item, itemId, completedPatch));
     const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
 
     set({
@@ -1299,6 +1327,44 @@ async function enrichSavedItemMetadata(
     console.log('[Enrich] 메타데이터 보강 단계 완료. 동기화 워커를 구동합니다.');
     void runSyncWorker(set, get);
   }
+}
+
+/**
+ * 이번 정리에 쓸 이름표를 정하고 적어둡니다.
+ *
+ * 기본은 새로 발급입니다. 조각을 붙였거나 사용자가 재분석을 누른 경우는 AI에 넣는
+ * 재료가 달라진 것이라, 물려받으면 서버가 바뀐 줄 모르고 예전 결과를 돌려줍니다.
+ * 물려받는 것은 앱이 죽어 끊겼던 그 작업을 그대로 이어서 할 때뿐입니다.
+ *
+ * 적는 데 실패해도 정리는 진행합니다. 이름표는 중복 과금을 줄이는 장치이지
+ * 정리의 전제가 아니라서, 여기서 막으면 잃는 쪽이 더 큽니다.
+ */
+async function beginEnrichRequestAsync(
+  itemId: string,
+  set: SetAppState,
+  get: () => AppStore,
+  options?: EnrichOptions
+) {
+  const current = get().items.find((item) => item.id === itemId)?.enrichRequestId ?? null;
+
+  if (options?.resumeRequestId && current) {
+    return current;
+  }
+
+  const requestId = createEnrichRequestId();
+  const patch: ItemMetadataPatch = {
+    enrichRequestId: requestId,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await updateItemMetadataAsync(itemId, patch).catch((error) => {
+    console.log('[Enrich] 요청 이름표를 적지 못했습니다. 정리는 그대로 진행합니다:', error);
+  });
+  set((state) => ({
+    items: state.items.map((item) => applyMetadataPatch(item, itemId, patch)),
+  }));
+
+  return requestId;
 }
 
 /**

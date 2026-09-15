@@ -31,12 +31,14 @@ API 키·모델·출력 상한·스키마는 서버가 소유합니다. V2 프�
 - [ ] Edge Function `/generate`, `/read` 두 개
   - [ ] "Supabase 키가 있나"가 아니라 **실제 로그인된 user JWT인가**를 검증
         (정확한 설정 옵션명은 현재 문서에서 확인할 것)
-- [ ] `items.enrich_request_id` — **한 번의 정리 작업 전체 ID** (read + generate 공통)
-  - [ ] 정리 시작 시 발급·저장, **전체 성공 후에만** 비움
-  - [ ] 앱이 죽었다 살아나면 회수(`staleEnrich`)가 **같은 ID로** 재요청 → 중복 과금 없음
-  - [ ] 사용자가 [재분석]을 누를 때만 새 ID
-  - [ ] 안드로이드 SQLite와 웹 localStorage 양쪽 스키마
-  - [ ] **백업에서는 제외** (`syncStatus`와 같은 이유 — 기기 사정이라 옮기면 안 됨)
+- [x] `items.enrich_request_id` — **한 번의 정리 작업 전체 ID** (read + generate 공통)
+  - [x] 정리 시작 시 발급·저장, **전체 성공 후에만** 비움
+  - [x] 앱이 죽었다 살아나면 회수(`staleEnrich`)가 **같은 ID로** 재요청 → 중복 과금 없음
+  - [x] 새 ID가 기본. 물려받는 것은 **끊긴 것을 이어서 할 때뿐**
+        (조각을 붙였거나 재분석을 누른 경우는 AI에 넣는 재료가 달라진 것이라,
+        물려받으면 서버가 바뀐 줄 모르고 예전 결과를 돌려줍니다)
+  - [x] 안드로이드 SQLite와 웹 localStorage 양쪽 스키마
+  - [x] **백업에서는 제외** (`syncStatus`와 같은 이유 — 기기 사정이라 옮기면 안 됨)
 - [ ] `ai_requests` 테이블 — 멱등성과 계측을 겸함
   - [ ] `UNIQUE(user_id, request_id, operation)`
   - [ ] 행은 영구 보관(월 사용량 분석용), `result_json`만 기간 후 비움
