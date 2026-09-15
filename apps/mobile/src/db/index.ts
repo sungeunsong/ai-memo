@@ -1172,7 +1172,19 @@ function getWebItems() {
 
   try {
     const parsed = JSON.parse(raw) as SavedItem[];
-    return parsed.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+    // sources를 여기서 메웁니다.
+    //
+    // 저장소에 있는 것은 옛 버전이 쓴 JSON일 수도 있습니다. 조각(ItemSource)이
+    // 생기기 전에 저장된 아이템에는 이 필드가 아예 없는데, 타입은 `ItemSource[]`라
+    // 있다고 되어 있어서 `as SavedItem[]` 단언을 지나는 순간 아무도 못 잡습니다.
+    // 화면에서 `for (const source of item.sources)`가 도는 자리마다 터집니다.
+    //
+    // 안드로이드는 조각을 별도 테이블에서 읽어 `?? []`로 이미 메우고 있습니다.
+    // 읽는 문이 하나뿐인 웹도 여기서 같은 보장을 해두면 아래쪽이 전부 안전해집니다.
+    const normalized = parsed.map((item) => ({ ...item, sources: item.sources ?? [] }));
+
+    return normalized.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch {
     globalThis.localStorage.removeItem(WEB_STORAGE_KEY);
     return [];
