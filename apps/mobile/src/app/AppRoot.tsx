@@ -7,6 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { HomeScreen } from '@/screens/HomeScreen';
 import { useAppStore } from '@/store';
+import { ensureAnonymousSessionAsync, startSupabaseAutoRefresh } from '@/supabase/client';
 import { ThemeProvider, useTheme } from '@/theme/ThemeContext';
 
 export function AppRoot() {
@@ -18,6 +19,15 @@ export function AppRoot() {
   useEffect(() => {
     void initialize();
   }, [initialize]);
+
+  useEffect(() => {
+    // 기다리지 않습니다. 첫 화면은 기기에 있는 것만으로 다 그릴 수 있는데,
+    // 여기서 await하면 신호가 약한 곳에서 빈 화면이 그만큼 길어집니다.
+    // 세션이 실제로 필요한 쪽(AI 정리)에서 다시 부르면 그때 확보됩니다.
+    void ensureAnonymousSessionAsync();
+
+    return startSupabaseAutoRefresh();
+  }, []);
 
   return (
     <ShareIntentProvider
