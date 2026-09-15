@@ -1,0 +1,9 @@
+# 루트에는 앱이 없습니다. 여기 node_modules는 Supabase CLI 하나뿐입니다.
+node_modules/
+
+# CLI가 링크 정보를 담아두는 곳. 기기마다 다릅니다.
+supabase/.temp/
+
+# Edge Function 로컬 실행용 환경변수. 진짜 값은 Supabase Secret에만 둡니다.
+supabase/functions/.env
+.env
