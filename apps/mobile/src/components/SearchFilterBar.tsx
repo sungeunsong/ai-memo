@@ -4,7 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { FacetOption } from '@/features/facets/query';
 import { TabOption } from '@/features/facets/tabs';
 import { facetLabel } from '@/features/facets/labels';
-import { SavedFilter, describeSavedFilter } from '@/features/facets/savedFilters';
+import { SavedFilter, describeSavedFilter, isBuiltInFilter } from '@/features/facets/savedFilters';
 import { Palette } from '@/theme/palette';
 import { useTheme, useThemedStyles } from '@/theme/ThemeContext';
 import { spacing } from '@/theme/spacing';
@@ -32,6 +32,14 @@ type Props = {
   facetOptions: FacetOption[];
   /** 저장해둔 조합 조건 (스마트 폴더) */
   savedFilters: SavedFilter[];
+  /**
+   * 조건별 건수. 지금은 기본 폴더에만 씁니다.
+   *
+   * 사용자가 만든 조건에는 안 붙입니다. 조건이 여럿이면 매번 전부 세야 하고, 그 값은
+   * 눌러보면 바로 나옵니다. 기본 폴더는 '이 기능이 여기 있다'를 알리는 자리라
+   * 건수가 곧 설명이 됩니다.
+   */
+  savedFilterCounts?: Record<string, number>;
   onApplyFilter: (filter: SavedFilter) => void;
   onRemoveFilter: (id: string) => void;
   onSaveFilter: (name: string) => void;
@@ -58,6 +66,7 @@ export function SearchFilterBar({
   onClearFacets,
   facetOptions,
   savedFilters,
+  savedFilterCounts,
   onApplyFilter,
   onRemoveFilter,
   onSaveFilter,
@@ -244,15 +253,23 @@ export function SearchFilterBar({
                 <Pressable
                   key={filter.id}
                   onPress={() => onApplyFilter(filter)}
-                  onLongPress={() => onRemoveFilter(filter.id)}
+                  // 길게 눌러 지우는 동작은 사용자가 만든 것에만 둡니다.
+                  onLongPress={
+                    isBuiltInFilter(filter) ? undefined : () => onRemoveFilter(filter.id)
+                  }
                   style={({ pressed }) => [
                     styles.savedFilterChip,
                     { transform: [{ scale: pressed ? 0.94 : 1 }] },
                   ]}
                 >
-                  <Text style={styles.savedFilterName}>⭐ {filter.name}</Text>
+                  <Text style={styles.savedFilterName}>
+                    {isBuiltInFilter(filter) ? filter.name : `⭐ ${filter.name}`}
+                  </Text>
                   <Text style={styles.savedFilterDesc} numberOfLines={1}>
-                    {describeSavedFilter(filter, describeFacetKey, describeCategoryKey) || '전체'}
+                    {savedFilterCounts?.[filter.id] !== undefined
+                      ? `${savedFilterCounts[filter.id]}건`
+                      : describeSavedFilter(filter, describeFacetKey, describeCategoryKey) ||
+                        '전체'}
                   </Text>
                 </Pressable>
               ))}

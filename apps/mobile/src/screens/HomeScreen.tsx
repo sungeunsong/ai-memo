@@ -49,6 +49,8 @@ import { parseQueryToFacets } from '@/features/facets/parseQuery';
 import {
   SavedFilter,
   addSavedFilter,
+  buildBuiltInFilters,
+  isBuiltInFilter,
   isFilterSaveable,
   loadSavedFilters,
   removeSavedFilter,
@@ -89,6 +91,8 @@ const PANTRY_SETTING_KEY = 'pantry.owned';
  * 사용자가 한 번 거절한 것은 클립보드가 바뀌기 전까지 다시 묻지 않아야 합니다.
  */
 const IGNORED_CLIPBOARD_KEY = 'clipboard.ignored';
+const GROUP_BUY_NOTICE_KEY = 'notice.groupBuyFolder';
+const GROUP_BUY_FILTER_ID = 'sys:group-buy';
 
 /** 헤더 버튼은 한 번 누를 때마다 다크 → 라이트 → 시스템으로 돕니다. */
 const THEME_ICONS: Record<string, string> = { dark: '🌙', light: '☀️', system: '🌗' };
@@ -520,6 +524,67 @@ export function HomeScreen() {
   // facet 건수와 완화 제안도 같은 기준 집합에서 계산해야 화면과 숫자가 어긋나지 않습니다.
   // ==========================================
   const facetIndex = useMemo(() => buildFacetIndex(items, taxonomy), [items, taxonomy]);
+
+  /**
+   * 화면에 세울 스마트 폴더.
+   *
+   * 기본 폴더는 걸리는 것이 하나도 없으면 숨깁니다. 눌러도 늘 빈 화면인 버튼은
+   * 길잡이가 아니라 고장으로 읽힙니다. 공구를 한 번도 담지 않은 사람에게는 그
+   * 자리가 아예 없는 편이 낫습니다.
+   *
+   * 사용자가 만든 것은 0건이어도 세워둡니다. 손으로 만든 조건이 말없이 사라지면
+   * 어디 갔는지 찾을 방법이 없습니다.
+   */
+  const visibleSavedFilters = useMemo(() => {
+    // 기본 폴더는 지금 사전으로 만듭니다. 축이 사전에서 파생되는 값이라, 사전이
+    // 바뀌면 조건도 같이 바뀌어야 합니다. 저장해두면 그 순간의 축에 굳습니다.
+    const builtIns = buildBuiltInFilters(taxonomy).filter((filter) =>
+      filter.facetKeys.some((key) => (facetIndex.byKey.get(key)?.size ?? 0) > 0)
+    );
+
+    return [...builtIns, ...savedFilters.filter((filter) => !isBuiltInFilter(filter))];
+  }, [savedFilters, facetIndex, taxonomy]);
+
+  /** 기본 폴더에 붙일 건수. 이름 아래 설명 자리에 들어갑니다. */
+  const savedFilterCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+
+    for (const filter of visibleSavedFilters) {
+      if (!isBuiltInFilter(filter)) continue;
+      counts[filter.id] = filter.facetKeys.reduce(
+        (total, key) => total + (facetIndex.byKey.get(key)?.size ?? 0),
+        0
+      );
+    }
+
+    return counts;
+  }, [visibleSavedFilters, facetIndex]);
+
+  /**
+   * 공구 폴더가 처음 생겼을 때 한 번만 알립니다.
+   *
+   * 0건이면 숨기기로 했는데, 그러면 어느 날 갑자기 없던 것이 생깁니다. 기능은
+   * 좋은데 설명이 없으면 시스템이 제멋대로 뭘 붙인 것처럼 보입니다.
+   *
+   * 때가 마침 좋습니다. 이 폴더는 저장 직후가 아니라 **정리가 끝나야** 나타납니다.
+   * 저장 토스트가 사라진 뒤라 겹치지 않고, '정리해보니 공구였다'는 흐름으로 읽힙니다.
+   */
+  const groupBuyNoticeShownRef = useRef(false);
+
+  useEffect(() => {
+    if (groupBuyNoticeShownRef.current) return;
+    if ((savedFilterCounts[GROUP_BUY_FILTER_ID] ?? 0) === 0) return;
+
+    groupBuyNoticeShownRef.current = true;
+
+    void (async () => {
+      // 기기에 적어둡니다. 앱을 다시 켤 때마다 같은 안내가 뜨면 안내가 아니라 잔소리입니다.
+      if (await getSettingAsync(GROUP_BUY_NOTICE_KEY)) return;
+      await setSettingAsync(GROUP_BUY_NOTICE_KEY, 'shown').catch(() => {});
+      setToastMessage('🛒 저장한 공구를 따로 모아뒀습니다');
+    })();
+  }, [savedFilterCounts]);
+
 
   const tabOptions = useMemo(
     () => buildTabOptions(facetIndex, taxonomy, pinnedTabs),
@@ -1141,7 +1206,8 @@ export function HomeScreen() {
               onToggleFacet={handleToggleFacet}
               onClearFacets={handleClearFacets}
               facetOptions={facetOptions}
-              savedFilters={savedFilters}
+              savedFilters={visibleSavedFilters}
+              savedFilterCounts={savedFilterCounts}
               onApplyFilter={handleApplyFilter}
               onRemoveFilter={handleRemoveFilter}
               onSaveFilter={handleSaveFilter}
