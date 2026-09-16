@@ -17,6 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SavedItem } from '@/features/items/types';
+import { findDuplicateItems } from '@/features/items/dedupe';
 import {
   buildShareIntentSignature,
   getSharedInputValue,
@@ -498,6 +499,17 @@ export function HomeScreen() {
     : null;
   // 인스타는 "댓글 남기면 DM 드려요"가 붙는 일이 잦아, 뒤따라올 내용이 있을 확률이 높습니다.
   const expectsFollowUp = Boolean(saveTargetItem?.sourceType.startsWith('instagram'));
+
+  /**
+   * 같은 것을 이미 담아뒀는지.
+   *
+   * 시트가 떠 있는 동안에만 따집니다. 저장물 수백 건을 매 렌더마다 훑을 이유가 없고,
+   * 이 값이 쓰이는 곳도 시트 하나뿐입니다.
+   */
+  const duplicateItems = useMemo(
+    () => (saveTargetItem ? findDuplicateItems(items, saveTargetItem) : []),
+    [items, saveTargetItem]
+  );
   const runtimeErrorMessage = errorMessage ?? shareIntentError ?? null;
 
   // ==========================================
@@ -1224,6 +1236,7 @@ export function HomeScreen() {
         savedItemId={saveTargetItem?.id ?? null}
         items={items}
         expectsFollowUp={expectsFollowUp}
+        duplicates={duplicateItems}
         onKeepAsNew={() => {
           const target = saveTargetItem;
           setSaveTargetItemId(null);

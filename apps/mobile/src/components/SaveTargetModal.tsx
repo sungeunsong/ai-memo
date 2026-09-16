@@ -16,6 +16,13 @@ type Props = {
   items: SavedItem[];
   /** 인스타처럼 나중에 DM이 따라오는 출처인지. 대기 선택지를 보여줄지 정합니다. */
   expectsFollowUp: boolean;
+  /**
+   * 방금 담은 것과 같아 보이는 기존 저장물.
+   *
+   * 알려주기만 합니다. 막으면 일부러 다시 담는 경우를 못 하게 되고, 무엇보다 판단이
+   * 틀렸을 때 사용자가 손쓸 방법이 없어집니다.
+   */
+  duplicates: SavedItem[];
   onKeepAsNew: () => void;
   onWaitForMore: () => void;
   onMergeInto: (targetItemId: string) => void;
@@ -36,6 +43,7 @@ export function SaveTargetModal({
   savedItemId,
   items,
   expectsFollowUp,
+  duplicates,
   onKeepAsNew,
   onWaitForMore,
   onMergeInto,
@@ -101,6 +109,32 @@ export function SaveTargetModal({
               <Text style={styles.closeText}>{isPickingTarget ? '← 뒤로' : '✕'}</Text>
             </Pressable>
           </View>
+
+          {!isPickingTarget && duplicates.length > 0 ? (
+            <View style={styles.duplicateCard}>
+              <Text style={styles.duplicateTitle}>
+                이미 담아둔 것 같습니다
+                {duplicates.length > 1 ? ` (${duplicates.length}건)` : ''}
+              </Text>
+              <Text style={styles.duplicateHint}>
+                같은 링크로 보입니다. 합치면 하나로 묶어 다시 정리합니다.
+              </Text>
+              {duplicates.slice(0, 2).map((item) => (
+                <Pressable
+                  key={item.id}
+                  onPress={() => onMergeInto(item.id)}
+                  style={({ pressed }) => [styles.duplicateRow, pressed && { opacity: 0.6 }]}
+                >
+                  <Text style={styles.duplicateRowTitle} numberOfLines={1}>
+                    {getItemTitle(item)}
+                  </Text>
+                  <Text style={styles.duplicateRowMeta}>
+                    {formatReadableDate(item.createdAt)} · 여기에 합치기
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
 
           {isPickingTarget ? (
             <>
@@ -173,6 +207,39 @@ export function SaveTargetModal({
 
 const createStyles = (palette: Palette) =>
   StyleSheet.create({
+    duplicateCard: {
+      borderWidth: 1,
+      borderColor: palette.accent,
+      borderRadius: 12,
+      padding: spacing[3],
+      marginBottom: spacing[4],
+      gap: spacing[2],
+    },
+    duplicateTitle: {
+      color: palette.accent,
+      fontSize: 14,
+      fontWeight: '700',
+    },
+    duplicateHint: {
+      color: palette.textMuted,
+      fontSize: 12,
+      lineHeight: 17,
+    },
+    duplicateRow: {
+      borderTopWidth: 1,
+      borderTopColor: palette.border,
+      paddingTop: spacing[2],
+    },
+    duplicateRowTitle: {
+      color: palette.textPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    duplicateRowMeta: {
+      color: palette.textMuted,
+      fontSize: 12,
+      marginTop: 2,
+    },
     backdrop: { flex: 1, backgroundColor: palette.overlay, justifyContent: 'flex-end' },
     sheet: {
       backgroundColor: palette.backgroundStrong,
