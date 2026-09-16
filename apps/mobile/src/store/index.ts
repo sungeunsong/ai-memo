@@ -139,7 +139,20 @@ type AppStore = {
   retryEnrichMetadata: (itemId: string) => Promise<void>;
   setItemTitle: (itemId: string, title: string | null) => Promise<void>;
   /** 기존 저장물에 정보 조각을 붙이고 AI 정리를 다시 돌립니다. */
-  attachSourceToItem: (itemId: string, input: string) => Promise<{ ok: boolean; message?: string }>;
+  attachSourceToItem: (
+    itemId: string,
+    input: string
+  ) => Promise<{
+    ok: boolean;
+    message?: string;
+    /**
+     * 붙이려는 내용이 이미 그 저장물에 있다는 뜻입니다.
+     *
+     * 다른 실패와 구별해야 합니다. 부르는 쪽에 따라 이것은 실패가 아니라 '이미 됐다'로
+     * 읽어야 하는 경우가 있습니다. 중복이라고 알려줘서 합치기를 누른 자리가 그렇습니다.
+     */
+    reason?: 'duplicate';
+  }>;
   /**
    * 스크린샷을 조각으로 붙입니다.
    * 인스타 DM은 복사도 전달도 안 되어서, 화면을 찍는 것이 유일한 통로입니다.
@@ -148,7 +161,14 @@ type AppStore = {
     itemId: string,
     imageUris: string[],
     options?: { skipAi?: boolean }
-  ) => Promise<{ ok: boolean; added: number; skipped: number; message?: string }>;
+  ) => Promise<{
+    ok: boolean;
+    added: number;
+    skipped: number;
+    message?: string;
+    /** 고른 장이 전부 이미 붙어 있던 것이었다는 뜻입니다. 위와 같은 이유로 구별합니다. */
+    reason?: 'duplicate';
+  }>;
   /** 잘못 붙인 조각을 떼고 남은 것 기준으로 다시 정리합니다. */
   detachSourceFromItem: (sourceId: string) => Promise<void>;
   /** 추가 입력 대기를 끝냅니다. input이 있으면 붙이고, 없으면 있는 대로 정리합니다. */
@@ -514,7 +534,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       // 같은 DM을 두 번 붙이면 AI가 같은 말을 두 번 읽고 정리 비용도 헛되이 나갑니다.
       const duplicate = await hasSameItemSourceAsync(itemId, extractedUrl, trimmed);
       if (duplicate) {
-        return { ok: false, message: '이미 붙어 있는 내용입니다.' };
+        return { ok: false, message: '이미 붙어 있는 내용입니다.', reason: 'duplicate' };
       }
 
       // 링크를 붙였으면 주소만 담아선 안 됩니다. 그대로 두면 AI에게 "https://..."
@@ -577,7 +597,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
         // 여기서 AI를 부르면 껐다는 말이 무색해집니다. 나중에 상세 화면에서
         // '정리하기'를 누르면 그때 이 조각들까지 함께 읽습니다.
         const base64 = options?.skipAi ? null : await readImageForAnalysis(storedUri);
-        const ocr = base64 ? await fetchImageMetadataPatch(base64, item.createdAt) : null;
+        // 이 읽기는 저장물의 정리와 별개로 나가는 호출이라 이름표도 따로 받습니다.
+        // 붙이는 장마다 한 번씩이고, 적어둘 자리가 없어 이어받지는 못합니다.
+        const ocr = base64
+          ? await fetchImageMetadataPatch(createEnrichRequestId(), base64, item.createdAt)
+          : null;
         const extracted = ocr?.contentText?.trim() ?? '';
 
         // 같은 화면을 두 번 고르면 읽어낸 글도 같습니다. 이미 옮겨둔 파일은 지웁니다.
@@ -602,7 +626,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
         await reenrichFromSources(itemId, set, get);
       }
 
-      return { ok: added > 0, added, skipped };
+      // 고른 장이 전부 이미 있던 것이면 실패가 아니라 '이미 됐다'입니다.
+      return {
+        ok: added > 0,
+        added,
+        skipped,
+        ...(added === 0 && skipped > 0 ? { reason: 'duplicate' as const } : null),
+      };
     } catch (error) {
       // 도중에 실패해도 그때까지 붙인 것은 살립니다. 다시 고르게 만들 이유가 없습니다.
       if (added > 0 && !options?.skipAi) {
@@ -1105,7 +1135,11 @@ async function fillMissingSourceTexts(
      */
     if (!source.sourceUrl && source.imageUri && !(source.rawText ?? '').trim()) {
       const base64 = await readImageForAnalysis(source.imageUri);
-      const ocr = base64 ? await fetchImageMetadataPatch(base64, item.createdAt) : null;
+      // 이 읽기는 저장물의 정리와 별개로 나가는 호출이라 이름표도 따로 받습니다.
+      // 붙이는 장마다 한 번씩이고, 적어둘 자리가 없어 이어받지는 못합니다.
+      const ocr = base64
+        ? await fetchImageMetadataPatch(createEnrichRequestId(), base64, item.createdAt)
+        : null;
       const text = ocr?.contentText?.trim();
       if (!text) continue;
 
