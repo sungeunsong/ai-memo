@@ -149,6 +149,17 @@ export function HomeScreen() {
   const [isBackupVisible, setIsBackupVisible] = useState(false);
   /** 공유가 들어와 저장을 마친 뒤, 어떻게 담을지 고르는 중인 항목 */
   const [saveTargetItemId, setSaveTargetItemId] = useState<string | null>(null);
+  /**
+   * 그 항목의 사본.
+   *
+   * 시트를 목록에서 찾아 띄우고 있었는데, 목록은 초기화·회수·동기화가 제각각
+   * 건드리는 자리라 잠깐 비어 있는 순간이 생깁니다. 그때 시트가 통째로 안 뜨고,
+   * 사용자는 공유가 씹힌 줄 알고 다시 공유해 같은 것을 두 번 담습니다.
+   *
+   * 목록이 흔들리는 것은 목록 쪽에서 고칠 일이고, 시트는 그것에 기대지 않는 편이
+   * 낫습니다. 이미 저장까지 끝낸 뒤라 사본이 낡아도 고를 것은 달라지지 않습니다.
+   */
+  const saveTargetSnapshotRef = useRef<SavedItem | null>(null);
   const [pantryOwned, setPantryOwned] = useState<string[]>([]);
 
   // 냉장고 재료는 매번 다시 입력하게 하면 기능 자체를 안 쓰게 되므로 저장해둡니다.
@@ -482,7 +493,9 @@ export function HomeScreen() {
 
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0] ?? null;
 
-  const saveTargetItem = items.find((item) => item.id === saveTargetItemId) ?? null;
+  const saveTargetItem = saveTargetItemId
+    ? (items.find((item) => item.id === saveTargetItemId) ?? saveTargetSnapshotRef.current)
+    : null;
   // 인스타는 "댓글 남기면 DM 드려요"가 붙는 일이 잦아, 뒤따라올 내용이 있을 확률이 높습니다.
   const expectsFollowUp = Boolean(saveTargetItem?.sourceType.startsWith('instagram'));
   const runtimeErrorMessage = errorMessage ?? shareIntentError ?? null;
@@ -715,8 +728,12 @@ export function HomeScreen() {
         // 릴스와 DM이 또 둘로 쪼개집니다.
         const result = await saveImage(sharedImagePath, 'share', { deferEnrich: true });
         if (result.ok) {
-          const nextId = useAppStore.getState().selectedItemId;
-          if (nextId) setSaveTargetItemId(nextId);
+          const state = useAppStore.getState();
+          const nextId = state.selectedItemId;
+          if (nextId) {
+            saveTargetSnapshotRef.current = state.items.find((item) => item.id === nextId) ?? null;
+            setSaveTargetItemId(nextId);
+          }
         }
         resetShareIntent();
       })();
@@ -745,8 +762,12 @@ export function HomeScreen() {
       if (result.ok) {
         // 여기서 '저장됨'을 알리지 않습니다. 아직 확정 전이고, 닫으면 취소됩니다.
         // 선택이 끝난 뒤에 그 결과를 알립니다.
-        const nextId = useAppStore.getState().selectedItemId;
-        if (nextId) setSaveTargetItemId(nextId);
+        const state = useAppStore.getState();
+        const nextId = state.selectedItemId;
+        if (nextId) {
+          saveTargetSnapshotRef.current = state.items.find((item) => item.id === nextId) ?? null;
+          setSaveTargetItemId(nextId);
+        }
       }
       resetShareIntent();
     })();

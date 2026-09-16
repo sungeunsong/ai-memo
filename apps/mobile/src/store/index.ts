@@ -932,8 +932,31 @@ async function recoverAndResumeStalledEnrich(set: SetAppState, get: () => AppSto
 
   if (recoveredCount > 0) {
     console.log(`[Enrich] 중단된 AI 정리 ${recoveredCount}건을 회수했습니다.`);
-    const items = await getSavedItemsAsync().catch(() => get().items);
-    set({ items });
+
+    const rows = await getSavedItemsAsync().catch(() => null);
+
+    if (rows) {
+      // 읽어온 것으로 덮어씌우되, 통째로 바꾸지는 않습니다.
+      //
+      // 예전에는 읽은 결과를 그대로 set했습니다. 그런데 이 읽기가 도는 동안 공유로
+      // 들어온 저장이 끼어들면, 읽기가 시작된 뒤에 생긴 그 아이템이 결과에 없어서
+      // 화면에서 사라졌습니다. DB에는 멀쩡히 있으니 다음에 목록을 읽을 때 되살아나는데,
+      // 그 사이 공유 직후의 선택 시트가 '그 아이템'을 못 찾아 뜨지 않았습니다.
+      // 사용자는 아무것도 안 뜬 줄 알고 다시 공유해서 같은 것을 두 번 담았습니다.
+      //
+      // 회수가 바꾼 것은 몇 건의 상태뿐입니다. 목록의 주인이 될 이유가 없습니다.
+      set((state) => {
+        const fresh = new Map(rows.map((row) => [row.id, row]));
+        const known = new Set(state.items.map((item) => item.id));
+
+        const merged = state.items.map((item) => fresh.get(item.id) ?? item);
+        const missing = rows.filter((row) => !known.has(row.id));
+
+        return {
+          items: [...merged, ...missing].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+        };
+      });
+    }
   }
 
   await resumeStalledEnrich(set, get);
