@@ -117,7 +117,7 @@ export function SaveTargetModal({
                 {duplicates.length > 1 ? ` (${duplicates.length}건)` : ''}
               </Text>
               <Text style={styles.duplicateHint}>
-                같은 링크로 보입니다. 합치면 하나로 묶어 다시 정리합니다.
+                같은 링크로 보입니다. 새로 담지 않고 그 저장물로 넘어갑니다.
               </Text>
               {duplicates.slice(0, 2).map((item) => (
                 <Pressable
@@ -129,7 +129,7 @@ export function SaveTargetModal({
                     {getItemTitle(item)}
                   </Text>
                   <Text style={styles.duplicateRowMeta}>
-                    {formatReadableDate(item.createdAt)} · 여기에 합치기
+                    {formatReadableDate(item.createdAt)} · 새로 담지 않기
                   </Text>
                 </Pressable>
               ))}

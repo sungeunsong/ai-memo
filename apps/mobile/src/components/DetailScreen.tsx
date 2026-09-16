@@ -287,13 +287,24 @@ export function DetailContent({
       const uris = picked.assets.map((asset) => asset.uri);
       const result = await attachScreenshotsToItem(selectedItem.id, uris);
 
+      // 시제를 지킵니다.
+      //
+      // 이 함수는 글자 읽기와 재정리까지 다 끝내고 돌아옵니다. 그런데 '정리합니다'라고
+      // 적어두었더니, 20~40초를 기다린 끝에 본 그 문구를 이제 시작한다는 뜻으로 읽고
+      // 계속 기다리다가 고장인 줄 알고 같은 장을 또 붙이는 일이 있었습니다.
       if (result.added > 0) {
         setToastMessage(
-          `스크린샷 ${result.added}장을 읽어 함께 정리합니다` +
-            (result.skipped > 0 ? ` (${result.skipped}장은 이미 붙어 있음)` : '')
+          `스크린샷 ${result.added}장을 반영해 다시 정리했습니다` +
+            (result.skipped > 0 ? ` (${result.skipped}장은 이미 붙어 있었음)` : '')
+        );
+      } else if (result.reason === 'duplicate') {
+        setToastMessage(
+          result.skipped > 1
+            ? `고른 ${result.skipped}장 모두 이미 붙어 있습니다`
+            : '이미 붙어 있는 스크린샷입니다'
         );
       } else {
-        setToastMessage(result.message ?? '이미 붙어 있는 스크린샷입니다');
+        setToastMessage(result.message ?? '스크린샷을 붙이지 못했습니다');
       }
     } finally {
       setIsAttaching(false);

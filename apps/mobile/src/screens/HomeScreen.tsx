@@ -1279,10 +1279,25 @@ export function HomeScreen() {
               await deleteItem(source.id);
               setToastMessage('기존 저장물에 합쳤습니다');
               setHighlightedItemId(targetItemId);
-            } else {
-              setToastMessage(merged.message ?? '합치지 못했습니다');
-              void resolveAwaitingInput(source.id);
+              return;
             }
+
+            // 붙일 내용이 이미 그 저장물에 있는 경우입니다. 이것은 실패가 아닙니다.
+            //
+            // 중복이라고 알려줘서 합치기를 누른 자리라, 대개 여기로 옵니다. 그런데
+            // 다른 실패와 같이 묶어 두었더니 방금 만든 항목을 살려두고 정리까지
+            // 돌렸습니다. 중복을 막으려고 만든 기능이 정확히 그 중복을 만들고 돈도
+            // 썼습니다. 사용자가 고른 것은 '하나로 두기'이고, 내용은 이미 저쪽에
+            // 있으므로 잃는 것이 없습니다.
+            if (merged.reason === 'duplicate') {
+              await deleteItem(source.id);
+              setToastMessage('이미 담아둔 내용입니다');
+              setHighlightedItemId(targetItemId);
+              return;
+            }
+
+            setToastMessage(merged.message ?? '합치지 못했습니다');
+            void resolveAwaitingInput(source.id);
           })();
         }}
       />
