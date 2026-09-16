@@ -130,6 +130,8 @@ export function HomeScreen() {
   const reloadItems = useAppStore((s) => s.reloadItems);
   const attachSourceToItem = useAppStore((s) => s.attachSourceToItem);
   const attachScreenshotsToItem = useAppStore((s) => s.attachScreenshotsToItem);
+  const attachSourcesToItem = useAppStore((s) => s.attachSourcesToItem);
+  const retryEnrichMetadata = useAppStore((s) => s.retryEnrichMetadata);
   const resolveAwaitingInput = useAppStore((s) => s.resolveAwaitingInput);
   const renameDomain = useAppStore((s) => s.renameDomain);
   const mergeDomains = useAppStore((s) => s.mergeDomains);
@@ -818,46 +820,77 @@ export function HomeScreen() {
    * 정리를 켜뒀으면 첫 장에서는 미루고(deferEnrich) 붙이기가 끝난 뒤 한 번만
    * 종합합니다. 장마다 돌리면 AI 호출이 장 수만큼 늘어납니다.
    */
+  /**
+   * 수집 창에서 담습니다.
+   *
+   * 넣은 글과 사진이 여럿이어도 저장물은 하나입니다. 맨 앞이 저장물이 되고 나머지는
+   * 조각으로 붙습니다. 릴스 링크 + 함께 받은 DM 글 + 따로 온 노션 주소가 한 건이지
+   * 세 건이 아니기 때문입니다.
+   *
+   * 붙이는 동안에는 정리를 걸지 않습니다. 조각마다 돌리면 AI 호출이 조각 수만큼
+   * 나갑니다. 한 건으로 담으려던 사용자에게 세 배를 청구하는 셈입니다.
+   */
   async function handleSaveFromCapture(
-    input: string,
+    inputs: string[],
     options: { skipAi: boolean; imageUris: string[] }
   ) {
+    const texts = inputs.map((entry) => entry.trim()).filter(Boolean);
+    const [firstText = '', ...restTexts] = texts;
     const [firstImage, ...restImages] = options.imageUris;
 
-    if (firstImage) {
-      const result = await saveImage(firstImage, 'gallery', {
-        skipAi: options.skipAi,
-        title: input,
-        deferEnrich: !options.skipAi && restImages.length > 0,
-      });
-      if (!result.ok) return result;
+    const hasExtras = restTexts.length > 0 || restImages.length > 0;
+    // 붙일 것이 남았으면 첫 저장에서는 정리를 미룹니다. 바로 돌리면 조각이 다 모이기
+    // 전의 내용으로 요약이 만들어지고, 붙인 뒤 다시 돌려 두 번 내게 됩니다.
+    const deferEnrich = !options.skipAi && hasExtras;
 
-      const itemId = useAppStore.getState().selectedItemId;
-      if (itemId && restImages.length > 0) {
-        await attachScreenshotsToItem(itemId, restImages, { skipAi: options.skipAi });
+    const result = firstImage
+      ? await saveImage(firstImage, 'gallery', {
+          skipAi: options.skipAi,
+          title: firstText,
+          deferEnrich,
+        })
+      : await saveUrl(firstText, 'manual', { skipAi: options.skipAi, deferEnrich });
+
+    if (!result.ok) return result;
+
+    const itemId = useAppStore.getState().selectedItemId;
+
+    if (itemId && hasExtras) {
+      // skipAi로 붙입니다. 여기서 정리하지 말라는 뜻이지, 정리하지 않겠다는 뜻이
+      // 아닙니다. 다 붙인 뒤 아래에서 한 번 겁니다.
+      if (restImages.length > 0) {
+        await attachScreenshotsToItem(itemId, restImages, { skipAi: true });
       }
-
-      setToastMessage(
-        options.skipAi ? '수집함에 담았습니다' : '수집함에 저장됨 · 내용을 읽는 중입니다'
-      );
-      if (itemId) {
-        setHighlightedItemId(itemId);
-        if (!isWideLayout) setIsDetailVisible(true);
+      if (restTexts.length > 0) {
+        await attachSourcesToItem(itemId, restTexts, { skipAi: true });
       }
-      return result;
-    }
-
-    const result = await saveUrl(input, 'manual', { skipAi: options.skipAi });
-    if (result.ok) {
-      const nextId = useAppStore.getState().selectedItemId;
-      const savedItem = useAppStore.getState().items.find((i) => i.id === nextId) ?? null;
-      setToastMessage('수집함에 저장됨');
-      setCaptureNotice(buildCaptureNotice(savedItem, input, 'manual'));
-      if (nextId) {
-        setHighlightedItemId(nextId);
-        if (!isWideLayout) setIsDetailVisible(true);
+      if (!options.skipAi) {
+        void resolveAwaitingInput(itemId);
       }
     }
+
+    const pieceCount = texts.length + options.imageUris.length;
+
+    setToastMessage(
+      options.skipAi
+        ? '수집함에 담았습니다'
+        : pieceCount > 1
+          ? `조각 ${pieceCount}개를 묶어 정리합니다`
+          : '수집함에 저장됨'
+    );
+
+    // 링크 하나만 담았을 때 붙는 안내입니다. 조각이 여럿이면 무엇에 대한 안내인지
+    // 가리키지 못해 혼란만 됩니다.
+    if (!firstImage && pieceCount === 1) {
+      const savedItem = useAppStore.getState().items.find((i) => i.id === itemId) ?? null;
+      setCaptureNotice(buildCaptureNotice(savedItem, firstText, 'manual'));
+    }
+
+    if (itemId) {
+      setHighlightedItemId(itemId);
+      if (!isWideLayout) setIsDetailVisible(true);
+    }
+
     return result;
   }
 
@@ -950,11 +983,11 @@ export function HomeScreen() {
               },
             ]}
           />
-          <ItemCard item={item} />
+          <ItemCard item={item} onRetry={() => void retryEnrichMetadata(item.id)} />
         </Pressable>
       );
     },
-    [selectedItem?.id, highlightedItemId, mode, styles]
+    [selectedItem?.id, highlightedItemId, mode, styles, retryEnrichMetadata]
   );
 
   const keyExtractor = useCallback((item: SavedItem) => item.id, []);
