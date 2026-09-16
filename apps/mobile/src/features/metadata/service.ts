@@ -1357,13 +1357,23 @@ const MAX_PROMPT_FACTS_PER_DOMAIN = 10;
  */
 function describeRegistryForPrompt(registry: TaxonomyRegistry): string {
   const factsByDomain = new Map<string, string[]>();
+  /** 분야를 넘는 축의 항목만. 상한 밖으로 밀린 분야에서도 이것만은 싣습니다. */
+  const crossDomainFactsByDomain = new Map<string, string[]>();
 
   for (const definition of registry.facts.values()) {
+    const entry = `${definition.key}(${definition.label})`;
+
     const list = factsByDomain.get(definition.domainKey) ?? [];
     if (list.length < MAX_PROMPT_FACTS_PER_DOMAIN) {
-      list.push(`${definition.key}(${definition.label})`);
+      list.push(entry);
     }
     factsByDomain.set(definition.domainKey, list);
+
+    if (definition.globalRole) {
+      const crossList = crossDomainFactsByDomain.get(definition.domainKey) ?? [];
+      crossList.push(entry);
+      crossDomainFactsByDomain.set(definition.domainKey, crossList);
+    }
   }
 
   // 항목이 아니라 분야를 훑습니다.
@@ -1381,8 +1391,16 @@ function describeRegistryForPrompt(registry: TaxonomyRegistry): string {
 
     // 항목은 앞쪽 분야에만 붙입니다. 사전은 많이 쓰인 순으로 와서, 뒤로 갈수록
     // 어쩌다 한 번 쓴 분야입니다. 그런 분야의 항목까지 외우게 할 이유는 없습니다.
-    const facts =
-      lines.length < MAX_PROMPT_DOMAINS_WITH_FACTS ? (factsByDomain.get(domain.key) ?? []) : [];
+    //
+    // 다만 분야를 넘는 축(globalRole)은 예외입니다. 그 항목들은 자기 분야에서만
+    // 쓰이지 않습니다. 구매 방식이 그런데, shopping이 뒤로 밀리면 여행 글을 읽을 때
+    // purchase_type이라는 이름이 프롬프트에 아예 없어서, 공동구매라는 걸 알아봐도
+    // 어느 이름에 담아야 할지 모릅니다. 분야가 늘어날수록 확실해지는 문제라
+    // 순서에 맡기지 않습니다.
+    const withinLimit = lines.length < MAX_PROMPT_DOMAINS_WITH_FACTS;
+    const facts = withinLimit
+      ? (factsByDomain.get(domain.key) ?? [])
+      : (crossDomainFactsByDomain.get(domain.key) ?? []);
     const tail = facts.length > 0 ? `: ${facts.join(', ')}` : '';
     lines.push(`- ${domain.key}(${domain.label})${tail}`);
   }
@@ -1559,6 +1577,12 @@ async function callGeminiApi(
 5. 이 글의 분야가 아닌 항목이 섞여 있으면 그 항목에만 "domain"을 따로 적어라.
    예를 들어 여행 글에 요리 재료가 나오면
    { "key": "ingredient", "label": "재료", "domain": "recipe", "values": ["흑돼지"] }
+
+6. 파는 방식이 특별하면 분야와 상관없이 purchase_type을 적어라. domain은 shopping이다.
+   공동구매 / 예약구매 / 구독 / 펀딩 중 해당하는 것만 쓴다.
+   { "key": "purchase_type", "label": "구매 형태", "domain": "shopping", "values": ["공동구매"] }
+   여행 숙박 공구도, 기저귀 공구도 마찬가지다. 분야는 여행이고 육아이지만 파는 방식은 공동구매다.
+   그냥 사는 것이면 이 항목을 아예 넣지 마라. '일반구매'는 적지 않는다.
 
 이미 쓰고 있는 이름 (뜻이 같으면 반드시 이 키를 그대로 써라):
 ${registrySection || '(아직 없음)'}

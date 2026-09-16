@@ -115,6 +115,7 @@ export const ROLE_LABELS: Record<GlobalRole, string> = {
   target: '부위',
   topic: '주제',
   duration: '시간',
+  purchase: '구매 방식',
 };
 
 /** 축의 이름. role 축은 공통 이름을, 분야 전용 축은 그 항목의 이름을 씁니다. */

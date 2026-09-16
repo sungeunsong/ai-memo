@@ -69,7 +69,7 @@ export const SEED_FACTS: SeedFact[] = [
   // 쇼핑
   { domainKey: 'shopping', key: 'product_type', label: '품목', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },
   { domainKey: 'shopping', key: 'seller', label: '판매처', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },
-  { domainKey: 'shopping', key: 'purchase_type', label: '구매 형태', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },
+  { domainKey: 'shopping', key: 'purchase_type', label: '구매 형태', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: 'purchase' },
   { domainKey: 'shopping', key: 'price', label: '가격', valueType: 'money', cardinality: 'single', normalizationPolicy: 'money', globalRole: 'price' },
   // 마감일은 '마감됨' 경고와 사용자 교정이 걸려 있어 날짜로 다뤄야 합니다.
   { domainKey: 'shopping', key: 'deadline', label: '마감일', valueType: 'date', cardinality: 'single', normalizationPolicy: 'date', globalRole: 'deadline' },
