@@ -239,7 +239,20 @@ async function handle(req: Request) {
     case 'over_user_quota':
     case 'over_user_calls':
     case 'over_global_calls':
-      return json(429, { status: decision });
+      // 어느 상한에 걸렸는지와 그때 이 인스턴스가 들고 있던 값을 같이 돌려줍니다.
+      //
+      // 상한을 시험하려고 낮춰둔 값이 되돌려지지 않은 채로 남아 실사용이 막힌 적이
+      // 있습니다. 그때 응답에는 '상한에 걸렸다'만 있어서, 설정이 잘못된 것인지 정말
+      // 많이 쓴 것인지 구별할 수 없었습니다. 우리 상한이라 감출 것도 아닙니다.
+      console.log(`[generate] ${decision} user=${user.id} caps=${USER_QUOTA_CAP}/${USER_CALL_CAP}/${GLOBAL_CALL_CAP}`);
+      return json(429, {
+        status: decision,
+        caps: {
+          userQuota: USER_QUOTA_CAP,
+          userCall: USER_CALL_CAP,
+          globalCall: GLOBAL_CALL_CAP,
+        },
+      });
 
     case 'proceed':
       break;
@@ -397,8 +410,16 @@ function numberFromEnv(name: string, fallback?: number) {
   return value;
 }
 
+/**
+ * 어느 판이 응답했는지 표시합니다.
+ *
+ * 배포한 뒤에도 옛 인스턴스가 살아남아 옛 환경변수를 들고 응답하는 일이 있었습니다.
+ * 설정을 고쳤는데 왜 그대로인지 응답만 봐서는 알 수 없어 한참 헤맸습니다.
+ */
+const BUILD = '2026-09-16-1';
+
 function json(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
+  return new Response(JSON.stringify({ ...(body as object), build: BUILD }), {
     status,
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });

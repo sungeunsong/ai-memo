@@ -1610,6 +1610,11 @@ ${rawContent.slice(0, MAX_CONTENT_CHARS)}`}
       continue;
     }
 
+    // 여기서 끝나는 길이 둘입니다. 다시 걸어도 소용없는 실패(상한·잘못된 요청)이거나,
+    // 다시 걸 수 있었지만 횟수를 다 쓴 경우입니다. 어느 쪽이든 사유를 남겨야 합니다.
+    // 안 남기면 로컬 폴백으로 조용히 빠져서, 로그만 보면 AI를 부른 적도 없는 것처럼
+    // 보입니다. 실제로 그래서 한참 헤맸습니다.
+    console.log(`[GeminiAPI] 정리를 포기합니다 (시도 ${attempt}/${maxAttempts}): ${outcome.reason}`);
     return { ok: false, reason: outcome.reason };
   }
 
