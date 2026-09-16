@@ -21,8 +21,14 @@ import { useKeyboardHeight } from '@/hooks/useKeyboardHeight';
 type Props = {
   visible: boolean;
   onClose: () => void;
+  /**
+   * 넣은 글·링크 전부와 사진 전부를 넘깁니다.
+   *
+   * 첫 조각이 저장물이 되고 나머지는 거기에 붙습니다. 한 건에 대한 여러 조각이지
+   * 여러 건이 아닙니다. 사진이 이미 그렇게 동작합니다.
+   */
   onSave: (
-    input: string,
+    inputs: string[],
     options: { skipAi: boolean; imageUris: string[] }
   ) => Promise<{ ok: boolean; message?: string }>;
   isSaving: boolean;
@@ -61,25 +67,51 @@ export function CaptureModal({
    */
   const [images, setImages] = useState<string[]>([]);
   const [isPicking, setIsPicking] = useState(false);
+  /*
+   * 넣어둔 글 조각.
+   *
+   * 릴스 링크 하나로 끝나지 않는 경우가 많습니다. 링크와 함께 받은 DM 글, 따로 온
+   * 노션 주소를 한 번에 넣고 한 건으로 담고 싶은데, 입력창이 하나뿐이라 따로 저장한
+   * 뒤 합치는 수밖에 없었습니다. 사진은 이미 여러 장이 됩니다.
+   *
+   * 지금 입력창에 있는 것과 합쳐 순서대로 저장합니다. 맨 앞이 저장물이 됩니다.
+   */
+  const [entries, setEntries] = useState<string[]>([]);
 
   // 닫으면 비웁니다. 다음에 열었을 때 지난번 사진이 남아 있으면 그건 새 수집이
   // 아니라 남의 것입니다.
   useEffect(() => {
-    if (!visible) setImages([]);
+    if (!visible) {
+      setImages([]);
+      setEntries([]);
+    }
   }, [visible]);
 
   useBackHandler(visible, onClose);
 
   if (!visible) return null;
 
-  const canSave = Boolean(input.trim()) || images.length > 0;
+  const canSave = Boolean(input.trim()) || entries.length > 0 || images.length > 0;
+  const canStack = Boolean(input.trim());
+
+  /** 지금 입력창에 있는 것을 조각으로 쌓고 창을 비웁니다. */
+  function stackCurrentInput() {
+    const trimmed = input.trim();
+    if (!trimmed) return;
+    setEntries((current) => [...current, trimmed]);
+    setInput('');
+  }
 
   async function handleSave() {
     if (!canSave) return;
     setError(null);
-    const result = await onSave(input, { skipAi: !useAi, imageUris: images });
+    // 입력창에 남아 있는 것도 마지막 조각입니다. 저장을 누르기 전에 '더 넣기'를
+    // 한 번 더 눌러야 한다면, 눌러야 하는 이유를 화면이 설명할 수 없습니다.
+    const inputs = [...entries, input].map((entry) => entry.trim()).filter(Boolean);
+    const result = await onSave(inputs, { skipAi: !useAi, imageUris: images });
     if (result.ok) {
       setInput('');
+      setEntries([]);
       setImages([]);
       setUseAi(true);
       onClose();
@@ -162,6 +194,38 @@ export function CaptureModal({
             <View style={[styles.aiSwitch, useAi && styles.aiSwitchOn]}>
               <View style={[styles.aiKnob, useAi && styles.aiKnobOn]} />
             </View>
+          </Pressable>
+
+          {entries.length > 0 ? (
+            <View style={styles.entryList}>
+              {entries.map((entry, index) => (
+                <View key={`${entry}-${index}`} style={styles.entryRow}>
+                  <Text style={styles.entryIndex}>{index + 1}</Text>
+                  <Text style={styles.entryText} numberOfLines={2}>
+                    {entry}
+                  </Text>
+                  <Pressable
+                    onPress={() => setEntries((current) => current.filter((_, i) => i !== index))}
+                    hitSlop={8}
+                    style={({ pressed }) => [pressed && { opacity: 0.6 }]}
+                  >
+                    <Text style={styles.entryRemove}>✕</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          <Pressable
+            onPress={stackCurrentInput}
+            disabled={!canStack || isSaving}
+            style={({ pressed }) => [
+              styles.stackBtn,
+              (!canStack || isSaving) && { opacity: 0.4 },
+              { transform: [{ scale: pressed ? 0.97 : 1 }] },
+            ]}
+          >
+            <Text style={styles.stackBtnText}>➕  내용 더 넣기</Text>
           </Pressable>
 
           {/* 붙여둔 사진. 저장하기 전까지는 여기서 떼고 다시 고를 수 있습니다.
@@ -264,6 +328,49 @@ export function CaptureFloatingButton({ onPress }: { onPress: () => void }) {
 
 const createStyles = (palette: Palette) =>
   StyleSheet.create({
+    entryList: {
+      gap: spacing[2],
+      marginBottom: spacing[3],
+    },
+    entryRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[2],
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: 10,
+      paddingHorizontal: spacing[3],
+      paddingVertical: spacing[2],
+    },
+    entryIndex: {
+      color: palette.textMuted,
+      fontSize: 11,
+      fontWeight: '700',
+      minWidth: 12,
+    },
+    entryText: {
+      flex: 1,
+      color: palette.textPrimary,
+      fontSize: 13,
+    },
+    entryRemove: {
+      color: palette.textMuted,
+      fontSize: 13,
+    },
+    stackBtn: {
+      alignSelf: 'flex-start',
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: 999,
+      paddingHorizontal: spacing[3],
+      paddingVertical: 6,
+      marginBottom: spacing[3],
+    },
+    stackBtnText: {
+      color: palette.textSecondary,
+      fontSize: 12,
+      fontWeight: '600',
+    },
   aiToggle: {
     flexDirection: 'row',
     alignItems: 'center',

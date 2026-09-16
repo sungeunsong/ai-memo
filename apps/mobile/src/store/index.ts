@@ -153,6 +153,18 @@ type AppStore = {
      */
     reason?: 'duplicate';
   }>;
+  /** 글·링크 여러 개를 한 번에 붙입니다. 정리는 마지막에 한 번만 돕니다. */
+  attachSourcesToItem: (
+    itemId: string,
+    inputs: string[],
+    options?: { skipAi?: boolean }
+  ) => Promise<{
+    ok: boolean;
+    added: number;
+    skipped: number;
+    message?: string;
+    reason?: 'duplicate';
+  }>;
   /**
    * 스크린샷을 조각으로 붙입니다.
    * 인스타 DM은 복사도 전달도 안 되어서, 화면을 찍는 것이 유일한 통로입니다.
@@ -529,34 +541,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
 
     try {
-      const extractedUrl = trimmed.match(/https?:\/\/[^\s]+/)?.[0] ?? null;
+      const attached = await attachOneSourceAsync(itemId, trimmed, set);
 
-      // 같은 DM을 두 번 붙이면 AI가 같은 말을 두 번 읽고 정리 비용도 헛되이 나갑니다.
-      const duplicate = await hasSameItemSourceAsync(itemId, extractedUrl, trimmed);
-      if (duplicate) {
+      if (!attached) {
         return { ok: false, message: '이미 붙어 있는 내용입니다.', reason: 'duplicate' };
       }
-
-      // 링크를 붙였으면 주소만 담아선 안 됩니다. 그대로 두면 AI에게 "https://..."
-      // 한 줄만 건네게 되어 "분석할 내용이 없다"는 답이 돌아옵니다.
-      // 사용자가 링크와 함께 적은 메모가 있으면 본문 앞에 함께 남깁니다.
-      const note = extractedUrl ? trimmed.replace(extractedUrl, '').trim() : trimmed;
-      const body = extractedUrl ? await fetchSourceBodyText(extractedUrl).catch(() => null) : null;
-      const rawText = [note, body].filter(Boolean).join('\n\n') || trimmed;
-
-      const source = buildItemSource(
-        itemId,
-        toSourceKind(classifySourceType(extractedUrl, trimmed), Boolean(extractedUrl)),
-        extractedUrl,
-        rawText
-      );
-
-      await addItemSourceAsync(source);
-      set((state) => ({
-        items: state.items.map((entry) =>
-          entry.id === itemId ? { ...entry, sources: [...entry.sources, source] } : entry
-        ),
-      }));
 
       await reenrichFromSources(itemId, set, get);
       return { ok: true };
@@ -572,6 +561,54 @@ export const useAppStore = create<AppStore>((set, get) => ({
    * 장마다 재정리가 돌아 AI 호출이 배로 나가고, 그동안 다음 장을 고를 수도 없습니다.
    * 글자 읽기는 장마다 필요하지만 종합은 마지막에 한 번이면 됩니다.
    */
+  /**
+   * 글·링크 여러 개를 한 번에 조각으로 붙입니다.
+   *
+   * 수집 창에서 릴스 링크 + DM 글 + 노션 링크를 함께 넣는 자리입니다. 하나씩 붙이면
+   * 붙일 때마다 재정리가 돌아 AI 호출이 조각 수만큼 나갑니다. 한 건으로 담으려던
+   * 사용자에게 세 배를 청구하는 셈이라, 정리는 마지막에 한 번만 겁니다.
+   */
+  async attachSourcesToItem(itemId, inputs, options) {
+    if (!get().isReady) {
+      return { ok: false, added: 0, skipped: 0, message: '로컬 저장소가 아직 준비되지 않았습니다.' };
+    }
+
+    if (!get().items.some((entry) => entry.id === itemId)) {
+      return { ok: false, added: 0, skipped: 0, message: '붙일 저장물을 찾지 못했습니다.' };
+    }
+
+    const cleaned = inputs.map((input) => input.trim()).filter(Boolean);
+    let added = 0;
+    let skipped = 0;
+
+    try {
+      for (const input of cleaned) {
+        if (await attachOneSourceAsync(itemId, input, set)) {
+          added += 1;
+        } else {
+          skipped += 1;
+        }
+      }
+    } catch (error) {
+      // 도중에 실패해도 그때까지 붙인 것은 살립니다. 다시 넣게 만들 이유가 없습니다.
+      if (added > 0 && !options?.skipAi) {
+        await reenrichFromSources(itemId, set, get).catch(() => {});
+      }
+      const message = error instanceof Error ? error.message : '내용을 붙이지 못했습니다.';
+      return { ok: false, added, skipped, message };
+    }
+
+    if (added > 0 && !options?.skipAi) {
+      await reenrichFromSources(itemId, set, get);
+    }
+
+    return {
+      ok: added > 0,
+      added,
+      skipped,
+      ...(added === 0 && skipped > 0 ? { reason: 'duplicate' as const } : null),
+    };
+  },
   async attachScreenshotsToItem(itemId, imageUris, options) {
     if (!get().isReady) {
       return { ok: false, added: 0, skipped: 0, message: '로컬 저장소가 아직 준비되지 않았습니다.' };
@@ -974,6 +1011,52 @@ async function recoverAndResumeStalledEnrich(set: SetAppState, get: () => AppSto
   }
 
   await resumeStalledEnrich(set, get);
+}
+
+/**
+ * 글 하나를 조각으로 만들어 붙입니다. 재정리는 하지 않습니다.
+ *
+ * 여러 개를 한 번에 붙일 때 재정리가 조각 수만큼 돌면, AI 호출도 그만큼 나갑니다.
+ * 세 개를 넣고 한 번 정리되기를 기대한 사용자에게 세 번을 청구하는 셈입니다.
+ * 붙이는 일과 정리하는 일을 떼어두고, 정리는 부르는 쪽이 마지막에 한 번만 겁니다.
+ *
+ * 돌려주는 값: 붙였으면 true, 이미 있던 내용이면 false.
+ */
+async function attachOneSourceAsync(
+  itemId: string,
+  input: string,
+  set: SetAppState
+): Promise<boolean> {
+  const trimmed = input.trim();
+  const extractedUrl = trimmed.match(/https?:\/\/[^\s]+/)?.[0] ?? null;
+
+  // 같은 DM을 두 번 붙이면 AI가 같은 말을 두 번 읽고 정리 비용도 헛되이 나갑니다.
+  if (await hasSameItemSourceAsync(itemId, extractedUrl, trimmed)) {
+    return false;
+  }
+
+  // 링크를 붙였으면 주소만 담아선 안 됩니다. 그대로 두면 AI에게 "https://..."
+  // 한 줄만 건네게 되어 "분석할 내용이 없다"는 답이 돌아옵니다.
+  // 사용자가 링크와 함께 적은 메모가 있으면 본문 앞에 함께 남깁니다.
+  const note = extractedUrl ? trimmed.replace(extractedUrl, '').trim() : trimmed;
+  const body = extractedUrl ? await fetchSourceBodyText(extractedUrl).catch(() => null) : null;
+  const rawText = [note, body].filter(Boolean).join('\n\n') || trimmed;
+
+  const source = buildItemSource(
+    itemId,
+    toSourceKind(classifySourceType(extractedUrl, trimmed), Boolean(extractedUrl)),
+    extractedUrl,
+    rawText
+  );
+
+  await addItemSourceAsync(source);
+  set((state) => ({
+    items: state.items.map((entry) =>
+      entry.id === itemId ? { ...entry, sources: [...entry.sources, source] } : entry
+    ),
+  }));
+
+  return true;
 }
 
 /**
