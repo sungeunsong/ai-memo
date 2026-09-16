@@ -766,6 +766,9 @@ export function HomeScreen() {
         const nextId = state.selectedItemId;
         if (nextId) {
           saveTargetSnapshotRef.current = state.items.find((item) => item.id === nextId) ?? null;
+          console.log(
+            `[Share] 저장 완료. item: ${nextId}, 목록에 있음: ${Boolean(saveTargetSnapshotRef.current)}, 총 ${state.items.length}건`
+          );
           setSaveTargetItemId(nextId);
         }
       }
@@ -1225,6 +1228,11 @@ export function HomeScreen() {
           const target = saveTargetItem;
           setSaveTargetItemId(null);
           if (!target) return;
+          // 목록에 있는지 같이 남깁니다. 이 값이 false면 뒤이어 도는 재정리가
+          // 대상을 못 찾고 조용히 끝나, 저장물이 '추가 입력 대기'에 갇힙니다.
+          console.log(
+            `[Share] 새 정보로 저장. item: ${target.id}, 목록에 있음: ${items.some((i) => i.id === target.id)}`
+          );
           setHighlightedItemId(target.id);
           setToastMessage('수집함에 저장됨');
           void resolveAwaitingInput(target.id);

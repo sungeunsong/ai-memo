@@ -649,6 +649,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
    * 돌리면 AI 호출이 두 번 나갑니다.
    */
   async resolveAwaitingInput(itemId, input) {
+    console.log(`[Enrich] 추가 입력 대기 해제. item: ${itemId}, 준비됨: ${get().isReady}`);
+
     if (!get().isReady) {
       return;
     }
@@ -933,33 +935,43 @@ async function recoverAndResumeStalledEnrich(set: SetAppState, get: () => AppSto
   if (recoveredCount > 0) {
     console.log(`[Enrich] 중단된 AI 정리 ${recoveredCount}건을 회수했습니다.`);
 
+    // 회수가 바꾼 것은 몇 건의 상태뿐입니다. 목록의 주인이 될 이유가 없습니다.
     const rows = await getSavedItemsAsync().catch(() => null);
 
     if (rows) {
-      // 읽어온 것으로 덮어씌우되, 통째로 바꾸지는 않습니다.
-      //
-      // 예전에는 읽은 결과를 그대로 set했습니다. 그런데 이 읽기가 도는 동안 공유로
-      // 들어온 저장이 끼어들면, 읽기가 시작된 뒤에 생긴 그 아이템이 결과에 없어서
-      // 화면에서 사라졌습니다. DB에는 멀쩡히 있으니 다음에 목록을 읽을 때 되살아나는데,
-      // 그 사이 공유 직후의 선택 시트가 '그 아이템'을 못 찾아 뜨지 않았습니다.
-      // 사용자는 아무것도 안 뜬 줄 알고 다시 공유해서 같은 것을 두 번 담았습니다.
-      //
-      // 회수가 바꾼 것은 몇 건의 상태뿐입니다. 목록의 주인이 될 이유가 없습니다.
-      set((state) => {
-        const fresh = new Map(rows.map((row) => [row.id, row]));
-        const known = new Set(state.items.map((item) => item.id));
-
-        const merged = state.items.map((item) => fresh.get(item.id) ?? item);
-        const missing = rows.filter((row) => !known.has(row.id));
-
-        return {
-          items: [...merged, ...missing].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-        };
-      });
+      set((state) => ({ items: mergeItemsFromStorage(state.items, rows) }));
     }
   }
 
   await resumeStalledEnrich(set, get);
+}
+
+/**
+ * 저장소에서 읽어온 목록을 화면에 반영합니다.
+ *
+ * 고치고 더하기만 합니다. **읽은 결과에 없다고 해서 빼지 않습니다.**
+ *
+ * 읽기는 비동기라, 그 사이에 공유로 들어온 저장이 끼어들 수 있습니다. 그대로 덮으면
+ * 방금 저장한 것이 화면에서 사라지고, 그것을 가리키던 쪽이 대상을 잃습니다. 공유 직후의
+ * 선택 시트가 안 뜨거나, 눌러도 재정리가 `if (!item) return`으로 조용히 빠져나갑니다.
+ * DB에는 멀쩡히 있어 다음 읽기에 되살아나는데, 그 사이가 사용자에게는 '씹혔다'로
+ * 보이고 같은 것을 두 번 담게 됩니다.
+ *
+ * 처음에는 '읽기를 시작한 뒤에 만들어진 것만 남기기'로 가렸는데 틀렸습니다. 아이템을
+ * 만든 시각과 DB에 들어간 시각이 다릅니다. 공유가 먼저 시작돼도 저장이 읽기보다 늦게
+ * 끝나면 그 아이템은 '읽기 전에 만들어졌는데 결과에는 없는' 상태가 되어 버려졌습니다.
+ *
+ * 지우는 쪽은 저마다 목록을 직접 고칩니다(`deleteItem`). 읽기 결과가 그 일까지
+ * 떠맡을 이유가 없고, 떠맡으면 이렇게 경합에 집니다.
+ */
+function mergeItemsFromStorage(current: SavedItem[], rows: SavedItem[]): SavedItem[] {
+  const fresh = new Map(rows.map((row) => [row.id, row]));
+  const known = new Set(current.map((item) => item.id));
+
+  const updated = current.map((item) => fresh.get(item.id) ?? item);
+  const added = rows.filter((row) => !known.has(row.id));
+
+  return [...updated, ...added].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 /**
@@ -1150,7 +1162,13 @@ async function reenrichFromSources(
   options?: EnrichOptions
 ) {
   const item = get().items.find((entry) => entry.id === itemId);
-  if (!item) return;
+
+  // 사용자가 누른 결과로도 여기 오는 자리입니다. 조용히 빠져나가면 아무 일도 안
+  // 일어난 것처럼 보이고, 아이템은 '추가 입력 대기'에 그대로 남습니다.
+  if (!item) {
+    console.log(`[Enrich] 재정리 대상을 목록에서 찾지 못했습니다. item: ${itemId}`);
+    return;
+  }
 
   // 조각이 하나뿐이면 예전과 똑같이 처리합니다. 굳이 다른 길로 갈 이유가 없습니다.
   if (item.sources.length <= 1) {
@@ -1567,6 +1585,9 @@ async function runSyncWorker(
       console.log(`[SyncWorker] 동기화 큐 1회 실행 완료. 결과: ${JSON.stringify(result)}`);
       
       // SQLite 로컬 DB로부터 동기화 결과가 실시간 반영된 최신 아이템 및 큐 개수를 로드합니다.
+      //
+      // 이 워커는 정리가 끝날 때마다 돕니다. 읽는 동안 공유 저장이 끼어들 창이 그만큼
+      // 자주 열리므로, 읽은 결과로 목록을 통째로 갈아치우면 안 됩니다.
       const [items, summary] = await Promise.all([
         getSavedItemsAsync(),
         getSyncQueueSummaryAsync(),
@@ -1574,7 +1595,7 @@ async function runSyncWorker(
       console.log(`[SyncWorker] 로컬 DB 리로드 완료. 총 아이템 수: ${items.length}, 대기 큐: ${summary.pendingCount}건`);
 
       set((state) => ({
-        items,
+        items: mergeItemsFromStorage(state.items, items),
         syncQueuePendingCount: summary.pendingCount,
         syncQueueFailedCount: summary.failedCount,
         syncWorkerMessage:
