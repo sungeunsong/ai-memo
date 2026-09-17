@@ -94,6 +94,21 @@ const SYNC_DEFERRED_DELAY_MS = 60 * 1000;
 const MAX_AUTO_RESUME_PER_LAUNCH = 5;
 
 /** zustand의 set. 함수 밖으로 뺀 헬퍼들에 그대로 넘겨줍니다. */
+/**
+ * 붙이는 동안 지금 무엇을 하고 있는지.
+ *
+ * 스크린샷 두어 장이면 20~40초가 걸립니다. 그동안 버튼만 돌고 아무 설명이 없으면
+ * 고장으로 읽힙니다. 실제로 멈춘 줄 알고 같은 장을 몇 번이나 다시 붙인 일이
+ * 있었습니다. 남은 시간을 못 알려주더라도 **무엇을 하는 중인지는** 말해야 합니다.
+ */
+export type AttachProgress =
+  /** 사진을 앱 폴더로 옮기는 중. 공유로 받은 경로는 임시라 두면 나중에 못 엽니다 */
+  | { phase: 'saving'; done: number; total: number }
+  /** 사진에서 글자를 읽는 중. 장마다 한 번씩 AI를 부릅니다 */
+  | { phase: 'reading'; done: number; total: number }
+  /** 붙인 조각들을 합쳐 다시 정리하는 중. 여기는 한 번만 돕니다 */
+  | { phase: 'composing' };
+
 type SetAppState = (
   partial:
     | Partial<AppStore>
@@ -172,7 +187,7 @@ type AppStore = {
   attachScreenshotsToItem: (
     itemId: string,
     imageUris: string[],
-    options?: { skipAi?: boolean }
+    options?: { skipAi?: boolean; onProgress?: (progress: AttachProgress) => void }
   ) => Promise<{
     ok: boolean;
     added: number;
@@ -183,6 +198,8 @@ type AppStore = {
   }>;
   /** 잘못 붙인 조각을 떼고 남은 것 기준으로 다시 정리합니다. */
   detachSourceFromItem: (sourceId: string) => Promise<void>;
+  /** 조각 여러 개를 한 번에 뗍니다. 정리는 마지막에 한 번만 돕니다. */
+  detachSourcesFromItem: (sourceIds: string[]) => Promise<void>;
   /** 추가 입력 대기를 끝냅니다. input이 있으면 붙이고, 없으면 있는 대로 정리합니다. */
   resolveAwaitingInput: (itemId: string, input?: string) => Promise<void>;
   setItemCategory: (itemId: string, category: string | null) => Promise<void>;
@@ -624,6 +641,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     try {
       for (const [index, imageUri] of imageUris.entries()) {
+        options?.onProgress?.({ phase: 'saving', done: index, total: imageUris.length });
+
         // 공유로 받은 경로는 임시라 앱 폴더로 옮겨두지 않으면 나중에 못 엽니다.
         const storedUri = await persistImage(imageUri, `${itemId}_${Date.now()}_${index}`);
 
@@ -634,6 +653,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
         // 여기서 AI를 부르면 껐다는 말이 무색해집니다. 나중에 상세 화면에서
         // '정리하기'를 누르면 그때 이 조각들까지 함께 읽습니다.
         const base64 = options?.skipAi ? null : await readImageForAnalysis(storedUri);
+
+        if (base64) {
+          options?.onProgress?.({ phase: 'reading', done: index, total: imageUris.length });
+        }
+
         // 이 읽기는 저장물의 정리와 별개로 나가는 호출이라 이름표도 따로 받습니다.
         // 붙이는 장마다 한 번씩이고, 적어둘 자리가 없어 이어받지는 못합니다.
         const ocr = base64
@@ -660,6 +684,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
       // 종합은 마지막에 한 번만. 장마다 돌리면 호출이 장 수만큼 늘어납니다.
       if (added > 0 && !options?.skipAi) {
+        options?.onProgress?.({ phase: 'composing' });
         await reenrichFromSources(itemId, set, get);
       }
 
@@ -680,28 +705,55 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   async detachSourceFromItem(sourceId) {
-    if (!get().isReady) {
+    await get().detachSourcesFromItem([sourceId]);
+  },
+  /**
+   * 조각 여러 개를 한 번에 뗍니다.
+   *
+   * 하나씩 떼면 뗄 때마다 재정리가 돌아 AI 호출이 조각 수만큼 나갑니다. 셋을 떼려던
+   * 사람에게 세 번을 청구하는 셈입니다. 붙일 때 이미 마지막에 한 번만 돌리기로
+   * 해놓고 떼는 쪽만 남아 있었습니다.
+   *
+   * 미루지는 않습니다. 뗀 내용이 요약에 남아 있으면 지운 것이 안 지워진 것처럼
+   * 보입니다. 스크린샷을 떼는 이유가 '남의 얼굴이 찍혀서'일 수 있어서, 그 사이에
+   * 앱이 꺼지면 옛 요약이 그대로 남는 쪽이 더 나쁩니다. 다 떼고 나서 곧바로 합니다.
+   */
+  async detachSourcesFromItem(sourceIds) {
+    if (!get().isReady || sourceIds.length === 0) {
       return;
     }
 
+    const targets = new Set(sourceIds);
     const owner = get().items.find((item) =>
-      item.sources.some((source) => source.id === sourceId)
+      item.sources.some((source) => targets.has(source.id))
     );
     if (!owner) {
       return;
     }
 
-    // 스크린샷 조각이면 파일도 지웁니다. 안 지우면 앱 폴더에 남아 용량만 먹습니다.
-    const removed = owner.sources.find((source) => source.id === sourceId);
-    if (removed?.imageUri) {
-      await deletePersistedImage(removed.imageUri).catch(() => {});
+    // 조각을 전부 떼면 남는 것이 없습니다. 그건 저장물 자체를 지우는 일이라
+    // 여기서 할 일이 아닙니다. 하나는 남깁니다.
+    const removable = owner.sources.filter((source) => targets.has(source.id));
+    if (removable.length >= owner.sources.length) {
+      removable.pop();
+    }
+    if (removable.length === 0) {
+      return;
     }
 
-    await removeItemSourceAsync(sourceId);
+    for (const source of removable) {
+      // 스크린샷 조각이면 파일도 지웁니다. 안 지우면 앱 폴더에 남아 용량만 먹습니다.
+      if (source.imageUri) {
+        await deletePersistedImage(source.imageUri).catch(() => {});
+      }
+      await removeItemSourceAsync(source.id);
+    }
+
+    const removedIds = new Set(removable.map((source) => source.id));
     set((state) => ({
       items: state.items.map((item) =>
         item.id === owner.id
-          ? { ...item, sources: item.sources.filter((source) => source.id !== sourceId) }
+          ? { ...item, sources: item.sources.filter((source) => !removedIds.has(source.id)) }
           : item
       ),
     }));

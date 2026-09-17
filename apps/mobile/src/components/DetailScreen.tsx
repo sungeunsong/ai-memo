@@ -27,7 +27,7 @@ import { TaxonomyRegistry, resolveDomainLabel } from '@/features/taxonomy/regist
 import { resolveImageUri } from '@/features/capture/imageCapture';
 import { isEnrichStalled } from '@/features/items/staleEnrich';
 import { StatusPills } from '@/components/StatusBadges';
-import { useAppStore } from '@/store';
+import { AttachProgress, useAppStore } from '@/store';
 import { getHostname } from '@/features/items/fallback';
 import {
   formatReadableDate,
@@ -143,7 +143,7 @@ export function DetailContent({
   const setItemTitle = useAppStore((state) => state.setItemTitle);
   const attachSourceToItem = useAppStore((state) => state.attachSourceToItem);
   const attachScreenshotsToItem = useAppStore((state) => state.attachScreenshotsToItem);
-  const detachSourceFromItem = useAppStore((state) => state.detachSourceFromItem);
+  const detachSourcesFromItem = useAppStore((state) => state.detachSourcesFromItem);
   const resolveAwaitingInput = useAppStore((state) => state.resolveAwaitingInput);
   const setItemCategory = useAppStore((state) => state.setItemCategory);
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
@@ -156,6 +156,13 @@ export function DetailContent({
    * 규칙이 보이지 않았습니다. 개수와 상관없이 늘 접어두고, 펼치면 전부 나옵니다.
    */
   const [isSourceListOpen, setIsSourceListOpen] = useState(false);
+  /**
+   * 떼려고 골라둔 조각들.
+   *
+   * 하나씩 떼면 뗄 때마다 재정리가 돌아 AI 호출이 조각 수만큼 나갑니다. 붙일 때는
+   * 여러 장을 한 번에 고르는데 뗄 때만 하나씩인 것도 어긋납니다.
+   */
+  const [detachTargets, setDetachTargets] = useState<string[]>([]);
   const setItemDeadline = useAppStore((state) => state.setItemDeadline);
 
   useEffect(() => {
@@ -167,6 +174,12 @@ export function DetailContent({
   useEffect(() => {
     setIsSourceListOpen(false);
   }, [selectedItem.id]);
+
+  // 목록을 접거나 다른 글로 넘어가면 골라둔 것도 비웁니다. 안 비우면 다음에
+  // 펼쳤을 때 이유 없이 몇 개가 골라져 있습니다.
+  useEffect(() => {
+    if (!isSourceListOpen) setDetachTargets([]);
+  }, [isSourceListOpen, selectedItem.id]);
 
   async function handleSaveUserNote() {
     await updateUserNote(selectedItem.id, userNoteInput);
@@ -232,6 +245,15 @@ export function DetailContent({
   const [sourceDraft, setSourceDraft] = useState('');
   const [isAttaching, setIsAttaching] = useState(false);
   /**
+   * 지금 무엇을 하는 중인지 한 줄.
+   *
+   * 붙이든 떼든 AI 정리가 따라붙어 20~40초가 걸립니다. 그동안 화면이 아무 말도
+   * 안 하면 고장으로 읽힙니다. 실제로 멈춘 줄 알고 같은 장을 몇 번이나 다시 붙인
+   * 일이 있었고, 떼고 나서는 다시 정리가 도는지조차 알 수 없었습니다.
+   * 얼마나 남았는지는 못 알려줘도 무엇을 하는 중인지는 말해야 합니다.
+   */
+  const [busyText, setBusyText] = useState<string | null>(null);
+  /**
    * 크게 볼 스크린샷.
    *
    * 글자는 AI가 읽어 요약에 넣지만, 그 읽기가 틀릴 수 있습니다. 가격이나
@@ -245,23 +267,46 @@ export function DetailContent({
   const isSkipped = selectedItem.aiStatus === 'skipped';
 
   /**
-   * 조각을 뗄지 확인받습니다.
+   * 골라둔 조각을 뗄지 확인받습니다.
    *
    * 떼면 남은 것 기준으로 AI 정리가 곧바로 다시 돌아갑니다. 되돌릴 수 없고
    * AI 호출도 한 번 나가므로, 누르자마자 진행되면 놀랍니다.
+   *
+   * 몇 개를 고르든 정리는 한 번입니다. 그래서 확인도 한 번만 받습니다.
    */
-  function confirmDetachSource(sourceId: string) {
+  function confirmDetachSources() {
+    const count = detachTargets.length;
+    if (count === 0) return;
+
     Alert.alert(
-      '출처 떼기',
-      '이 내용을 떼면 남은 내용만으로 정리를 다시 만듭니다. 계속할까요?',
+      count > 1 ? `출처 ${count}개 떼기` : '출처 떼기',
+      count > 1
+        ? `고른 ${count}개를 떼고 남은 내용만으로 정리를 다시 만듭니다. 계속할까요?`
+        : '이 내용을 떼면 남은 내용만으로 정리를 다시 만듭니다. 계속할까요?',
       [
         { text: '취소', style: 'cancel' },
         {
           text: '떼고 다시 정리',
           style: 'destructive',
           onPress: () => {
-            void detachSourceFromItem(sourceId);
-            setToastMessage('출처를 떼고 다시 정리합니다');
+            const targets = detachTargets;
+            setDetachTargets([]);
+
+            void (async () => {
+              // 떼는 것은 금방이지만 뒤따르는 재정리가 20~40초입니다. 토스트는 한 번
+              // 뜨고 사라져서, 그 뒤로 정리가 도는지 알 수 없었습니다.
+              setIsAttaching(true);
+              setBusyText('남은 내용으로 다시 정리하는 중…');
+              try {
+                await detachSourcesFromItem(targets);
+                setToastMessage(
+                  count > 1 ? `출처 ${count}개를 떼고 다시 정리했습니다` : '출처를 떼고 다시 정리했습니다'
+                );
+              } finally {
+                setIsAttaching(false);
+                setBusyText(null);
+              }
+            })();
           },
         },
       ]
@@ -296,7 +341,9 @@ export function DetailContent({
     setIsAttaching(true);
     try {
       const uris = picked.assets.map((asset) => asset.uri);
-      const result = await attachScreenshotsToItem(selectedItem.id, uris);
+      const result = await attachScreenshotsToItem(selectedItem.id, uris, {
+        onProgress: (progress) => setBusyText(describeAttachProgress(progress)),
+      });
 
       // 시제를 지킵니다.
       //
@@ -319,6 +366,7 @@ export function DetailContent({
       }
     } finally {
       setIsAttaching(false);
+      setBusyText(null);
     }
   }
 
@@ -652,16 +700,55 @@ export function DetailContent({
               {/* 조각이 하나뿐이면 뗄 수 없습니다. 그건 저장물 자체를 지우는 일입니다. */}
               {selectedItem.sources.length > 1 ? (
                 <Pressable
-                  onPress={() => confirmDetachSource(source.id)}
+                  onPress={() =>
+                    setDetachTargets((current) =>
+                      current.includes(source.id)
+                        ? current.filter((id) => id !== source.id)
+                        : [...current, source.id]
+                    )
+                  }
                   hitSlop={8}
-                  style={({ pressed }) => [styles.sourceRemove, pressed && { opacity: 0.5 }]}
+                  style={({ pressed }) => [
+                    styles.sourcePick,
+                    detachTargets.includes(source.id) && styles.sourcePickOn,
+                    pressed && { opacity: 0.5 },
+                  ]}
                 >
-                  <Text style={styles.sourceRemoveText}>떼기</Text>
+                  <Text
+                    style={[
+                      styles.sourcePickText,
+                      detachTargets.includes(source.id) && styles.sourcePickTextOn,
+                    ]}
+                  >
+                    {detachTargets.includes(source.id) ? '✓' : '떼기'}
+                  </Text>
                 </Pressable>
               ) : null}
             </View>
           );
         })}
+
+        {/*
+          * 고른 것을 한 번에 뗍니다.
+          *
+          * 몇 개를 고르든 정리는 한 번만 돕니다. 하나씩 떼면 뗄 때마다 재정리가 돌아
+          * AI 호출이 조각 수만큼 나갑니다.
+          */}
+        {isSourceListOpen && detachTargets.length > 0 && !isAttaching ? (
+          <View style={styles.detachBar}>
+            <Pressable onPress={() => setDetachTargets([])} hitSlop={8}>
+              <Text style={styles.detachCancelText}>고르기 해제</Text>
+            </Pressable>
+            <Pressable
+              onPress={confirmDetachSources}
+              style={({ pressed }) => [styles.detachBtn, pressed && { opacity: 0.7 }]}
+            >
+              <Text style={styles.detachBtnText}>
+                {detachTargets.length}개 떼고 다시 정리
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         <TextInput
           value={sourceDraft}
@@ -673,6 +760,13 @@ export function DetailContent({
           autoCapitalize="none"
           autoCorrect={false}
         />
+
+        {busyText ? (
+          <View style={styles.attachProgressRow}>
+            <ActivityIndicator size="small" color={palette.accent} />
+            <Text style={styles.attachProgressText}>{busyText}</Text>
+          </View>
+        ) : null}
 
         <View style={styles.sourceActions}>
           <Pressable
@@ -1411,6 +1505,16 @@ function DeadlineEditor({
   );
 }
 
+/** 지금 무엇을 하는 중인지 한 줄로. 장이 여럿이면 몇 번째인지까지 알려줍니다. */
+function describeAttachProgress(progress: AttachProgress): string {
+  if (progress.phase === 'composing') return '붙인 내용을 합쳐 다시 정리하는 중…';
+
+  const step = progress.total > 1 ? ` (${progress.done + 1}/${progress.total})` : '';
+  return progress.phase === 'saving'
+    ? `사진을 옮기는 중…${step}`
+    : `사진에서 글자를 읽는 중…${step}`;
+}
+
 /**
  * 안드로이드 마감일 선택.
  *
@@ -1672,6 +1776,61 @@ const createStyles = (palette: Palette) =>
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  sourcePick: {
+    minWidth: 40,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.border,
+    alignItems: 'center',
+  },
+  sourcePickOn: {
+    backgroundColor: palette.accent,
+    borderColor: palette.accent,
+  },
+  sourcePickText: {
+    color: palette.textMuted,
+    fontSize: 11.5,
+    fontWeight: '800',
+  },
+  sourcePickTextOn: {
+    color: '#ffffff',
+  },
+  detachBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+    marginTop: spacing[3],
+  },
+  detachCancelText: {
+    color: palette.textMuted,
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  detachBtn: {
+    backgroundColor: palette.dangerText,
+    borderRadius: 12,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+  },
+  detachBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  attachProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginTop: spacing[2],
+  },
+  attachProgressText: {
+    color: palette.textSecondary,
+    fontSize: 12.5,
+    fontWeight: '600',
   },
   deadlineActionRow: {
     flexDirection: 'row',
