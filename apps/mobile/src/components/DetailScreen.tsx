@@ -28,6 +28,13 @@ import { resolveImageUri } from '@/features/capture/imageCapture';
 import { isEnrichStalled } from '@/features/items/staleEnrich';
 import { StatusPills } from '@/components/StatusBadges';
 import { AttachProgress, useAppStore } from '@/store';
+import { GroupBuyNotifyCard } from '@/components/GroupBuyNotifyCard';
+import { ItemNotifySetting } from '@/features/notifications/rules';
+import {
+  loadNotifySettingsAsync,
+  saveNotifySettingsAsync,
+} from '@/features/notifications/settings';
+import { planForItem, syncItemNotificationsAsync } from '@/features/notifications/scheduler';
 import { getHostname } from '@/features/items/fallback';
 import {
   formatReadableDate,
@@ -149,6 +156,10 @@ export function DetailContent({
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
   const [isDeadlineEditorVisible, setIsDeadlineEditorVisible] = useState(false);
   const [isStartEditorVisible, setIsStartEditorVisible] = useState(false);
+  /** 이 저장물의 알림 설정. 켜지 않았으면 null입니다. */
+  const [notifySetting, setNotifySetting] = useState<ItemNotifySetting | null>(null);
+  /** 알림 카드가 폰에 다시 물어보게 하는 신호. 날짜를 고칠 때마다 올립니다. */
+  const [notifySyncToken, setNotifySyncToken] = useState(0);
   /*
    * 조각 목록을 펼쳤는지.
    *
@@ -170,6 +181,65 @@ export function DetailContent({
   useEffect(() => {
     setUserNoteInput(selectedItem.userNote ?? '');
   }, [selectedItem.id, selectedItem.userNote]);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const settings = await loadNotifySettingsAsync();
+      if (alive) setNotifySetting(settings[selectedItem.id] ?? null);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [selectedItem.id]);
+
+  /**
+   * 설정을 바꾸면 곧바로 다시 겁니다.
+   *
+   * 저장만 해두고 나중에 맞추면, 방금 켠 알림이 앱을 다시 켤 때까지 예약되지
+   * 않습니다. 사용자는 켰다고 생각하는데 그 사이 마감이 지날 수 있습니다.
+   */
+  async function onChangeNotifySetting(next: ItemNotifySetting | null) {
+    setNotifySetting(next);
+
+    const settings = await loadNotifySettingsAsync();
+    if (next) settings[selectedItem.id] = next;
+    else delete settings[selectedItem.id];
+    await saveNotifySettingsAsync(settings);
+
+    const plans = next
+      ? planForItem(
+          selectedItem,
+          next,
+          (selectedItem.userStartAt ?? aiStartAt).trim(),
+          (selectedItem.userDeadline ?? aiDeadline).trim()
+        )
+      : [];
+    await syncItemNotificationsAsync(selectedItem, plans);
+    setNotifySyncToken((token) => token + 1);
+  }
+
+  /**
+   * 날짜를 고친 뒤 예약을 다시 맞춥니다.
+   *
+   * 목록이 바뀌면 앱이 알아서 대조하긴 하지만, 그게 언제 끝나는지 화면은 모릅니다.
+   * 여기서 직접 맞추고 신호를 올려야 카드가 바뀐 결과를 바로 보여줍니다.
+   */
+  async function resyncNotificationsAsync() {
+    if (!notifySetting) return;
+
+    const fresh = useAppStore.getState().items.find((entry) => entry.id === selectedItem.id);
+    if (!fresh) return;
+
+    const plans = planForItem(
+      fresh,
+      notifySetting,
+      (fresh.userStartAt ?? aiStartAt).trim(),
+      (fresh.userDeadline ?? aiDeadline).trim()
+    );
+    await syncItemNotificationsAsync(fresh, plans);
+    setNotifySyncToken((token) => token + 1);
+  }
 
   // 다른 글로 넘어가면 다시 접습니다. 펼친 채로 넘어가면 이 글도 조각이 많은
   // 줄 알고 봅니다.
@@ -966,8 +1036,14 @@ export function DetailContent({
           aiStartAt={aiStartAt}
           userStartAt={selectedItem.userStartAt}
           onEdit={() => setIsStartEditorVisible(true)}
-          onClear={() => void setItemStartAt(selectedItem.id, aiStartAt ? '' : null)}
-          onRevert={() => void setItemStartAt(selectedItem.id, null)}
+          onClear={() =>
+            void setItemStartAt(selectedItem.id, aiStartAt ? '' : null).then(
+              resyncNotificationsAsync
+            )
+          }
+          onRevert={() =>
+            void setItemStartAt(selectedItem.id, null).then(resyncNotificationsAsync)
+          }
         />
       ) : null}
 
@@ -980,9 +1056,25 @@ export function DetailContent({
             // AI가 읽은 값이 있으면 빈 문자열로 덮습니다. null로 두면 '지정 해제'라
             // AI 값이 다시 올라와, 지웠는데 그대로인 것처럼 보입니다.
             // AI 값이 없으면 null로 되돌려 흔적을 남기지 않습니다.
-            void setItemDeadline(selectedItem.id, aiDeadline ? '' : null)
+            void setItemDeadline(selectedItem.id, aiDeadline ? '' : null).then(
+              resyncNotificationsAsync
+            )
           }
-          onRevertDeadline={() => void setItemDeadline(selectedItem.id, null)}
+          onRevertDeadline={() =>
+            void setItemDeadline(selectedItem.id, null).then(resyncNotificationsAsync)
+          }
+        />
+      ) : null}
+
+      {/* 공구일 때만. 다른 글에는 알릴 때가 없습니다. */}
+      {isGroupBuy ? (
+        <GroupBuyNotifyCard
+          item={selectedItem}
+          startAt={(selectedItem.userStartAt ?? aiStartAt).trim()}
+          deadline={(selectedItem.userDeadline ?? aiDeadline).trim()}
+          setting={notifySetting}
+          syncToken={notifySyncToken}
+          onChange={onChangeNotifySetting}
         />
       ) : null}
 
@@ -1078,7 +1170,7 @@ export function DetailContent({
         onClose={() => setIsDeadlineEditorVisible(false)}
         onSubmit={(value) => {
           setIsDeadlineEditorVisible(false);
-          void setItemDeadline(selectedItem.id, value);
+          void setItemDeadline(selectedItem.id, value).then(resyncNotificationsAsync);
           setToastMessage(value ? '마감일을 바꿨습니다' : 'AI가 읽은 값으로 되돌렸습니다');
         }}
       />
@@ -1089,7 +1181,7 @@ export function DetailContent({
         onClose={() => setIsStartEditorVisible(false)}
         onSubmit={(value) => {
           setIsStartEditorVisible(false);
-          void setItemStartAt(selectedItem.id, value);
+          void setItemStartAt(selectedItem.id, value).then(resyncNotificationsAsync);
           setToastMessage(value ? '시작일을 바꿨습니다' : 'AI가 읽은 값으로 되돌렸습니다');
         }}
       />

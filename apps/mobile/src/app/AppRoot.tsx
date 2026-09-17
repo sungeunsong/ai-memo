@@ -8,6 +8,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { useAppStore } from '@/store';
 import { ensureAnonymousSessionAsync, startSupabaseAutoRefresh } from '@/supabase/client';
+import { configureNotificationHandler } from '@/features/notifications/bootstrap';
+
+// 앱이 떠 있을 때도 알림이 보이게 합니다. 기본은 안 보여주는데, 공구 알림은
+// 지금 움직이라는 뜻이라 앱을 보고 있다고 조용히 넘기면 놓칩니다.
+configureNotificationHandler();
 import { ThemeProvider, useTheme } from '@/theme/ThemeContext';
 
 export function AppRoot() {

@@ -19,6 +19,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { SavedItem } from '@/features/items/types';
 import { findDuplicateItems } from '@/features/items/dedupe';
 import {
+  getItemIdFromColdStartAsync,
+  reconcileOnLaunchAsync,
+  subscribeNotificationTaps,
+} from '@/features/notifications/bootstrap';
+import {
   buildShareIntentSignature,
   getSharedInputValue,
   hasUnsupportedSharedFiles,
@@ -285,6 +290,41 @@ export function HomeScreen() {
   useEffect(() => {
     void (async () => setSavedFilters(await loadSavedFilters()))();
   }, []);
+
+  /**
+   * 알림 예약을 맞춥니다.
+   *
+   * 목록이 준비된 뒤에 합니다. 저장물을 알아야 무엇을 예약할지 계산할 수 있고,
+   * 없어진 저장물의 설정도 그때 걷어냅니다.
+   */
+  useEffect(() => {
+    if (!isReady) return;
+    void reconcileOnLaunchAsync(items);
+  }, [isReady, items]);
+
+  /**
+   * 알림을 눌러서 온 경우 그 저장물을 엽니다.
+   *
+   * 앱이 꺼져 있었다면 이벤트를 받을 손이 아직 없어서, 켜진 뒤에 '무엇을 눌러서
+   * 켜졌는지'를 따로 물어봐야 합니다. 이걸 빠뜨리면 알림을 눌렀는데 홈 화면만 뜹니다.
+   */
+  useEffect(() => {
+    if (!isReady) return;
+
+    function openItem(itemId: string) {
+      // 알림이 울린 뒤 지워졌을 수 있습니다. 없는 글을 열려고 하면 빈 화면이 뜹니다.
+      if (!useAppStore.getState().items.some((item) => item.id === itemId)) return;
+      selectItem(itemId);
+      setHighlightedItemId(itemId);
+      if (!isWideLayout) setIsDetailVisible(true);
+    }
+
+    void getItemIdFromColdStartAsync().then((itemId) => {
+      if (itemId) openItem(itemId);
+    });
+
+    return subscribeNotificationTaps(openItem);
+  }, [isReady, isWideLayout, selectItem]);
 
   /**
    * 분야가 사라진 뒤의 뒷정리.
