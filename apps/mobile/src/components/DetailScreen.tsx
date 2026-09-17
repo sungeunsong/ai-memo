@@ -18,6 +18,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 
 import { SavedItem } from '@/features/items/types';
+import { describeDeadline, parseDeadline } from '@/features/items/deadline';
 import { readContentV2 } from '@/features/items/contentV2';
 import { DomainSection, FactRow, buildDomainSections, factValues, legacyText } from '@/features/items/factView';
 import { OTHER_TAB_KEY } from '@/features/facets/tabs';
@@ -201,6 +202,16 @@ export function DetailContent({
   // 마감은 따로 뺍니다. 사용자가 직접 고칠 수 있고 지났는지도 알려줘야 해서,
   // 값 하나를 그대로 보여주는 다른 항목과 다루는 방식이 다릅니다.
   const aiDeadline = factValues(content, 'shopping', 'deadline')[0] ?? '';
+  /**
+   * 이 저장물이 공구인지.
+   *
+   * 분야로 판단하면 안 됩니다. 제주 숙박 공구는 분야가 여행이고 기저귀 공구는
+   * 육아라, '분야가 쇼핑이면'으로 보면 정작 공구인 것들이 빠집니다. 실제로 마감일
+   * 칸이 어떤 공구에는 뜨고 어떤 공구에는 안 뜨는 일이 있었습니다.
+   */
+  const isGroupBuy = factValues(content, 'shopping', 'purchase_type').some(
+    (value) => value.includes('공동구매') || value.includes('공구')
+  );
 
   // 본문은 contentText 컬럼으로 분리됐습니다.
   // legacy.description은 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
@@ -801,12 +812,19 @@ export function DetailContent({
 
       {/* 공구는 마감이 지나면 저장해둔 의미가 없어집니다.
           남은 기간을 눈에 띄게 보여주고, 지난 건 분명히 표시합니다.
-          AI가 못 뽑았어도 사용자가 직접 넣을 수 있어야 해서 쇼핑 글에는 늘 세웁니다. */}
-      {aiDeadline || selectedItem.userDeadline || itemCategory === 'shopping' ? (
+          AI가 못 뽑았어도 사용자가 직접 넣을 수 있어야 해서 공구와 쇼핑 글에는 늘 세웁니다. */}
+      {aiDeadline || selectedItem.userDeadline || isGroupBuy || itemCategory === 'shopping' ? (
         <DeadlineCard
           aiDeadline={aiDeadline}
           userDeadline={selectedItem.userDeadline}
           onEditDeadline={() => setIsDeadlineEditorVisible(true)}
+          onClearDeadline={() =>
+            // AI가 읽은 값이 있으면 빈 문자열로 덮습니다. null로 두면 '지정 해제'라
+            // AI 값이 다시 올라와, 지웠는데 그대로인 것처럼 보입니다.
+            // AI 값이 없으면 null로 되돌려 흔적을 남기지 않습니다.
+            void setItemDeadline(selectedItem.id, aiDeadline ? '' : null)
+          }
+          onRevertDeadline={() => void setItemDeadline(selectedItem.id, null)}
         />
       ) : null}
 
@@ -898,7 +916,7 @@ export function DetailContent({
       <DeadlineEditor
         visible={isDeadlineEditorVisible}
         current={selectedItem.userDeadline || aiDeadline}
-        isManual={Boolean(selectedItem.userDeadline)}
+
         onClose={() => setIsDeadlineEditorVisible(false)}
         onSubmit={(value) => {
           setIsDeadlineEditorVisible(false);
@@ -1145,33 +1163,21 @@ function DeadlineCard({
   aiDeadline,
   userDeadline,
   onEditDeadline,
+  onClearDeadline,
+  onRevertDeadline,
 }: {
   aiDeadline: string;
   userDeadline: string | null;
   onEditDeadline: () => void;
+  onClearDeadline: () => void;
+  onRevertDeadline: () => void;
 }) {
   const styles = useThemedStyles(createStyles);
   // 사용자가 고친 값이 있으면 그것이 우선입니다.
   const deadline = (userDeadline ?? aiDeadline).trim();
-  let deadlineNote: { text: string; expired: boolean } | null = null;
-
-  if (deadline) {
-    const due = new Date(deadline);
-    if (!Number.isNaN(due.getTime())) {
-      // 날짜만 비교합니다. 마감 당일은 아직 지나지 않은 것으로 봅니다.
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      due.setHours(0, 0, 0, 0);
-      const days = Math.round((due.getTime() - today.getTime()) / 86400000);
-
-      deadlineNote =
-        days < 0
-          ? { text: `${deadline} · ${-days}일 지남`, expired: true }
-          : { text: days === 0 ? `${deadline} · 오늘 마감` : `${deadline} · ${days}일 남음`, expired: false };
-    } else {
-      deadlineNote = { text: deadline, expired: false };
-    }
-  }
+  // 마감 해석은 features/items/deadline.ts가 합니다. 시각이 있는 건과 없는 건을
+  // 가르는 규칙이 여기 있으면, 목록이나 알림에서 같은 판단이 필요할 때 또 씁니다.
+  const deadlineNote = deadline ? describeDeadline(deadline) : null;
 
   return (
     <Pressable
@@ -1182,10 +1188,44 @@ function DeadlineCard({
         pressed && { opacity: 0.7 },
       ]}
     >
-      <Text style={[styles.deadlineLabel, deadlineNote?.expired && styles.deadlineLabelExpired]}>
-        {deadlineNote ? (deadlineNote.expired ? '⛔ 마감됨' : '⏰ 마감') : '⏰ 마감일'}
-        {userDeadline ? ' · 직접 지정' : ''}
-      </Text>
+      <View style={styles.deadlineHeaderRow}>
+        <Text style={[styles.deadlineLabel, deadlineNote?.expired && styles.deadlineLabelExpired]}>
+          {deadlineNote ? (deadlineNote.expired ? '⛔ 마감됨' : '⏰ 마감') : '⏰ 마감일'}
+          {userDeadline ? ' · 직접 지정' : ''}
+        </Text>
+
+        {/*
+          * 지우는 자리를 값 옆에 둡니다.
+          *
+          * 예전에는 날짜 선택기 시트 안에 있었는데, 안드로이드는 OS 달력이 화면을
+          * 거의 다 덮어 그 뒤에 숨었습니다. 마감일을 넣어본 사람이 '지울 수가 없네'로
+          * 느꼈습니다. 값이 보이는 자리에서 바로 지울 수 있어야 합니다.
+          */}
+        <View style={styles.deadlineActionRow}>
+          {/* AI가 읽은 값이 따로 있고 사용자가 손댔을 때만 뜻이 있습니다. */}
+          {userDeadline !== null && aiDeadline ? (
+            <Pressable
+              onPress={onRevertDeadline}
+              hitSlop={10}
+              style={({ pressed }) => [styles.deadlineClearIcon, pressed && { opacity: 0.5 }]}
+            >
+              {/* 되돌리기. 이모지를 쓰면 기기마다 다른 그림이 나와서 글자 기호로 둡니다. */}
+              <Text style={styles.deadlineClearIconText}>↺</Text>
+            </Pressable>
+          ) : null}
+
+          {deadlineNote ? (
+            <Pressable
+              onPress={onClearDeadline}
+              hitSlop={10}
+              style={({ pressed }) => [styles.deadlineClearIcon, pressed && { opacity: 0.5 }]}
+            >
+              {/* 빼기(−)는 '값을 줄인다'로 읽힙니다. 지우는 것은 ✕가 분명합니다. */}
+              <Text style={styles.deadlineClearIconText}>✕</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
       <Text style={styles.deadlineText}>
         {deadlineNote ? deadlineNote.text : '눌러서 입력'}
       </Text>
@@ -1260,21 +1300,20 @@ function toDateKey(date: Date) {
 function DeadlineEditor({
   visible,
   current,
-  isManual,
   onClose,
   onSubmit,
 }: {
   visible: boolean;
   current: string;
-  isManual: boolean;
   onClose: () => void;
   onSubmit: (value: string | null) => void;
 }) {
   const styles = useThemedStyles(createStyles);
   const { palette, mode } = useTheme();
 
-  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(current) ? new Date(current) : null;
-  const initial = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date();
+  const parsed = parseDeadline(current);
+  const initial = parsed?.at ?? new Date();
+  const currentTime = parsed?.hasTime ? current.trim().split('T')[1] : '';
 
   if (!visible) return null;
 
@@ -1291,15 +1330,27 @@ function DeadlineEditor({
       <Modal transparent visible animationType="fade">
         <Pressable style={styles.deadlineResetBackdrop} onPress={onClose}>
           <Pressable style={styles.deadlineResetSheet} onPress={(e) => e.stopPropagation()}>
+            {/*
+              * 시각은 선택입니다.
+              *
+              * '10월 3일까지'처럼 날짜만 적힌 공구가 훨씬 많습니다. 시각을 비워두면
+              * 그날이 끝날 때까지로 봅니다. 없는 시각을 자정으로 채우면 마감 당일
+              * 낮에 이미 지난 것으로 보입니다.
+              */}
             <View style={styles.webDatePickerRow}>
               <input
+                id="deadline-date"
                 type="date"
                 defaultValue={toDateKey(initial)}
                 onChange={(event) => {
                   const value = event.target.value;
                   // 입력을 지우면 빈 문자열이 옵니다. 그건 해제가 아니라 미완성이라
                   // 아래 버튼과 뜻이 다릅니다. 온전한 날짜만 받습니다.
-                  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) onSubmit(value);
+                  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
+                  const time = (
+                    document.getElementById('deadline-time') as HTMLInputElement | null
+                  )?.value;
+                  onSubmit(/^\d{2}:\d{2}$/.test(time ?? '') ? `${value}T${time}` : value);
                 }}
                 style={{
                   width: '100%',
@@ -1315,13 +1366,35 @@ function DeadlineEditor({
                   colorScheme: mode,
                 }}
               />
+              <input
+                id="deadline-time"
+                type="time"
+                defaultValue={currentTime}
+                onChange={(event) => {
+                  const date = (
+                    document.getElementById('deadline-date') as HTMLInputElement | null
+                  )?.value;
+                  if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) return;
+                  const time = event.target.value;
+                  onSubmit(/^\d{2}:\d{2}$/.test(time) ? `${date}T${time}` : (date as string));
+                }}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  marginTop: 8,
+                  padding: '12px 14px',
+                  fontSize: 16,
+                  fontWeight: 700,
+                  borderRadius: 12,
+                  border: `1px solid ${palette.borderStrong}`,
+                  background: palette.surface,
+                  color: palette.textPrimary,
+                  colorScheme: mode,
+                }}
+              />
             </View>
 
-            <Pressable onPress={() => onSubmit(null)} style={styles.pickerReset}>
-              <Text style={styles.pickerResetText}>
-                {isManual ? 'AI가 읽은 값으로 되돌리기' : '마감일 지우기'}
-              </Text>
-            </Pressable>
+            {/* 지우기와 되돌리기는 마감일 카드가 맡습니다. 여기는 고르는 자리입니다. */}
           </Pressable>
         </Pressable>
       </Modal>
@@ -1329,7 +1402,72 @@ function DeadlineEditor({
   }
 
   return (
-    <>
+    <AndroidDeadlinePicker
+      initial={initial}
+      hasTime={Boolean(parsed?.hasTime)}
+      onClose={onClose}
+      onSubmit={onSubmit}
+    />
+  );
+}
+
+/**
+ * 안드로이드 마감일 선택.
+ *
+ * 선택기를 OS가 그려서 날짜와 시각을 한 화면에 못 둡니다. 날짜를 고른 뒤 시각을
+ * 물어보는 두 걸음으로 갑니다.
+ *
+ * **시각은 건너뛸 수 있어야 합니다.** '10월 3일까지'처럼 날짜만 적힌 공구가 훨씬
+ * 많은데, 시각 선택기를 반드시 지나게 하면 그때마다 아무 시각이나 골라 넣게 됩니다.
+ * 그렇게 들어간 값은 원문에 없던 정보라 나중에 마감 임박 알림이 엉뚱한 때 울립니다.
+ */
+function AndroidDeadlinePicker({
+  initial,
+  hasTime,
+  onClose,
+  onSubmit,
+}: {
+  initial: Date;
+  hasTime: boolean;
+  onClose: () => void;
+  onSubmit: (value: string | null) => void;
+}) {
+  const styles = useThemedStyles(createStyles);
+  const [pickedDate, setPickedDate] = useState<Date | null>(null);
+  const [isPickingTime, setIsPickingTime] = useState(false);
+
+  if (pickedDate && isPickingTime) {
+    return (
+      <DateTimePicker
+        value={pickedDate}
+        mode="time"
+        is24Hour
+        onChange={(event, time) => {
+          setIsPickingTime(false);
+          // 취소하면 날짜만 남깁니다. 고르다 그만둔 것을 '시각 없음'으로 보는 것이
+          // 맞습니다. 여기서 아무 값이나 넣으면 원문에 없던 시각이 들어갑니다.
+          if (event.type !== 'set' || !time) return;
+
+          const hour = String(time.getHours()).padStart(2, '0');
+          const minute = String(time.getMinutes()).padStart(2, '0');
+          onSubmit(`${toDateKey(pickedDate)}T${hour}:${minute}`);
+        }}
+      />
+    );
+  }
+
+  if (!pickedDate) {
+    /*
+     * OS 달력만 띄웁니다.
+     *
+     * 예전에는 그 위에 우리 모달을 하나 더 얹어 '지우기·되돌리기'를 뒀는데, OS가
+     * 그리는 대화상자와 리액트 네이티브 모달은 층이 달라 앞뒤 순서를 보장할 수
+     * 없습니다. 실제로 어떨 때는 위에, 어떨 때는 뒤에 잡혔습니다.
+     *
+     * 지우기와 되돌리기는 마감일 카드로 옮겼습니다. 값이 보이는 자리에서 바로
+     * 누르는 편이 낫고, 그것을 쓰자고 달력을 열 이유도 없습니다.
+     */
+    return (
       <DateTimePicker
         value={initial}
         mode="date"
@@ -1337,26 +1475,48 @@ function DeadlineEditor({
         onChange={(event, date) => {
           // 안드로이드는 취소해도 콜백이 옵니다. type으로 구분해야 합니다.
           if (event.type === 'set' && date) {
-            onSubmit(toDateKey(date));
+            setPickedDate(date);
           } else {
             onClose();
           }
         }}
       />
+    );
+  }
 
-      {/* 선택기는 OS가 그리므로 해제 버튼만 따로 띄웁니다. */}
-      <Modal transparent visible animationType="none">
-        <Pressable style={styles.deadlineResetBackdrop} onPress={onClose}>
-          <Pressable style={styles.deadlineResetSheet} onPress={(e) => e.stopPropagation()}>
-            <Pressable onPress={() => onSubmit(null)} style={styles.pickerReset}>
-              <Text style={styles.pickerResetText}>
-                {isManual ? 'AI가 읽은 값으로 되돌리기' : '마감일 지우기'}
-              </Text>
-            </Pressable>
+  return (
+    <Modal transparent visible animationType="fade">
+      {/* 바깥을 눌러도 날짜는 저장됩니다. 여기까지 왔다는 건 날짜는 정했다는 뜻이라,
+          닫았다고 그것까지 버리면 처음부터 다시 고르게 됩니다. */}
+      <Pressable
+        style={styles.deadlineStepBackdrop}
+        onPress={() => onSubmit(toDateKey(pickedDate))}
+      >
+        <Pressable style={styles.deadlineStepSheet} onPress={(e) => e.stopPropagation()}>
+          <Text style={styles.deadlineStepLabel}>마감일</Text>
+          <Text style={styles.deadlineStepTitle}>{toDateKey(pickedDate)}</Text>
+          <Text style={styles.deadlineStepHint}>
+            원문에 마감 시각이 적혀 있으면 골라주세요.{'\n'}없으면 날짜만으로 충분합니다.
+          </Text>
+
+          <Pressable
+            onPress={() => setIsPickingTime(true)}
+            style={({ pressed }) => [styles.deadlineStepPrimaryBtn, pressed && { opacity: 0.8 }]}
+          >
+            <Text style={styles.deadlineStepPrimaryText}>
+              {hasTime ? '🕗  시각 다시 고르기' : '🕗  시각 고르기'}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => onSubmit(toDateKey(pickedDate))}
+            style={({ pressed }) => [styles.deadlineStepSecondaryBtn, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.deadlineStepSecondaryText}>날짜만 저장</Text>
           </Pressable>
         </Pressable>
-      </Modal>
-    </>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -1507,6 +1667,95 @@ const createStyles = (palette: Palette) =>
   factListSection: {
     marginTop: 12,
     gap: 8,
+  },
+  deadlineHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  deadlineActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  deadlineClearIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deadlineClearIconText: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 15,
+  },
+  deadlineStepBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing[5],
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+  },
+  deadlineStepSheet: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: palette.backgroundStrong,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingVertical: spacing[5],
+    paddingHorizontal: spacing[5],
+  },
+  deadlineStepLabel: {
+    color: palette.textMuted,
+    fontSize: 11,
+    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: 0.5,
+  },
+  deadlineStepTitle: {
+    color: palette.textPrimary,
+    fontSize: 24,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  deadlineStepHint: {
+    color: palette.textMuted,
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: 'center',
+    marginTop: spacing[2],
+    marginBottom: spacing[4],
+  },
+  deadlineStepPrimaryBtn: {
+    backgroundColor: palette.accent,
+    borderRadius: 14,
+    paddingVertical: spacing[3],
+    alignItems: 'center',
+  },
+  deadlineStepPrimaryText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  deadlineStepSecondaryBtn: {
+    marginTop: spacing[2],
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 14,
+    paddingVertical: spacing[3],
+    alignItems: 'center',
+  },
+  deadlineStepSecondaryText: {
+    color: palette.textSecondary,
+    fontSize: 14,
+    fontWeight: '700',
   },
   deadlineBox: {
     marginTop: spacing[3],

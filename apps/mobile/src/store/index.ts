@@ -853,7 +853,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return movedItems;
   },
   /**
-   * 마감일을 직접 고칩니다. null이면 지정을 해제하고 AI 값을 따릅니다.
+   * 마감일을 직접 고칩니다.
+   *
+   * 값이 세 가지입니다.
+   *   날짜   그 값으로 고정 (YYYY-MM-DD 또는 YYYY-MM-DDTHH:mm)
+   *   빈 글자 마감일 없음. **AI가 읽은 값도 덮습니다**
+   *   null   지정 해제. AI가 읽은 값을 따릅니다
+   *
+   * 빈 글자가 따로 있는 이유는, AI가 엉뚱한 날짜를 뽑았을 때 지울 방법이 있어야
+   * 하기 때문입니다. null로 지우면 AI 값이 도로 올라와 지웠는데 그대로인 것처럼
+   * 보입니다.
    */
   async setItemDeadline(itemId, deadline) {
     if (!get().isReady) return;
