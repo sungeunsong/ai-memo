@@ -23,6 +23,7 @@ type ItemRow = {
   user_category: string | null;
   image_uri: string | null;
   user_deadline: string | null;
+  user_start_at: string | null;
   thumbnail_url: string | null;
   ai_status: 'pending' | 'completed' | 'failed';
   sync_status: 'local_only' | 'queued' | 'synced' | 'failed';
@@ -38,10 +39,10 @@ type ItemRow = {
 export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayload) {
   await db.runAsync(
     `INSERT INTO items (
-      id, type, source_url, raw_input, title, summary, content, content_text, digest, ai_error, user_title, user_category, image_uri, user_deadline,
+      id, type, source_url, raw_input, title, summary, content, content_text, digest, ai_error, user_title, user_category, image_uri, user_deadline, user_start_at,
       thumbnail_url, ai_status, sync_status, enrich_request_id, user_note, extracted_urls, source_type,
       saved_from, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     item.id,
     item.type,
     item.sourceUrl,
@@ -56,6 +57,7 @@ export async function insertUrlItemAsync(db: SQLiteDatabase, item: SaveUrlPayloa
     item.userCategory,
     item.imageUri,
     item.userDeadline,
+    item.userStartAt,
     item.thumbnailUrl,
     item.aiStatus,
     item.syncStatus,
@@ -86,6 +88,7 @@ export async function listItemsAsync(db: SQLiteDatabase) {
       user_category,
       image_uri,
       user_deadline,
+      user_start_at,
       thumbnail_url,
       ai_status,
       sync_status,
@@ -254,6 +257,7 @@ function mapItemRow(row: ItemRow): SavedItem {
     userCategory: row.user_category,
     imageUri: row.image_uri,
     userDeadline: row.user_deadline,
+    userStartAt: row.user_start_at,
     thumbnailUrl: row.thumbnail_url,
     aiStatus: row.ai_status,
     syncStatus: row.sync_status,

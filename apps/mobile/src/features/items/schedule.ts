@@ -1,5 +1,5 @@
 /**
- * 마감일 해석.
+ * 공구의 때 해석 — 여는 때(start_at)와 닫는 때(deadline).
  *
  * 공구는 '오늘 밤 11시 마감'이 흔합니다. 날짜까지만 다루면 그런 공구를 '오늘 마감'
  * 으로밖에 못 적고, 아침에 본 사람과 밤 11시 반에 본 사람이 같은 안내를 받습니다.
@@ -20,7 +20,7 @@ export type ParsedDeadline = {
   hasTime: boolean;
 };
 
-export function parseDeadline(raw: string | null | undefined): ParsedDeadline | null {
+export function parseScheduleAt(raw: string | null | undefined): ParsedDeadline | null {
   const value = raw?.trim();
   if (!value) return null;
 
@@ -40,8 +40,8 @@ export function parseDeadline(raw: string | null | undefined): ParsedDeadline | 
 }
 
 /** 화면에 적을 말. 시각이 있으면 함께 보입니다. */
-export function formatDeadline(raw: string): string {
-  const parsed = parseDeadline(raw);
+export function formatScheduleAt(raw: string): string {
+  const parsed = parseScheduleAt(raw);
   if (!parsed) return raw;
 
   const [datePart, timePart] = raw.trim().split('T');
@@ -63,12 +63,12 @@ export function describeDeadline(raw: string, now = new Date()): DeadlineNote | 
   const value = raw.trim();
   if (!value) return null;
 
-  const parsed = parseDeadline(value);
+  const parsed = parseScheduleAt(value);
   // 형식이 다르면 AI가 적어준 말을 그대로 보여줍니다. 읽을 수 없다고 지워버리면
   // 원문에 있던 정보가 사라집니다.
   if (!parsed) return { text: value, expired: false };
 
-  const label = formatDeadline(value);
+  const label = formatScheduleAt(value);
   const remainMs = parsed.at.getTime() - now.getTime();
 
   if (remainMs < 0) {
@@ -92,6 +92,49 @@ export function describeDeadline(raw: string, now = new Date()): DeadlineNote | 
   const days = Math.floor(remainMs / 86400000);
   return {
     text: days === 0 ? `${label} · 오늘 마감` : `${label} · ${days}일 남음`,
+    expired: false,
+  };
+}
+
+/**
+ * 언제 여는지.
+ *
+ * 마감과 말이 반대입니다. 마감은 '지났다'가 나쁜 소식이지만 시작은 '열렸다'가
+ * 좋은 소식입니다. 같은 함수로 적으면 열린 공구에 '지남'이라고 적히게 됩니다.
+ */
+export function describeStart(raw: string, now = new Date()): DeadlineNote | null {
+  const value = raw.trim();
+  if (!value) return null;
+
+  const parsed = parseScheduleAt(value);
+  if (!parsed) return { text: value, expired: false };
+
+  const label = formatScheduleAt(value);
+
+  // 여는 때는 '그 순간'입니다. 시각을 모르면 그날 아침으로 봅니다. 마감처럼 하루의
+  // 끝으로 보면, 10월 3일 오픈인 공구가 그날 밤까지 '아직 안 열림'이 됩니다.
+  const at = parsed.hasTime
+    ? parsed.at
+    : new Date(parsed.at.getFullYear(), parsed.at.getMonth(), parsed.at.getDate(), 0, 0, 0, 0);
+
+  const remainMs = at.getTime() - now.getTime();
+
+  // expired는 여기서 '이미 열렸다'는 뜻입니다. 부르는 쪽이 색을 다르게 씁니다.
+  if (remainMs <= 0) {
+    return { text: `${label} · 열림`, expired: true };
+  }
+
+  if (parsed.hasTime && remainMs < 86400000) {
+    const hours = Math.floor(remainMs / 3600000);
+    if (hours >= 1) return { text: `${label} · ${hours}시간 뒤 시작`, expired: false };
+
+    const minutes = Math.max(1, Math.floor(remainMs / 60000));
+    return { text: `${label} · ${minutes}분 뒤 시작`, expired: false };
+  }
+
+  const days = Math.floor(remainMs / 86400000);
+  return {
+    text: days === 0 ? `${label} · 오늘 시작` : `${label} · ${days}일 뒤 시작`,
     expired: false,
   };
 }

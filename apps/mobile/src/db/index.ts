@@ -100,6 +100,8 @@ export async function initializeDatabase() {
     'ALTER TABLE items ADD COLUMN ai_error TEXT;',
     // 끝나지 않은 정리의 이름표 (2026-09)
     'ALTER TABLE items ADD COLUMN enrich_request_id TEXT;',
+    // 공구 여는 때의 사용자 교정 (2026-09)
+    'ALTER TABLE items ADD COLUMN user_start_at TEXT;',
     'ALTER TABLE items ADD COLUMN user_category TEXT;',
     'ALTER TABLE items ADD COLUMN image_uri TEXT;',
     'ALTER TABLE items ADD COLUMN user_deadline TEXT;',
@@ -1188,6 +1190,7 @@ function getWebItems() {
       ...item,
       sources: item.sources ?? [],
       enrichRequestId: item.enrichRequestId ?? null,
+      userStartAt: item.userStartAt ?? null,
     }));
 
     return normalized.sort((a, b) => b.createdAt.localeCompare(a.createdAt));

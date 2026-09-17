@@ -18,7 +18,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 
 import { SavedItem } from '@/features/items/types';
-import { describeDeadline, parseDeadline } from '@/features/items/deadline';
+import { describeDeadline, describeStart, parseScheduleAt } from '@/features/items/schedule';
 import { readContentV2 } from '@/features/items/contentV2';
 import { DomainSection, FactRow, buildDomainSections, factValues, legacyText } from '@/features/items/factView';
 import { OTHER_TAB_KEY } from '@/features/facets/tabs';
@@ -148,6 +148,7 @@ export function DetailContent({
   const setItemCategory = useAppStore((state) => state.setItemCategory);
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
   const [isDeadlineEditorVisible, setIsDeadlineEditorVisible] = useState(false);
+  const [isStartEditorVisible, setIsStartEditorVisible] = useState(false);
   /*
    * 조각 목록을 펼쳤는지.
    *
@@ -164,6 +165,7 @@ export function DetailContent({
    */
   const [detachTargets, setDetachTargets] = useState<string[]>([]);
   const setItemDeadline = useAppStore((state) => state.setItemDeadline);
+  const setItemStartAt = useAppStore((state) => state.setItemStartAt);
 
   useEffect(() => {
     setUserNoteInput(selectedItem.userNote ?? '');
@@ -215,6 +217,7 @@ export function DetailContent({
   // 마감은 따로 뺍니다. 사용자가 직접 고칠 수 있고 지났는지도 알려줘야 해서,
   // 값 하나를 그대로 보여주는 다른 항목과 다루는 방식이 다릅니다.
   const aiDeadline = factValues(content, 'shopping', 'deadline')[0] ?? '';
+  const aiStartAt = factValues(content, 'shopping', 'start_at')[0] ?? '';
   /**
    * 이 저장물이 공구인지.
    *
@@ -225,6 +228,33 @@ export function DetailContent({
   const isGroupBuy = factValues(content, 'shopping', 'purchase_type').some(
     (value) => value.includes('공동구매') || value.includes('공구')
   );
+
+  /**
+   * 공구가 지금 어떤 상태인지 한 마디로.
+   *
+   * 마감이 시작보다 셉니다. 끝난 공구는 언제 열렸는지가 중요하지 않습니다.
+   * 반대로 아직 안 열린 것을 '진행 중'이라고 하면 사러 갔다가 헛걸음합니다.
+   */
+  const groupBuyState = useMemo(() => {
+    const deadline = (selectedItem.userDeadline ?? aiDeadline).trim();
+    const startAt = (selectedItem.userStartAt ?? aiStartAt).trim();
+
+    const deadlineNote = deadline ? describeDeadline(deadline) : null;
+    if (deadlineNote?.expired) {
+      return { label: '⛔ 마감됨', style: styles.groupBuyStateClosed, textStyle: styles.groupBuyStateClosedText };
+    }
+
+    const startNote = startAt ? describeStart(startAt) : null;
+    // describeStart의 expired는 '이미 열렸다'는 뜻입니다.
+    if (startNote && !startNote.expired) {
+      return { label: `🚀 ${startNote.text.split(' · ')[1] ?? '시작 예정'}`, style: styles.groupBuyStateSoon, textStyle: styles.groupBuyStateSoonText };
+    }
+
+    // 여는 때를 모르면 열렸는지 알 수 없습니다. 마감만 안 지났다는 것까지만 말합니다.
+    if (!startNote && !deadlineNote) return null;
+
+    return { label: '🟢 진행 중', style: styles.groupBuyStateOpen, textStyle: styles.groupBuyStateOpenText };
+  }, [selectedItem.userDeadline, selectedItem.userStartAt, aiDeadline, aiStartAt, styles]);
 
   // 본문은 contentText 컬럼으로 분리됐습니다.
   // legacy.description은 분리 이전에 저장된 아이템을 위한 호환 경로입니다.
@@ -529,6 +559,21 @@ export function DetailContent({
               <Text style={styles.titleEditIcon}>✏️</Text>
             </Pressable>
           )}
+          {/*
+            * 공구의 지금 상태.
+            *
+            * 시작·마감 카드는 화면 아래쪽에 있어서 내려야 보입니다. 지금 살 수 있는
+            * 것인지 아닌지는 그 글을 열자마자 알아야 하는 정보라 제목 밑에 세웁니다.
+            * 공구가 아닌 글에는 뜻이 없어 붙이지 않습니다.
+            */}
+          {isGroupBuy && groupBuyState ? (
+            <View style={[styles.groupBuyState, groupBuyState.style]}>
+              <Text style={[styles.groupBuyStateText, groupBuyState.textStyle]}>
+                {groupBuyState.label}
+              </Text>
+            </View>
+          ) : null}
+
           <Text style={[styles.detailSource, { color: theme.badgeText, fontWeight: '700' }]}>
             {theme.label} · {selectedItem.sourceUrl ? getHostname(selectedItem.sourceUrl) : '로컬'}
           </Text>
@@ -907,6 +952,25 @@ export function DetailContent({
       {/* 공구는 마감이 지나면 저장해둔 의미가 없어집니다.
           남은 기간을 눈에 띄게 보여주고, 지난 건 분명히 표시합니다.
           AI가 못 뽑았어도 사용자가 직접 넣을 수 있어야 해서 공구와 쇼핑 글에는 늘 세웁니다. */}
+      {/*
+        * 여는 때. 마감 위에 둡니다.
+        *
+        * '10월 3일 10시 오픈'처럼 시작이 정해진 공구가 많은데 지금까지는 그 말이
+        * 요약 본문에만 남았습니다. 마감만 보여주면 아직 열리지도 않은 공구를 이미
+        * 살 수 있는 것처럼 읽게 됩니다.
+        *
+        * 고치는 길은 아직 없습니다. AI가 얼마나 맞히는지 보고 나서 붙일 자리입니다.
+        */}
+      {aiStartAt || selectedItem.userStartAt || isGroupBuy ? (
+        <StartCard
+          aiStartAt={aiStartAt}
+          userStartAt={selectedItem.userStartAt}
+          onEdit={() => setIsStartEditorVisible(true)}
+          onClear={() => void setItemStartAt(selectedItem.id, aiStartAt ? '' : null)}
+          onRevert={() => void setItemStartAt(selectedItem.id, null)}
+        />
+      ) : null}
+
       {aiDeadline || selectedItem.userDeadline || isGroupBuy || itemCategory === 'shopping' ? (
         <DeadlineCard
           aiDeadline={aiDeadline}
@@ -1007,15 +1071,26 @@ export function DetailContent({
         </Pressable>
       ) : null}
 
-      <DeadlineEditor
+      {/* 여는 때와 닫는 때는 고르는 방식이 같아 편집기를 함께 씁니다. */}
+      <ScheduleEditor
         visible={isDeadlineEditorVisible}
         current={selectedItem.userDeadline || aiDeadline}
-
         onClose={() => setIsDeadlineEditorVisible(false)}
         onSubmit={(value) => {
           setIsDeadlineEditorVisible(false);
           void setItemDeadline(selectedItem.id, value);
           setToastMessage(value ? '마감일을 바꿨습니다' : 'AI가 읽은 값으로 되돌렸습니다');
+        }}
+      />
+
+      <ScheduleEditor
+        visible={isStartEditorVisible}
+        current={selectedItem.userStartAt || aiStartAt}
+        onClose={() => setIsStartEditorVisible(false)}
+        onSubmit={(value) => {
+          setIsStartEditorVisible(false);
+          void setItemStartAt(selectedItem.id, value);
+          setToastMessage(value ? '시작일을 바꿨습니다' : 'AI가 읽은 값으로 되돌렸습니다');
         }}
       />
 
@@ -1391,7 +1466,7 @@ function toDateKey(date: Date) {
  * OS 기본 날짜 선택기를 씁니다. 사용자가 다른 앱에서 이미 익숙한 UI이고,
  * 달력을 직접 그리면 로케일과 접근성을 전부 다시 만들어야 합니다.
  */
-function DeadlineEditor({
+function ScheduleEditor({
   visible,
   current,
   onClose,
@@ -1405,7 +1480,7 @@ function DeadlineEditor({
   const styles = useThemedStyles(createStyles);
   const { palette, mode } = useTheme();
 
-  const parsed = parseDeadline(current);
+  const parsed = parseScheduleAt(current);
   const initial = parsed?.at ?? new Date();
   const currentTime = parsed?.hasTime ? current.trim().split('T')[1] : '';
 
@@ -1516,7 +1591,73 @@ function describeAttachProgress(progress: AttachProgress): string {
 }
 
 /**
- * 안드로이드 마감일 선택.
+ * 여는 때 카드.
+ *
+ * 마감 카드와 나란히 서지만 색이 반대입니다. 마감은 지나면 빨갛게 경고하지만,
+ * 시작은 지난 것이 곧 '열렸다'는 좋은 소식입니다.
+ */
+function StartCard({
+  aiStartAt,
+  userStartAt,
+  onEdit,
+  onClear,
+  onRevert,
+}: {
+  aiStartAt: string;
+  userStartAt: string | null;
+  onEdit: () => void;
+  onClear: () => void;
+  onRevert: () => void;
+}) {
+  const styles = useThemedStyles(createStyles);
+  // 사용자가 고친 값이 있으면 그것이 우선입니다.
+  const startAt = (userStartAt ?? aiStartAt).trim();
+  const note = startAt ? describeStart(startAt) : null;
+
+  return (
+    <Pressable
+      onPress={onEdit}
+      style={({ pressed }) => [
+        styles.deadlineBox,
+        note?.expired && styles.startBoxOpen,
+        pressed && { opacity: 0.7 },
+      ]}
+    >
+      <View style={styles.deadlineHeaderRow}>
+        <Text style={[styles.deadlineLabel, note?.expired && styles.startLabelOpen]}>
+          {note ? (note.expired ? '🟢 진행 중' : '🚀 시작 예정') : '🚀 시작일'}
+          {userStartAt ? ' · 직접 지정' : ''}
+        </Text>
+
+        <View style={styles.deadlineActionRow}>
+          {userStartAt !== null && aiStartAt ? (
+            <Pressable
+              onPress={onRevert}
+              hitSlop={10}
+              style={({ pressed }) => [styles.deadlineClearIcon, pressed && { opacity: 0.5 }]}
+            >
+              <Text style={styles.deadlineClearIconText}>↺</Text>
+            </Pressable>
+          ) : null}
+
+          {note ? (
+            <Pressable
+              onPress={onClear}
+              hitSlop={10}
+              style={({ pressed }) => [styles.deadlineClearIcon, pressed && { opacity: 0.5 }]}
+            >
+              <Text style={styles.deadlineClearIconText}>✕</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+      <Text style={styles.deadlineText}>{note ? note.text : '눌러서 입력'}</Text>
+    </Pressable>
+  );
+}
+
+/**
+ * 안드로이드 날짜 선택.
  *
  * 선택기를 OS가 그려서 날짜와 시각을 한 화면에 못 둡니다. 날짜를 고른 뒤 시각을
  * 물어보는 두 걸음으로 갑니다.
@@ -1936,6 +2077,46 @@ const createStyles = (palette: Palette) =>
     borderRadius: 16,
     borderWidth: 1,
     borderColor: palette.border,
+  },
+  groupBuyState: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 4,
+  },
+  groupBuyStateText: {
+    fontSize: 12.5,
+    fontWeight: '800',
+  },
+  groupBuyStateOpen: {
+    backgroundColor: palette.successSoft,
+    borderColor: 'rgba(16, 185, 129, 0.35)',
+  },
+  groupBuyStateOpenText: {
+    color: palette.success,
+  },
+  groupBuyStateSoon: {
+    backgroundColor: palette.warnSoft ?? palette.surfaceRaised,
+    borderColor: palette.border,
+  },
+  groupBuyStateSoonText: {
+    color: palette.warnText,
+  },
+  groupBuyStateClosed: {
+    backgroundColor: palette.dangerSoft,
+    borderColor: 'rgba(239, 68, 68, 0.35)',
+  },
+  groupBuyStateClosedText: {
+    color: palette.dangerText,
+  },
+  startBoxOpen: {
+    backgroundColor: palette.successSoft,
+    borderColor: 'rgba(16, 185, 129, 0.35)',
+  },
+  startLabelOpen: {
+    color: palette.success,
   },
   deadlineBoxExpired: {
     backgroundColor: palette.dangerSoft,

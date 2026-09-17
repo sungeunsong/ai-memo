@@ -20,6 +20,7 @@ export const ITEM_PATCH_COLUMNS = {
   userCategory: 'user_category',
   imageUri: 'image_uri',
   userDeadline: 'user_deadline',
+  userStartAt: 'user_start_at',
   thumbnailUrl: 'thumbnail_url',
   aiStatus: 'ai_status',
   enrichRequestId: 'enrich_request_id',

@@ -73,6 +73,10 @@ export const SEED_FACTS: SeedFact[] = [
   { domainKey: 'shopping', key: 'price', label: '가격', valueType: 'money', cardinality: 'single', normalizationPolicy: 'money', globalRole: 'price' },
   // 마감일은 '마감됨' 경고와 사용자 교정이 걸려 있어 날짜로 다뤄야 합니다.
   { domainKey: 'shopping', key: 'deadline', label: '마감일', valueType: 'date', cardinality: 'single', normalizationPolicy: 'date', globalRole: 'deadline' },
+  // 공구는 '10월 3일 10시 오픈'처럼 여는 때가 정해진 경우가 많습니다. 지금까지는
+  // 그 말이 요약 본문에만 남고 항목으로는 어디에도 안 잡혀서, '곧 시작하는 공구'를
+  // 추릴 근거가 없었습니다. 마감과 짝이 되는 자리입니다.
+  { domainKey: 'shopping', key: 'start_at', label: '시작일', valueType: 'date', cardinality: 'single', normalizationPolicy: 'date', globalRole: 'start' },
 
   // 인테리어
   { domainKey: 'interior', key: 'room_type', label: '공간', valueType: 'term', cardinality: 'single', normalizationPolicy: 'aliasable', globalRole: null },

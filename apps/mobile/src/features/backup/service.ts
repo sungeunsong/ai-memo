@@ -254,6 +254,7 @@ function normalizeImportedItem(raw: any): SavedItem | null {
     userCategory: nullableText(raw.userCategory),
     imageUri: nullableText(raw.imageUri),
     userDeadline: nullableText(raw.userDeadline),
+    userStartAt: nullableText(raw.userStartAt),
     // 전송 상태는 물려받지 않습니다. 이 기기에서는 아직 아무것도 보내지 않았습니다.
     syncStatus: 'local_only',
     // 끝내지 못한 정리도 물려받지 않습니다. 시작한 적이 없으니 이어받을 것도 없습니다.

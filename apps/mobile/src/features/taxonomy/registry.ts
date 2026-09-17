@@ -111,6 +111,7 @@ export const ROLE_LABELS: Record<GlobalRole, string> = {
   place: '장소',
   price: '가격',
   deadline: '마감',
+  start: '시작',
   equipment: '도구',
   target: '부위',
   topic: '주제',

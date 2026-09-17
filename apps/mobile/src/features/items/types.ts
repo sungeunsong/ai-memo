@@ -105,6 +105,14 @@ export type SavedItem = {
    * 재분석이 덮어쓰지 않도록 AI 결과와 별도 필드에 둡니다.
    */
   userDeadline: string | null;
+  /**
+   * 사용자가 직접 고친 시작일. AI 추론보다 우선합니다.
+   *
+   * 마감일과 같은 이유입니다. 공구는 '9월 22일 10시 오픈'처럼 여는 때가 정해진
+   * 경우가 많은데, 그 값이 틀리면 아직 안 열린 공구를 열렸다고 하거나 그 반대가
+   * 됩니다. 재분석이 덮어쓰지 않도록 AI 결과와 별도 필드에 둡니다.
+   */
+  userStartAt: string | null;
   syncStatus: SyncStatus;
   /**
    * 진행 중인 정리 작업의 이름표. 끝나면 비웁니다.
@@ -152,6 +160,7 @@ export type ItemMetadataPatch = {
   enrichRequestId?: string | null;
   imageUri?: string | null;
   userDeadline?: string | null;
+  userStartAt?: string | null;
   thumbnailUrl?: string | null;
   aiStatus?: AIStatus;
   userNote?: string | null;

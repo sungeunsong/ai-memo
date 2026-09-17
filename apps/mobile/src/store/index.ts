@@ -215,6 +215,8 @@ type AppStore = {
   deleteDomain: (key: string) => Promise<boolean>;
   mergeDomains: (fromKey: string, into: { key: string; label: string }) => Promise<number>;
   setItemDeadline: (itemId: string, deadline: string | null) => Promise<void>;
+  /** 시작일을 직접 고칩니다. 값의 뜻은 마감일과 같습니다. */
+  setItemStartAt: (itemId: string, startAt: string | null) => Promise<void>;
   deleteItem: (itemId: string) => Promise<void>;
   resumeSync: () => Promise<void>;
   resumeEnrich: () => Promise<void>;
@@ -927,6 +929,31 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     const nextItems = get().items.map((item) =>
       item.id === itemId ? { ...item, userDeadline: deadline, updatedAt: patch.updatedAt } : item
+    );
+    set({ items: nextItems });
+
+    const itemToQueue = nextItems.find((item) => item.id === itemId) ?? null;
+    if (itemToQueue) await queueUpsertItemSyncAsync(itemToQueue);
+    void runSyncWorker(set, get);
+  },
+  /**
+   * 시작일을 직접 고칩니다. 값의 뜻은 마감일과 같습니다.
+   *
+   *   날짜   그 값으로 고정
+   *   빈 글자 시작일 없음. AI가 읽은 값도 덮습니다
+   *   null   지정 해제. AI가 읽은 값을 따릅니다
+   */
+  async setItemStartAt(itemId, startAt) {
+    if (!get().isReady) return;
+
+    const patch: ItemMetadataPatch = {
+      userStartAt: startAt,
+      updatedAt: new Date().toISOString(),
+    };
+    await updateItemMetadataAsync(itemId, patch);
+
+    const nextItems = get().items.map((item) =>
+      item.id === itemId ? { ...item, userStartAt: startAt, updatedAt: patch.updatedAt } : item
     );
     set({ items: nextItems });
 

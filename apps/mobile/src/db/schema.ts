@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS items (
   user_category TEXT,
   image_uri TEXT,
   user_deadline TEXT,
+  user_start_at TEXT,
   thumbnail_url TEXT,
   ai_status TEXT NOT NULL,
   sync_status TEXT NOT NULL,

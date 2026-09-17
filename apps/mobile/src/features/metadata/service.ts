@@ -1577,6 +1577,17 @@ async function callGeminiApi(
    -> 2026-09-16T23:00) **적혀 있지 않으면 날짜만 적어라. 시각을 지어내지 마라.**
    날짜만 적힌 공구가 훨씬 많고, 없는 시각을 채우면 마감 전에 지난 것으로 보인다.
 
+   여는 때가 따로 적혀 있으면 start_at에 같은 형식으로 적어라. domain은 shopping이다.
+   '10월 3일 오전 10시 오픈' -> { "key": "start_at", "label": "시작일",
+   "domain": "shopping", "values": ["2026-10-03T10:00"] }
+
+   **start_at과 deadline은 함께 있을 수 있다. 둘 중 하나만 고르는 것이 아니다.**
+   '9월 22일 10시 오픈, 9월 26일까지'면 start_at과 deadline을 둘 다 적어라.
+
+   날짜가 하나뿐이면 **대개 마감(deadline)이다.** '오픈·시작·열림·판매 시작'처럼
+   여는 때를 가리키는 말이 붙어 있을 때만 start_at으로 보내라. 그 말이 없으면
+   deadline이다. 이미 열려 있으면 start_at은 넣지 마라.
+
 5. 이 글의 분야가 아닌 항목이 섞여 있으면 그 항목에만 "domain"을 따로 적어라.
    예를 들어 여행 글에 요리 재료가 나오면
    { "key": "ingredient", "label": "재료", "domain": "recipe", "values": ["흑돼지"] }
