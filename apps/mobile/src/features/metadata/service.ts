@@ -448,6 +448,45 @@ function compactForCompare(text: string) {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * AI에 넣기 전에 마크다운에서 **주소만** 걷어냅니다.
+ *
+ * Jina가 주는 본문은 마크다운이라 이미지와 링크가 주소째로 들어옵니다. 네이버
+ * 썸네일 주소는 개당 300~400자입니다. 사진 40장짜리 블로그면 그것만 1만 자이고,
+ * 실측한 글은 27,252자 중 **실제 글이 9,391자(34%)**였습니다. 나머지 3분의 2가
+ * `pstatic.net` 주소입니다.
+ *
+ * 그대로 보내면 셋이 손해입니다. 그 주소를 토큰으로 세어 돈을 내고, 모델이 읽는
+ * 것의 3분의 2가 의미 없는 문자열이라 요약이 흐려지고, 24,000자 절단에서 주소가
+ * 자리를 먹어 뒤쪽의 마감일·가격이 밀려납니다.
+ *
+ * **글자는 남기고 주소만 버립니다.** 이미지 설명과 링크 이름에 제품명·장소가 들어
+ * 있을 수 있고, 이 앱이 찾아야 하는 것이 바로 그런 것들입니다. 다만 Jina가 붙이는
+ * `Image 1` 같은 자동 이름은 버립니다 — 그건 알려주는 것이 없습니다.
+ *
+ * 저장되는 `contentText`에는 걸지 않습니다. 원문은 그대로 둬야 나중에 다시 추출할
+ * 여지가 남습니다. 썸네일도 첫 이미지 주소를 쓰므로 그 전에 뽑아둡니다.
+ */
+export function compactMarkdownForAi(markdown: string): string {
+  return (
+    markdown
+      // 이미지를 먼저 처리합니다. 링크로 감싼 이미지(`[![설명](그림)](링크)`)가 흔한데,
+      // 안쪽을 먼저 풀어야 바깥이 평범한 링크가 되어 다음 규칙에 걸립니다.
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_match, alt: string) =>
+        alt.replace(/^Image\s*\d+\s*:?\s*/i, '').trim()
+      )
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, (_match, text: string) => text)
+      // 마크다운 밖에 맨몸으로 떠다니는 주소도 읽을 것이 없습니다.
+      .replace(/https?:\/\/\S+/g, '')
+      .split('\n')
+      // 네이버는 빈 줄을 폭 없는 공백으로 채웁니다. 눈에 안 보이는데 자리는 차지합니다.
+      .map((line) => line.replace(/[\u200B\uFEFF]/g, '').trimEnd())
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  );
+}
+
 async function fetchYouTubeMetadata(sourceUrl: string): Promise<MetadataResult> {
   const oEmbedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(sourceUrl)}&format=json`;
   const oEmbedResponse = await fetchWithTimeout(oEmbedUrl, {
@@ -739,7 +778,17 @@ async function fetchGenericMetadata(
     let aiError: string | null = null;
 
     // 1. 진짜 AI 요약 API 호출 시도
-    const aiResult = await callGeminiApi(requestId, title, rawContent, undefined, referenceDate);
+    //
+    // 넣는 것은 정제본입니다. 저장은 원문(rawContent) 그대로 하고, 모델에만 주소를
+    // 걷어낸 것을 줍니다. 자르는 것은 callGeminiApi 안에서 일어나므로 순서가 맞습니다
+    // — 먼저 자르면 긴 주소가 이미 자리를 먹은 뒤라 정제할 것이 없습니다.
+    const aiResult = await callGeminiApi(
+      requestId,
+      title,
+      compactMarkdownForAi(rawContent),
+      undefined,
+      referenceDate
+    );
     if (aiResult.ok) {
       console.log('[MetadataService] Gemini API를 활용한 실제 AI 요약 및 구조화 파싱에 성공했습니다.');
       summary = aiResult.data.summary;
