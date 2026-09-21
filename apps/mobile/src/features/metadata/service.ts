@@ -41,6 +41,10 @@
 import { Platform } from 'react-native';
 
 import { ItemMetadataPatch } from '@/features/items/types';
+import {
+  describeFetchFailure,
+  toUserFacingEnrichError,
+} from '@/features/metadata/failureMessage';
 import { EnrichRequestExpiredError } from '@/features/items/enrichRequest';
 import { ensureAnonymousSessionAsync } from '@/supabase/client';
 import { getHostname } from '@/features/items/fallback';
@@ -197,7 +201,7 @@ export async function fetchMetadataPatch(
     // 기기 안에도 서버에도 아무것도 남지 않았습니다.
     return {
       aiStatus: 'failed',
-      aiError: error instanceof Error ? error.message : String(error),
+      aiError: toUserFacingEnrichError(error),
       updatedAt,
     };
   }
@@ -958,7 +962,12 @@ async function fetchWithTimeout(
     }
 
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`${reason} (${elapsed}ms 만에 실패)`);
+
+    // 원본은 여기서만 남깁니다. 던지는 문장은 화면에 그대로 나가는 값이라,
+    // 'Failed to fetch' 같은 날것이 사용자에게 보이면 안 됩니다.
+    console.log(`[MetadataService] 요청 실패(${elapsed}ms): ${input} — ${reason}`);
+
+    throw new Error(describeFetchFailure(reason, elapsed));
   } finally {
     clearTimeout(timeoutId);
   }
@@ -1924,8 +1933,11 @@ async function callGenerateProxy(
     const reason = typeof payload?.reason === 'string' ? payload.reason : `HTTP ${response.status}`;
     return { kind: 'fatal', reason };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { kind: 'retryable', reason: `프록시에 닿지 못했습니다: ${message}` };
+    // 원본은 콘솔에만 남깁니다. 여기서 만든 reason은 화면의 실패 사유가 되는 값이라,
+    // 'Failed to fetch' 같은 날것이 그대로 나가면 사용자가 읽을 것이 없습니다.
+    // 실제로 "프록시에 닿지 못했습니다: Failed to fetch (1ms 만에 실패)"가 떴습니다.
+    console.log('[GeminiAPI] 프록시 호출 실패:', error);
+    return { kind: 'retryable', reason: toUserFacingEnrichError(error) };
   }
 }
 

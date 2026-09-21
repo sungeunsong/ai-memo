@@ -32,6 +32,7 @@ import {
   fetchTextMetadataPatch,
   fetchImageMetadataPatch,
 } from '@/features/metadata/service';
+import { toUserFacingEnrichError } from '@/features/metadata/failureMessage';
 import {
   createEnrichRequestId,
   EnrichOptions,
@@ -1513,7 +1514,9 @@ async function enrichSavedItemMetadata(
     console.error('[Enrich] 메타데이터 보강 실패, 기본 저장 유지:', error);
     const failurePatch: ItemMetadataPatch = {
       aiStatus: 'failed',
-      aiError: error instanceof Error ? error.message : String(error),
+      // 사유를 적는 자리가 둘입니다. 이쪽과 fetchMetadataPatch의 catch.
+      // 한쪽만 다듬으면 어느 경로로 실패했느냐에 따라 말투가 달라집니다.
+      aiError: toUserFacingEnrichError(error),
       updatedAt: new Date().toISOString(),
     };
     // 이름표는 지우지 않습니다. 실패한 정리는 회수가 이어서 돌릴 대상이고,
