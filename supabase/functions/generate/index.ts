@@ -485,6 +485,22 @@ async function callGemini(prompt: string, imageBase64: string | undefined, schem
     throw new GeminiCallError(describeMissingText(finishReason, blockReason), false);
   }
 
+  // 성공했을 때도 사용량을 남깁니다.
+  //
+  // 지금까지는 실패했을 때만 남겼습니다. 그래서 본문에서 이미지·링크 주소를 걷어낸
+  // 뒤 토큰이 실제로 얼마나 줄었는지 잴 수가 없었습니다. 차단됐던 건의 기준값
+  // 14,948토큰과 비교할 숫자가 어디에도 없었습니다.
+  //
+  // 원가를 아는 것이 상한을 정하는 근거이고(`## AI 프록시`의 계측 항목), 어떤 종류의
+  // 글이 비싼지도 여기서만 보입니다. 값은 안 적습니다 — 단가는 바뀌고 토큰은 안 바뀝니다.
+  console.log('[generate] 사용량', {
+    build: BUILD,
+    model: GEMINI_MODEL,
+    promptChars: prompt.length,
+    outputChars: text.length,
+    usage: payload?.usageMetadata,
+  });
+
   // 여기서 파싱해 둡니다. 저장되는 것도, 다음에 캐시로 돌려주는 것도 같은 모양이어야
   // 앱이 '새로 받은 것'과 '받아둔 것'을 구별하지 않고 쓸 수 있습니다.
   try {
@@ -537,7 +553,7 @@ function numberFromEnv(name: string, fallback?: number) {
  * 배포한 뒤에도 옛 인스턴스가 살아남아 옛 환경변수를 들고 응답하는 일이 있었습니다.
  * 설정을 고쳤는데 왜 그대로인지 응답만 봐서는 알 수 없어 한참 헤맸습니다.
  */
-const BUILD = '2026-09-21-2';
+const BUILD = '2026-09-22-1';
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify({ ...(body as object), build: BUILD }), {
