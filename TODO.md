@@ -100,6 +100,57 @@ anon 키는 번들에 노출되는 것이 정상이라(막는 것은 RLS입니�
 EAS 환경변수에는 아직 안 쓰는 `EXPO_PUBLIC_GEMINI_API_KEY`가 세 환경에 남아 있습니다.
 앱 코드에서는 걷어냈지만 지울 것은 지워야 합니다.
 
+**2. 웹은 본문 읽기에서 끝나 서버를 부르지도 못했습니다.**
+`r.jina.ai` 호출에만 시한을 안 넘겨 기본값 20초로 돌고 있었습니다(바로 위에 30초짜리
+상수를 만들어두고도). 무거운 페이지가 거기 걸리면 폴백이 **원본 주소를 브라우저에서
+직접 fetch**하는데, 주 유입원인 인스타·노션은 CORS를 안 열어둬 웹에서는 그 길이
+막힙니다. 그 예외가 그대로 올라가 저장물이 통째로 실패했고, `aiError`가 비어서
+화면의 실패 사유 상자도 안 떴습니다.
+
+**그래서 서버 로그에는 흔적이 한 줄도 없었습니다.** 9/19 0건, 9/20 4건 전부 성공.
+원인을 찾을 근거가 기기에도 서버에도 없는 상태였습니다. 고친 것:
+
+- Jina 호출에 `SOURCE_FETCH_TIMEOUT_MS`(30초)를 넘깁니다
+- 직접 fetch 폴백을 `tryFetchHtmlMetadata`로 바꿔 예외 대신 null을 받습니다.
+  예외가 통째로 새던 것이 여기서 끝납니다
+- 웹에서도 그 폴백을 시도하되 시한을 8초로 줄입니다(`CORS_BLOCKED_FETCH_TIMEOUT_MS`).
+  처음에는 웹이면 통째로 건너뛰게 했다가 되돌렸습니다 — CORS를 열어둔 블로그·API형
+  페이지에서는 웹에서도 성공하는 길이고, 예외 문제는 위 항목이 이미 막습니다.
+  막힌 곳은 브라우저가 금방 끊고, 헤더가 없으면서 느린 곳만 8초에 걸립니다
+- og 태그만 남은 경로도 AI를 부릅니다. 안 부르면서 `aiError: null`이라 '정리 완료'로
+  찍혀, 내용이 og 설명 한 줄인데 사용자는 끝난 줄 알았습니다
+- `fetchMetadataPatch`의 catch가 사유를 `aiError`에 남깁니다
+
+고치다 딸려 나온 것 — **링크 저장물은 이름표 만료를 회복하지 못하고 있었습니다.**
+`callGeminiApi`가 `expired`에 던지는 `EnrichRequestExpiredError`를 Jina의 catch와
+`fetchMetadataPatch`의 catch가 차례로 삼켜서, store의 `fetchWithFreshRequestIdOnExpiry`
+까지 신호가 간 적이 없습니다. 텍스트 저장물은 try가 없어 멀쩡했고, 그래서 두 경로가
+다르게 동작한다는 것도 안 드러났습니다. `fetchMetadataPatch`가 이 예외만 다시 던집니다.
+
+**읽기와 AI 호출을 갈랐습니다** (`readViaJinaReader`). 한 try가 둘을 다 덮고 있어서,
+AI를 부른 뒤에 무엇이 던지든 "Jina 실패"로 뭉개져 og 폴백으로 떨어졌습니다. 폴백도
+AI를 부르게 되면서 한 저장물에 두 번 낼 수 있는 길이 생겼고, 재료도 Jina 본문에서
+og 설명 한 줄로 나빠졌습니다. 읽기만 떼어내니 그 갈래가 아예 없어집니다.
+
+**`MetadataResult`의 정리 칸을 optional로 바꿨습니다.** patch는 `undefined`를
+'건드리지 말라', `null`을 '지우라'로 읽습니다(`features/items/patch.ts`). og 폴백은
+실패해도 `summary`에 og 한 줄을, `contentText`에 `null`을 담아 돌려주고 있었고,
+그래서 **Jina 본문과 정상 AI 요약을 갖고 있던 저장물을 재분석하면 그 둘이 날아갔습니다.**
+실패하면 제목·썸네일·분류만 남기고 정리 칸은 생략합니다.
+
+**AI를 부를지 판단하는 기준을 `rawDescription`으로 바꿨습니다.** `htmlMetadata.summary`는
+description이 없을 때 "example.com 링크를 저장했습니다."라는 자리 채움으로 채워져서,
+그걸로 보면 '재료 없음'이 영영 참이 되지 않습니다. 설명 한 줄 없는 페이지도 자리 채움
+문장을 AI에 보내 하루 몫을 깎고 있었습니다.
+
+**로그 보는 법** — 무료 플랜은 Edge Function 로그를 **하루만** 보관합니다. 주말 것을
+월요일에 보려 하면 이미 없습니다. 영구 근거는 `ai_requests` 표뿐이고, Management API
+(`/v1/projects/{ref}/database/query`)로 바로 질의할 수 있습니다. `edge_logs`에는
+User-Agent가 찍혀 누구 기기인지까지 가려집니다.
+
+남은 구멍: **재시도가 실패 사유를 지웁니다.** `begin_ai_request`가 재시도할 때
+`error = null`로 밀어서, 실패했다가 성공한 건은 서버에 사유가 안 남습니다.
+`ai_usage`의 `calls > used`로 "재시도가 있었다"까지만 알 수 있습니다.
 
 ### 프록시를 붙이며 배운 것 (2026-09-16)
 

@@ -33,6 +33,8 @@
  * ============================================================================
  */
 
+import { Platform } from 'react-native';
+
 import { ItemMetadataPatch } from '@/features/items/types';
 import { EnrichRequestExpiredError } from '@/features/items/enrichRequest';
 import { ensureAnonymousSessionAsync } from '@/supabase/client';
@@ -52,16 +54,24 @@ import {
 } from '@/db';
 
 
+/**
+ * 정리 칸(summary·content·contentText·digest)은 **없을 수 있습니다.**
+ *
+ * 없다는 것은 '비었다'가 아니라 '건드리지 말라'는 뜻입니다. 그대로 patch에 실려
+ * undefined로 나가고, patch는 undefined를 만나면 기존 값을 그냥 둡니다.
+ * 수집에는 성공했지만 정리할 재료가 없었을 때, 사용자가 이미 갖고 있던 요약과 본문을
+ * 지우지 않으려고 둔 자리입니다. null을 넣으면 반대로 '지우라'가 됩니다.
+ */
 type MetadataResult = {
   sourceUrl: string;
   title: string;
-  summary: string;
+  summary?: string;
   /** 구조화 데이터(JSON). facet 추출의 원천 */
-  content: string;
+  content?: string;
   /** 긁어온 본문 원문. 화면에는 안 쓰고 검색·재추출용으로 보관 */
-  contentText: string | null;
+  contentText?: string | null;
   /** 읽기 좋게 재구성한 정리본. 상세 화면의 본문 */
-  digest: string | null;
+  digest?: string | null;
   /** AI 보강 실패 사유 */
   aiError: string | null;
   thumbnailUrl: string | null;
@@ -138,7 +148,11 @@ export async function fetchMetadataPatch(
       sourceUrl: metadata.sourceUrl,
       // 경로가 여럿(YouTube·Jina·og 태그)이라 각자 자르게 두면 반드시 빠뜨립니다.
       // patch를 만드는 이 한 곳에서 정리합니다.
-      title: resolveTitle(metadata.title, metadata.contentText ?? metadata.summary, metadata.sourceUrl),
+      title: resolveTitle(
+        metadata.title,
+        metadata.contentText ?? metadata.summary ?? null,
+        metadata.sourceUrl
+      ),
       summary: metadata.summary,
       content: metadata.content,
       contentText: metadata.contentText,
@@ -154,6 +168,13 @@ export async function fetchMetadataPatch(
       updatedAt,
     };
   } catch (error) {
+    // 이름표 만료만은 그대로 올려보냅니다. 여기서 'failed'로 적어버리면 새 이름표를
+    // 받아 다시 거는 회복 경로(fetchWithFreshRequestIdOnExpiry)가 영영 안 돕니다.
+    // 서버에 결과가 멀쩡히 남아 있는데도 사용자에게는 실패로 보입니다.
+    if (error instanceof EnrichRequestExpiredError) {
+      throw error;
+    }
+
     // 메타데이터 수집 실패는 에러가 아닙니다. (AI Functional Spec §7)
     //
     // 중요: 여기서 title/summary/content를 채워 반환하면 안 됩니다.
@@ -162,8 +183,16 @@ export async function fetchMetadataPatch(
     // 실패했을 때 할 일은 "상태만 기록하고 기존 데이터는 그대로 두는 것"뿐입니다.
     console.warn('[MetadataService] 메타데이터 수집 실패. 기존 데이터를 유지합니다.', error);
 
+    // 사유를 남깁니다.
+    //
+    // 예전에는 상태만 'failed'로 적고 aiError를 비워뒀습니다. 화면의 실패 사유 상자는
+    // aiError가 있을 때만 뜨므로, 이 경로로 실패하면 사용자에게도 "정리가 안 됐다"는
+    // 것만 보이고 왜인지는 어디에도 없었습니다. 더 나쁜 것은 이 경로가 서버를 부르기
+    // 전에 끝난다는 점입니다 — 서버 로그에도 흔적이 없어서, 나중에 원인을 찾을 근거가
+    // 기기 안에도 서버에도 아무것도 남지 않았습니다.
     return {
       aiStatus: 'failed',
+      aiError: error instanceof Error ? error.message : String(error),
       updatedAt,
     };
   }
@@ -432,6 +461,15 @@ const SOURCE_FETCH_TIMEOUT_MS = 30000;
 const SOURCE_FETCH_ATTEMPTS = 2;
 
 /**
+ * 웹에서 원문을 직접 읽어볼 때의 시한.
+ *
+ * 대부분은 CORS에 막혀 브라우저가 곧바로 끊습니다. 문제는 CORS 헤더가 없으면서 응답이
+ * 느린 곳인데, 그때는 응답 헤더가 올 때까지 기다린 뒤에야 막힙니다. 어차피 버릴 응답을
+ * 30초씩 기다릴 이유가 없어 짧게 잡습니다. 네이티브에는 CORS가 없어 해당하지 않습니다.
+ */
+const CORS_BLOCKED_FETCH_TIMEOUT_MS = 8000;
+
+/**
  * 링크에서 본문만 긁어옵니다. AI는 부르지 않습니다.
  *
  * 조각으로 붙인 링크는 주소만 있고 본문이 없습니다. 그대로 두면 AI에게
@@ -510,20 +548,43 @@ export function isPlaceholderBody(text: string): boolean {
   );
 }
 
-async function fetchGenericMetadata(
-  requestId: string,
-  sourceUrl: string,
-  referenceDate?: string
-): Promise<MetadataResult> {
+/** Jina가 읽어온 것. AI를 부르기 전의 날것입니다. */
+type JinaReading = {
+  title: string;
+  rawContent: string;
+  thumbnailUrl: string | null;
+  sourceType: string;
+};
+
+/**
+ * Jina Reader로 페이지를 읽습니다. **AI는 부르지 않습니다.**
+ *
+ * 읽기와 AI 호출을 한 try로 묶어두면, AI를 부른 뒤에 무엇이 던지든 "Jina가 실패했다"로
+ * 뭉개져 아래 og 폴백으로 떨어집니다. 거기서 또 부르면 한 저장물에 돈이 두 번 나가고,
+ * 재료도 Jina 본문보다 나쁜 og 설명으로 바뀝니다. 읽기만 떼어내면 그 갈래가 아예
+ * 생기지 않습니다. 실패는 던지지 않고 사유로 돌려줍니다 — 부르는 쪽이 폴백을 정합니다.
+ */
+async function readViaJinaReader(
+  sourceUrl: string
+): Promise<{ ok: true; data: JinaReading } | { ok: false; reason: string }> {
   const jinaUrl = `https://r.jina.ai/${sourceUrl}`;
   try {
     console.log(`[MetadataService] Jina Reader API를 통해 콘텐츠를 렌더링 및 파싱합니다. URL: ${jinaUrl}`);
     // Jina AI Reader API를 통해 렌더링된 온전한 마크다운 및 메타데이터를 JSON 형태로 받아옵니다.
-    const response = await fetchWithTimeout(jinaUrl, {
-      headers: {
-        'Accept': 'application/json',
+    //
+    // 시한을 넘겨주지 않아 기본값 20초로 돌고 있었습니다. 바로 위에 30초짜리 상수를
+    // 만들어두고도 이 호출에만 안 붙어 있었고, 노션·인스타처럼 렌더링이 무거운
+    // 페이지가 20초에 걸려 통째로 실패했습니다. 아이폰 웹에서 "자주 실패하는데
+    // 다시 하면 된다"던 증상의 자리가 여기입니다.
+    const response = await fetchWithTimeout(
+      jinaUrl,
+      {
+        headers: {
+          'Accept': 'application/json',
+        },
       },
-    });
+      SOURCE_FETCH_TIMEOUT_MS
+    );
 
     if (response.ok) {
       const json = await response.json();
@@ -569,66 +630,109 @@ async function fetchGenericMetadata(
 
         const sourceType = classifySourceType(sourceUrl, rawContent);
 
-        let summary = '';
-        let parsedStructure: any = null;
-        let aiError: string | null = null;
-
-        // 1. 진짜 AI 요약 API 호출 시도
-        const aiResult = await callGeminiApi(requestId, title, rawContent, undefined, referenceDate);
-        if (aiResult.ok) {
-          console.log('[MetadataService] Gemini API를 활용한 실제 AI 요약 및 구조화 파싱에 성공했습니다.');
-          summary = aiResult.data.summary;
-          parsedStructure = aiResult.data;
-
-          // 페이지 제목이 내용을 말해주지 않을 때만 AI 제목으로 바꿉니다.
-          // 잘 쓰인 기사 제목은 AI가 새로 지은 것보다 대개 낫기 때문에 무조건 덮지 않습니다.
-          const aiTitle =
-            typeof aiResult.data.title === 'string' ? aiResult.data.title.trim() : '';
-          if (aiTitle && isUninformativeTitle(title, sourceUrl)) {
-            title = aiTitle;
-          }
-        } else {
-          aiError = aiResult.reason;
-          // 2. API Key 환경변수가 없거나 에러 발생 시, 로컬 지능형 요약기 및 파서로 폴백
-          console.log('[MetadataService] 로컬 지능형 요약기 및 본문 파서를 구동합니다.');
-          summary = buildExcerptSummary(title, rawContent);
-          parsedStructure = {
-            ...parseStructuredFromContent(rawContent, sourceType),
-            detailedAnalysis: buildExcerptDigest(rawContent),
-          };
-        }
-
-        // content에는 구조화 데이터만 담습니다.
-        // 본문은 contentText로, 정리본은 digest로 각각 분리해 보관합니다.
-        // 원본과 파생물을 같은 칸에 섞어두면 AI를 다시 돌릴 때 본문까지 덮어쓰게 됩니다.
-        // summary와 detailedAnalysis는 각자 전용 컬럼이 있으므로 구조화 데이터에서 제외합니다.
-        const { detailedAnalysis } = parsedStructure ?? {};
-        const structuredContent = toContentJson(parsedStructure, sourceType);
-
         console.log(`[MetadataService] Jina 파싱 성공. 제목: "${title}", 썸네일 획득 여부: ${Boolean(thumbnailUrl)}`);
 
-        return {
-          sourceUrl: sourceUrl,
-          title,
-          summary,
-          content: structuredContent,
-          aiError,
-          contentText: rawContent || null,
-          digest: typeof detailedAnalysis === 'string' && detailedAnalysis.trim()
-            ? detailedAnalysis
-            : null,
-          thumbnailUrl,
-          sourceType,
-        };
+        return { ok: true, data: { title, rawContent, thumbnailUrl, sourceType } };
       }
     }
   } catch (jinaError) {
+    const reason = jinaError instanceof Error ? jinaError.message : String(jinaError);
     console.warn('[MetadataService] Jina Reader API 파싱 실패. 일반 스크랩으로 폴백합니다.', jinaError);
+    return { ok: false, reason };
   }
 
+  // 예외 없이 여기까지 온 것도 실패입니다. 응답이 200이 아니었거나 data가 비어 있었던
+  // 것인데, 사유가 비면 화면에 "실패했다"만 뜨고 무엇이 실패했는지는 없습니다.
+  return { ok: false, reason: '본문 읽기(r.jina.ai)가 내용을 주지 않았습니다.' };
+}
+
+async function fetchGenericMetadata(
+  requestId: string,
+  sourceUrl: string,
+  referenceDate?: string
+): Promise<MetadataResult> {
+  const reading = await readViaJinaReader(sourceUrl);
+
+  // AI 호출은 읽기의 try 바깥입니다. 여기서 무엇이 던지든 og 폴백으로 흘러가지
+  // 않습니다 — 그쪽에서 또 부르면 한 저장물에 두 번 내게 됩니다.
+  if (reading.ok) {
+    let { title } = reading.data;
+    const { rawContent, thumbnailUrl, sourceType } = reading.data;
+
+    let summary = '';
+    let parsedStructure: any = null;
+    let aiError: string | null = null;
+
+    // 1. 진짜 AI 요약 API 호출 시도
+    const aiResult = await callGeminiApi(requestId, title, rawContent, undefined, referenceDate);
+    if (aiResult.ok) {
+      console.log('[MetadataService] Gemini API를 활용한 실제 AI 요약 및 구조화 파싱에 성공했습니다.');
+      summary = aiResult.data.summary;
+      parsedStructure = aiResult.data;
+
+      // 페이지 제목이 내용을 말해주지 않을 때만 AI 제목으로 바꿉니다.
+      // 잘 쓰인 기사 제목은 AI가 새로 지은 것보다 대개 낫기 때문에 무조건 덮지 않습니다.
+      const aiTitle = typeof aiResult.data.title === 'string' ? aiResult.data.title.trim() : '';
+      if (aiTitle && isUninformativeTitle(title, sourceUrl)) {
+        title = aiTitle;
+      }
+    } else {
+      aiError = aiResult.reason;
+      // 2. API Key 환경변수가 없거나 에러 발생 시, 로컬 지능형 요약기 및 파서로 폴백
+      //
+      // 여기는 AI가 실패해도 patch에 값을 담습니다. 본문(rawContent)을 손에 쥐고 있어
+      // 발췌 요약이 진짜 재료에서 나오기 때문입니다. 아래 og 폴백과 다른 점입니다.
+      console.log('[MetadataService] 로컬 지능형 요약기 및 본문 파서를 구동합니다.');
+      summary = buildExcerptSummary(title, rawContent);
+      parsedStructure = {
+        ...parseStructuredFromContent(rawContent, sourceType),
+        detailedAnalysis: buildExcerptDigest(rawContent),
+      };
+    }
+
+    // content에는 구조화 데이터만 담습니다.
+    // 본문은 contentText로, 정리본은 digest로 각각 분리해 보관합니다.
+    // 원본과 파생물을 같은 칸에 섞어두면 AI를 다시 돌릴 때 본문까지 덮어쓰게 됩니다.
+    // summary와 detailedAnalysis는 각자 전용 컬럼이 있으므로 구조화 데이터에서 제외합니다.
+    const { detailedAnalysis } = parsedStructure ?? {};
+
+    return {
+      sourceUrl: sourceUrl,
+      title,
+      summary,
+      content: toContentJson(parsedStructure, sourceType),
+      aiError,
+      contentText: rawContent || null,
+      digest:
+        typeof detailedAnalysis === 'string' && detailedAnalysis.trim() ? detailedAnalysis : null,
+      thumbnailUrl,
+      sourceType,
+    };
+  }
+
+  const jinaFailure = reading.reason;
+
   // Jina 호출 실패 시 기존의 단순 HTML og tag 크롤러로 폴백
+  //
+  // 예전에는 이 호출이 예외를 그대로 던졌습니다. 웹에서 instagram.com·notion.so를
+  // 브라우저로 직접 fetch하는 것이라 CORS에 막히는데, 그 예외가 fetchMetadataPatch까지
+  // 올라가 저장물 전체가 사유 없는 실패로 끝났습니다. 서버(`/generate`)는 불러보지도
+  // 못했습니다 — 주말에 실패가 잦았다는데 ai_requests에 흔적이 한 줄도 없던 이유입니다.
+  //
+  // 웹이라고 통째로 건너뛰지는 않습니다. CORS를 열어둔 블로그·API형 페이지에서는
+  // 이 길이 웹에서도 성공합니다. 막힌 곳이면 브라우저가 금방 끊어주고, 시한도 짧게
+  // 잡아둡니다. 실패를 null로 받으니 예외가 새던 문제는 여기서 끝납니다.
   console.log('[MetadataService] 로컬 기본 HTML 메타데이터 크롤러 작동 시작');
-  const htmlMetadata = await fetchHtmlMetadata(sourceUrl);
+  const htmlMetadata = await tryFetchHtmlMetadata(
+    sourceUrl,
+    Platform.OS === 'web' ? CORS_BLOCKED_FETCH_TIMEOUT_MS : undefined
+  );
+  if (!htmlMetadata) {
+    // 둘 다 실패했으면 재료가 없습니다. 여기서 빈 값을 채워 돌려주면 그 빈 값이
+    // 기존 본문과 요약을 덮어씁니다. 던져서 위쪽 catch가 상태만 남기게 둡니다.
+    throw new Error(`${jinaFailure} 원문 페이지도 읽지 못했습니다.`);
+  }
+
   const instagramCaption = isInstagramHost(new URL(sourceUrl).hostname)
     ? extractInstagramCaption(htmlMetadata.rawDescription)
     : null;
@@ -681,17 +785,77 @@ async function fetchGenericMetadata(
   }
 
 
-  const structuredContent = toContentJson(null, sourceType);
+  // og 태그만 남은 경우에도 AI는 부릅니다.
+  //
+  // 여기는 AI를 한 번도 안 부르면서 aiError를 null로 돌려주고 있었습니다. 그러면
+  // 위에서 aiStatus가 'completed'로 찍혀, 화면에는 '정리 완료'가 뜨는데 내용은
+  // og 설명 한 줄인 상태가 됩니다. 사용자는 정리가 끝난 줄 알고 재분석을 눌러볼
+  // 생각조차 못 합니다. Jina가 실패했을 뿐 og 설명은 재료로 쓸 만합니다.
+  //
+  // 재료가 없으면 부르지 않습니다. 제목과 빈 본문을 건네봐야 모델이 "분석할 내용이
+  // 없다"고 답하고, 그 한 번이 사용자 하루 몫에서 깎입니다.
+  //
+  // 기준은 htmlMetadata.summary가 아니라 rawDescription입니다. summary는 description이
+  // 아예 없을 때 "example.com 링크를 저장했습니다."라는 자리 채움으로 채워지기 때문에,
+  // 그걸로 판단하면 "재료 없음"이 영영 참이 되지 않습니다. 설명이 한 줄도 없는 페이지도
+  // 자리 채움 문장을 AI에 보내 하루 몫을 깎게 됩니다.
+  const ogText = sanitizeText(htmlMetadata.rawDescription).trim();
+  const hasOgMaterial = Boolean(ogText) && !isPlaceholderBody(ogText);
+  let title = htmlMetadata.title;
+  let summary = htmlMetadata.summary;
+  let parsedStructure: any = null;
+  let aiError: string | null = hasOgMaterial
+    ? null
+    : `${jinaFailure} 페이지에 정리할 설명이 없었습니다.`;
+
+  if (hasOgMaterial) {
+    const aiResult = await callGeminiApi(requestId, htmlMetadata.title, ogText, undefined, referenceDate);
+
+    if (aiResult.ok) {
+      summary = aiResult.data.summary;
+      parsedStructure = aiResult.data;
+
+      const aiTitle = typeof aiResult.data.title === 'string' ? aiResult.data.title.trim() : '';
+      if (aiTitle && isUninformativeTitle(title, sourceUrl)) {
+        title = aiTitle;
+      }
+    } else {
+      aiError = aiResult.reason;
+    }
+  }
+
+  // 여기서 실패했으면 정리 칸을 **비워서** 돌려줍니다.
+  //
+  // 이 갈래가 손에 쥔 것은 og 설명 한 줄뿐입니다. 그걸 summary에 담고 contentText를
+  // null로 채워 돌려주면, 예전에 Jina 본문과 제대로 된 AI 요약을 갖고 있던 저장물을
+  // 재분석했을 때 그 둘이 og 한 줄과 null로 바뀝니다. patch는 undefined만 '건드리지
+  // 말라'로 읽고 null은 '지우라'로 읽기 때문입니다(features/items/patch.ts).
+  // "실패는 기존 데이터를 건드리지 않는다"가 여기서 깨지고 있었습니다.
+  //
+  // 제목·썸네일·분류는 남깁니다. 실패해도 새로 알아낸 사실이고, 신규 저장물은
+  // 이것만으로도 목록에서 제 모습을 갖춥니다.
+  if (aiError) {
+    return {
+      sourceUrl: htmlMetadata.sourceUrl ?? sourceUrl,
+      title,
+      aiError,
+      thumbnailUrl: htmlMetadata.thumbnailUrl,
+      sourceType,
+    };
+  }
+
+  const { detailedAnalysis } = parsedStructure ?? {};
 
   return {
     sourceUrl: htmlMetadata.sourceUrl ?? sourceUrl,
-    title: htmlMetadata.title,
-    summary: htmlMetadata.summary,
-    content: structuredContent,
+    title,
+    summary,
+    content: toContentJson(parsedStructure, sourceType),
     // og 태그만 읽은 경우라 본문이랄 게 없습니다. 요약 이상은 보관하지 않습니다.
     contentText: null,
-    digest: null,
-    aiError: null,
+    digest:
+      typeof detailedAnalysis === 'string' && detailedAnalysis.trim() ? detailedAnalysis : null,
+    aiError,
     thumbnailUrl: htmlMetadata.thumbnailUrl,
     sourceType,
   };
@@ -699,21 +863,25 @@ async function fetchGenericMetadata(
 
 
 
-async function tryFetchHtmlMetadata(sourceUrl: string) {
+async function tryFetchHtmlMetadata(sourceUrl: string, timeoutMs?: number) {
   try {
-    return await fetchHtmlMetadata(sourceUrl);
+    return await fetchHtmlMetadata(sourceUrl, timeoutMs);
   } catch {
     return null;
   }
 }
 
-async function fetchHtmlMetadata(sourceUrl: string) {
-  const response = await fetchWithTimeout(sourceUrl, {
-    headers: {
-      Accept: 'text/html,application/xhtml+xml',
-      'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
+async function fetchHtmlMetadata(sourceUrl: string, timeoutMs?: number) {
+  const response = await fetchWithTimeout(
+    sourceUrl,
+    {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
+      },
     },
-  });
+    timeoutMs
+  );
 
   if (!response.ok) {
     throw new Error('html metadata fetch failed');
