@@ -144,15 +144,28 @@ function isRetryableHttpStatus(status: number) {
 
 /** 본문이 없는 이유를 사람이 읽을 말로. 원본 코드는 로그에만 남깁니다. */
 function describeMissingText(finishReason: string, blockReason?: string): string {
+  // 정책에 막힌 것은 '실패'와 다릅니다.
+  //
+  // "모델이 거부했습니다"로만 적었더니 사용자는 앱이 고장 난 줄 알고 재분석을 계속
+  // 누릅니다. 누를 때마다 입력 토큰만 나가고 답은 같습니다. 우리가 고칠 수 있는
+  // 문제가 아니라는 것, 다시 눌러도 소용없다는 것까지 말해야 그만 누릅니다.
+  //
+  // 기계가 주는 코드(PROHIBITED_CONTENT 등)는 로그에만 남깁니다. 화면에는 무슨
+  // 뜻인지가 필요하지 코드 이름이 필요한 게 아닙니다.
   if (blockReason) {
-    return '모델이 이 글의 정리를 거부했습니다.';
+    const what =
+      blockReason === 'PROHIBITED_CONTENT'
+        ? '구글 AI 정책에 걸려'
+        : '안전 정책에 걸려';
+
+    return `${what} 이 글은 AI가 정리할 수 없습니다. 다시 눌러도 같습니다. 저장물과 원문은 그대로 있습니다.`;
   }
 
   switch (finishReason) {
     case 'MAX_TOKENS':
       return '글이 길어 정리가 끝나기 전에 잘렸습니다.';
     case 'SAFETY':
-      return '모델이 이 글의 정리를 거부했습니다.';
+      return '안전 정책에 걸려 정리가 중단됐습니다. 다시 눌러도 같습니다.';
     case 'RECITATION':
       return '원문을 그대로 옮기는 것으로 판단해 모델이 답을 멈췄습니다.';
     default:
@@ -457,7 +470,11 @@ async function callGemini(prompt: string, imageBase64: string | undefined, schem
       finishReason,
       blockReason,
       usage: payload?.usageMetadata,
-      safety: candidate?.safetyRatings,
+      // 입력이 차단되면 candidate 자체가 없습니다. 그래서 candidate.safetyRatings는
+      // **정작 필요한 그 순간에만** 비어 있습니다. 실제로 첫 진단에서 undefined가
+      // 찍혔습니다. 차단 사유가 담기는 자리는 promptFeedback 쪽입니다.
+      promptSafety: payload?.promptFeedback?.safetyRatings,
+      candidateSafety: candidate?.safetyRatings,
       partKinds: responseParts.map((part: { thought?: boolean; text?: unknown }) => ({
         thought: Boolean(part?.thought),
         hasText: typeof part?.text === 'string',
@@ -520,7 +537,7 @@ function numberFromEnv(name: string, fallback?: number) {
  * 배포한 뒤에도 옛 인스턴스가 살아남아 옛 환경변수를 들고 응답하는 일이 있었습니다.
  * 설정을 고쳤는데 왜 그대로인지 응답만 봐서는 알 수 없어 한참 헤맸습니다.
  */
-const BUILD = '2026-09-21-1';
+const BUILD = '2026-09-21-2';
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify({ ...(body as object), build: BUILD }), {
