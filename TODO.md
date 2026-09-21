@@ -677,9 +677,28 @@ iOS 피드백이 구조적으로 왜곡됩니다. 자세한 작업은 아래 iOS
 - [ ] ESLint / Prettier 설정
 - [ ] 저장 실패 케이스 처리
 
-## 문서 정합성 (코드와 어긋나 있음)
+## 문서 정합성 — 온디바이스 AI 흔적 정리 (2026-09-21 완료)
 
-- [ ] `Engineering_Spec_AI_Note_App.md` — "온디바이스 AI only, 클라우드 AI 금지"로 적혀 있으나
-      실제는 Gemini 클라우드. **소형 온디바이스 AI 검토는 접은 것으로 확정**
-- [ ] `AI_Functional_Spec.md` — 같은 문제 + 모델 크기/성능 목표가 현재와 무관
-- [ ] `PRD_v1_AI_Note_App.md` — 데이터 모델이 실제 스키마(조각/사전/V2 content)와 다름
+전수조사했더니 **문서 7개와 코드 주석 1곳**에 있었습니다. 앞서 적어둔 3개보다 많았습니다.
+
+**살아 있는 문서는 고쳤습니다.**
+
+- [x] `AI_Functional_Spec.md` — **코드가 §7을 인용합니다**(`metadata/service.ts` 2곳).
+      §5 성능 목표(3~5초, 모델 600MB)와 §6 "On-device only"를 실제 구조로 갈아끼웠습니다
+- [x] `Release_Readiness_Checklist.md` — §5가 "온디바이스 추론용 데이터 자산이라고
+      리뷰 노트에 명시하라"고 지시하고 있었습니다. **심사 제출물의 근거가 될 문서**라
+      그대로 두면 제3자 전송 고지를 통째로 빠뜨립니다. 제3자 전송·익명 계정 절로 다시 썼습니다
+- [x] `metadata/service.ts` 머리 주석 — "Apple Intelligence / Gemini Nano 온디바이스"라고
+      적혀 있었습니다. 그런 경로는 만든 적이 없습니다
+
+**옛 설계 5개는 헤더만 달고 보존합니다.** 고쳐 쓰지 않습니다 — 왜 그렇게 설계했다가
+바뀌었는지가 남아야 하고, 고쳐봐야 코드가 움직이면 또 어긋납니다.
+
+- [x] `PRD_v1_AI_Note_App.md` / `Engineering_Spec_AI_Note_App.md` /
+      `Implementation_Roadmap_AI_Note_App.md` / `Execution_Plan_MVP_Phase0.md` /
+      `Capture_Inbox_Product_Strategy.md` — 맨 위에 "옛 설계다, 기준은 코드다" 경고
+
+남은 것:
+
+- [ ] `PRD_v1_AI_Note_App.md`의 데이터 모델이 실제 스키마(조각/사전/V2 content)와 다른 것은
+      헤더에 적어만 뒀습니다. 새 PRD가 필요해지면 그때 새로 씁니다

@@ -27,25 +27,45 @@
 - [ ] 디지털 기능/구독 판매 시 스토어 결제 정책 적용 (IAP / Play Billing)
 - [ ] 허용되지 않은 외부 결제 유도 문구/링크 제거
 
-## 5) On-device AI 배포 전략
-- [ ] v1 권장: 규칙기반 fallback 또는 작은 기본 모델만 사용하고, AI는 항상 비동기 실행
-- [ ] 저장 경로와 AI 경로 분리 (저장 우선, AI 후처리)
-- [ ] 모델 다운로드를 사용하더라도 실행코드처럼 보이지 않게 데이터 자산으로 다루고, 앱 기능 설명과 실제 동작을 일치시킴
-- [ ] 리뷰 노트에 모델이 온디바이스 추론용 데이터 자산이며 앱이 외부 실행코드를 내려받지 않는다는 점을 명시
+## 5) AI 구조와 제3자 전송 — 심사 제출물의 근거
 
-## 6) 용량 가이드 (정책/실무)
-- Android
-  - Google Play는 App Bundle 배포 시 압축 다운로드 크기 제한 200MB 적용
-  - 더 큰 자산은 Play Feature Delivery / Play Asset Delivery 사용 가능
-  - Play for On-device AI(beta) 사용 시 개별 AI pack은 압축 다운로드 기준 최대 1.5GB
-- iOS
-  - 대형 모델을 무조건 앱 번들에 포함할 필요는 없음
-  - 다만 런타임에 받는 파일이 실행코드처럼 해석되지 않도록 설계와 심사 설명 필요
+이 자리에는 "On-device AI 배포 전략"이 적혀 있었습니다(모델 다운로드, 용량 상한,
+"온디바이스 추론용 데이터 자산이라고 리뷰 노트에 명시"까지). **그 설계는 채택되지
+않았습니다.** 앱에는 모델이 없고 AI는 전부 클라우드입니다. 그 문서를 근거로 스토어
+문구를 쓰면 제3자 전송 고지를 통째로 빠뜨리게 되어, 이 절을 들어내고 다시 씁니다.
 
-## 7) 권장 v1 아키텍처 결정
-- [ ] 저장은 AI 없이도 항상 완료되도록 구현
-- [ ] v1은 fallback-only 또는 소형 모델로 시작하고, 대형 모델은 후속 버전에서 선택 다운로드형으로 확장
-- [ ] 모든 AI 실패는 `ai_status=failed`로 저장하고 사용자 저장 플로우는 성공 유지
+실제 구조 (자세한 것은 `AI_Functional_Spec.md` §6):
+
+- 앱 → **Jina Reader**(`r.jina.ai`)로 URL을 보내 본문을 받습니다
+- 앱 → **Supabase Edge Function** `/generate` → **Google Gemini**로 본문을 보냅니다
+- 앱 안에는 모델도 API 키도 없습니다
+
+여기서 나오는 심사 항목:
+
+- [ ] **제3자 전송 두 곳을 개인정보처리방침에 명시** — 저장한 URL과 본문이 Jina로,
+      본문이 Gemini로 갑니다. 빼놓을 수 없습니다
+- [ ] **데이터 안전(Data safety) 양식에 같은 내용** — 방침과 양식은 별개 제출물입니다
+- [ ] **스토어 설명이 "local-first"를 과장하지 않을 것** — 저장·검색은 맞지만
+      AI 정리는 클라우드입니다. 설명과 동작이 어긋나면 걸립니다
+- [ ] **생성형 AI 기능에 사용자 신고 수단** — Play 정책에 있습니다. 지금 앱에 없습니다
+- [ ] 모델 용량·AI pack·번들 크기는 **해당 없음**. 앱에 모델이 없습니다
+
+## 6) 익명 계정 — 확인이 필요한 자리
+
+앱이 서버에 "이 요청이 누구 것인가"를 알리려고 **익명 계정을 자동으로 만듭니다.**
+사용자가 만든 적 없는 계정이라, "계정 생성이 있으면 삭제 경로 필수" 조항에 걸리는지
+애매합니다. 정책 문구는 계속 바뀌므로 **콘솔에서 현재 조건을 직접 확인해야 합니다.**
+
+- [ ] 이 앱이 계정 삭제 요구사항 대상인지 확인
+- [ ] 대상이면 앱 내 삭제 경로 + 웹 삭제 요청 링크
+- [ ] 이미 쌓인 익명 계정 정리 (9/16 폴리필 버그로 생긴 것이 다수)
+
+## 7) 저장과 AI의 분리 — 이미 그렇게 돼 있음
+
+- [x] 저장은 AI 없이도 항상 완료됩니다
+- [x] AI 실패는 `aiStatus: 'failed'`로 남고 저장 플로우는 성공 유지합니다
+- [x] 실패 사유를 `aiError`에 남겨 화면에 띄웁니다 (2026-09-21)
+- [ ] 프록시가 죽었을 때의 로컬 발췌 폴백은 **일부러 죽여놓고 확인한 적이 없습니다**
 
 ## References
 - Apple App Review Guidelines:
@@ -58,7 +78,5 @@
   - https://support.google.com/googleplay/android-developer/answer/13327111?hl=en
 - Android app size guidance:
   - https://developer.android.com/topic/performance/reduce-apk-size
-- Play for On-device AI (AI packs):
-  - https://developer.android.com/google/play/on-device-ai
 - Apple maximum build file sizes:
   - https://developer.apple.com/help/app-store-connect/reference/app-uploads/maximum-build-file-sizes

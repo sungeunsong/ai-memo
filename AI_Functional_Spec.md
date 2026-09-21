@@ -1,12 +1,21 @@
 # AI Functional Spec v1
 
+> **이 문서는 코드가 인용합니다.** `metadata/service.ts`가 §7을 두 곳에서 근거로 댑니다.
+> 그래서 버리지 않고 실제 구현에 맞춰 고쳤습니다(2026-09-21). §1~§3의 기능 정의와
+> §7의 실패 처리 원칙은 지금도 그대로 유효합니다.
+
 ## Goal
-Provide on-device AI features:
+AI features:
 - Title generation
 - 3-line summary
 - Thumbnail selection
 
 AI must NEVER block saving.
+
+**실행 위치: 클라우드입니다.** 처음에는 온디바이스를 전제로 썼지만 구현은 Gemini
+클라우드입니다. 호출은 앱이 직접 하지 않고 Supabase Edge Function(`/generate`)을
+거칩니다 — 키가 앱에 있으면 앱을 주는 것이 곧 키를 주는 것이라서입니다.
+소형 온디바이스 AI 검토는 접었습니다.
 
 ---
 
@@ -104,27 +113,36 @@ Output:
 ## 4. AI Execution Rules
 
 - Async only
-- Timeout: 3~5s
 - 실패해도 저장 유지
-- 결과는 overwrite 가능
+- 결과는 overwrite 가능. 단 **사용자가 고친 값(`userTitle`·`userCategory`·
+  `userDeadline`)은 덮지 않습니다**
+- 한 번의 정리에 이름표(`enrich_request_id`)가 붙습니다. 앱이 죽었다 살아나도
+  같은 이름표로 물어 중복 과금이 없습니다
 
 ---
 
 ## 5. Performance Target
 
-- Title: < 1.5s
-- Summary: < 3s
-- Memory: < 1GB
-- Model size: < 600MB (Lite 기준)
+- 시한은 **30초**입니다. 홉이 둘(본문 읽기 → 프록시)이라 예전의 3~5초 목표는
+  성립하지 않습니다
+- 원가 계측(사용량·지연·payload)은 아직 안 붙였습니다. TODO 참고
 
 ---
 
-## 6. Model Requirements
+## 6. 실행 구조
 
-- On-device only
-- Replaceable engine
-- Quantized model (4bit or similar)
-- Support chunking
+앞서 "On-device only, 4bit 양자화 모델, 600MB 미만"으로 적혀 있던 자리입니다.
+그 설계는 채택되지 않았습니다.
+
+- **본문 읽기**: 앱 → Jina Reader(`r.jina.ai`) 직접. 서버로 안 옮깁니다 —
+  키가 없고, 돈이 안 들고, 옮기면 우리 IP로 속도 제한이 몰리며 사용자 URL을
+  우리가 다 보게 됩니다
+- **AI 정리**: 앱 → Supabase Edge Function `/generate` → Gemini
+- 키·모델·출력 스키마는 **서버가** 소유합니다. 프롬프트와 사전(Registry)은 앱이 소유합니다
+- 상한 셋(사용자 몫 / 사용자 호출 수 / 전체 합산)을 외부 호출 **전에** 예약합니다
+
+**제3자 전송이 두 곳이라는 뜻입니다.** URL과 본문이 Jina로, 본문이 Gemini로 나갑니다.
+개인정보처리방침과 스토어 데이터 안전 양식에 둘 다 적어야 합니다.
 
 ---
 
