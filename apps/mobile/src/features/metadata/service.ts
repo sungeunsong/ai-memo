@@ -406,6 +406,48 @@ function normalizeSourceUrl(input: string) {
   return url.toString();
 }
 
+/** `blog.naver.com/{아이디}/{글번호}` 형태인가. PostView.naver 쿼리형은 아닙니다. */
+function isNaverPrettyPostPath(pathname: string) {
+  return /^\/[^/]+\/\d+\/?$/.test(pathname);
+}
+
+/**
+ * **읽을 때만 쓰는 주소.** 저장되는 `sourceUrl`과는 별개입니다.
+ *
+ * 네이버는 PC 블로그 주소에 `robots: noindex`를 걸어둡니다. Jina가 그걸 지켜서
+ * HTTP 200에 본문을 **빈 문자열로** 돌려줍니다. 실패가 아니라 성공으로 보이는 응답이라,
+ * 앱은 제목만 들고 AI를 불렀고 모델은 제목만으로 그럴듯한 글을 지어냈습니다. 화면에는
+ * 요약이 멀쩡히 떠서 사용자가 실제로 속았습니다(2026-09-21).
+ * 같은 글의 모바일 주소는 `index,follow`라 본문이 그대로 옵니다.
+ *
+ * 그렇다고 `normalizeSourceUrl`에서 바꾸면 안 됩니다. 그 결과가 patch의 `sourceUrl`로
+ * 그대로 저장되어, 사용자가 담은 링크가 모바일 주소로 바뀌고 '원문 열기'와 중복 판정의
+ * 기준까지 흔들립니다. 보관용과 읽기용을 갈라둡니다.
+ *
+ * 바꾸는 것은 실측으로 확인한 형태 하나뿐입니다. `PostView.naver?blogId=...`는 PC
+ * 주소인데도 이미 읽히므로 건드리지 않습니다 — 되는 것을 바꿀 이유가 없고, 어느 쪽
+ * 본문이 더 정확한지도 아직 모릅니다.
+ */
+function buildReaderUrl(sourceUrl: string): string {
+  try {
+    const url = new URL(sourceUrl);
+
+    if (url.hostname === 'blog.naver.com' && isNaverPrettyPostPath(url.pathname)) {
+      url.hostname = 'm.blog.naver.com';
+    }
+
+    return url.toString();
+  } catch {
+    // 주소로 못 읽으면 손대지 않습니다. 부르는 쪽이 원래 하던 대로 실패합니다.
+    return sourceUrl;
+  }
+}
+
+/** 본문이 제목과 사실상 같은지 보려고 공백만 눌러 비교합니다. */
+function compactForCompare(text: string) {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 async function fetchYouTubeMetadata(sourceUrl: string): Promise<MetadataResult> {
   const oEmbedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(sourceUrl)}&format=json`;
   const oEmbedResponse = await fetchWithTimeout(oEmbedUrl, {
@@ -500,8 +542,10 @@ export async function fetchSourceBodyText(sourceUrl: string): Promise<string | n
   // 조각의 본문이 없으면 종합할 재료 자체가 사라집니다.
   for (let attempt = 1; attempt <= SOURCE_FETCH_ATTEMPTS; attempt += 1) {
     try {
+      // 읽을 때만 바꾸는 주소입니다. 조각 재수집도 같은 길을 타야 합니다 —
+      // 저장 경로만 고치면 조각을 붙여 다시 정리할 때 또 PC 주소를 읽습니다.
       const response = await fetchWithTimeout(
-        `https://r.jina.ai/${normalized}`,
+        `https://r.jina.ai/${buildReaderUrl(normalized)}`,
         { headers: { Accept: 'application/json' } },
         SOURCE_FETCH_TIMEOUT_MS
       );
@@ -576,7 +620,7 @@ type JinaReading = {
 async function readViaJinaReader(
   sourceUrl: string
 ): Promise<{ ok: true; data: JinaReading } | { ok: false; reason: string }> {
-  const jinaUrl = `https://r.jina.ai/${sourceUrl}`;
+  const jinaUrl = `https://r.jina.ai/${buildReaderUrl(sourceUrl)}`;
   try {
     console.log(`[MetadataService] Jina Reader API를 통해 콘텐츠를 렌더링 및 파싱합니다. URL: ${jinaUrl}`);
     // Jina AI Reader API를 통해 렌더링된 온전한 마크다운 및 메타데이터를 JSON 형태로 받아옵니다.
@@ -601,7 +645,29 @@ async function readViaJinaReader(
         // Jina가 돌려주는 값에도 엔티티가 섞여 옵니다. 저장 전에 풀어둡니다.
         let title = sanitizeText(json.data.title || '') || `${getHostname(sourceUrl)} 저장 링크`;
         // 본문은 sanitizeText를 쓰지 않습니다. 공백을 뭉개면 마크다운 구조가 사라집니다.
-        const rawContent = decodeHtmlEntities(json.data.content || '');
+        const rawContent = decodeHtmlEntities(json.data.content || '').trim();
+
+        // 본문이 없으면 성공이 아닙니다.
+        //
+        // 여기에 가드가 없어서, 200에 빈 본문을 주는 페이지가 전부 '성공'으로 통과했습니다.
+        // 그러면 제목만 들고 AI를 부르게 되고, 모델은 제목만으로 그럴듯한 글을 지어냅니다.
+        // 화면에는 요약이 멀쩡히 떠서 실패한 줄도 모르고, 하루 몫은 1건 깎이고,
+        // contentText는 null로 저장돼 나중에 대조할 원문도 남지 않습니다.
+        // 잘못된 성공보다 정직한 실패가 낫습니다.
+        //
+        // 길이로 자르지는 않습니다. "오늘 임시휴무입니다." "9월 25일 밤 10시 공구 마감"처럼
+        // 짧아도 그게 전부인 글이 있고, 이 앱이 담는 것이 바로 그런 것들입니다.
+        // 확실한 실패만 막습니다.
+        if (
+          !rawContent ||
+          isPlaceholderBody(rawContent) ||
+          compactForCompare(rawContent) === compactForCompare(title)
+        ) {
+          return {
+            ok: false,
+            reason: '본문 읽기 결과가 비어 있거나 제목만 들어 있었습니다.',
+          };
+        }
         
         // Notion 등 기본 타이틀이 무의미한 고정 문구일 경우 본문 첫 줄 또는 핵심 요소를 추출해 제목으로 승격시킵니다.
         const isGenericNotionTitle = title.includes('Where teams and agents work together') || title.toLowerCase() === 'notion';
