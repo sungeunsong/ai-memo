@@ -114,6 +114,53 @@ const RESPONSE_SCHEMAS: Record<string, unknown> = {
 };
 
 /**
+ * 모델이 응답은 했는데 쓸 본문을 안 준 경우.
+ *
+ * 네트워크 실패와 갈라둡니다. 이쪽은 **다시 걸어도 같은 답이 옵니다.** 같은 입력을
+ * 다시 넣는 것이니까요. 그런데 502로 돌려주면 앱이 '다시 걸어볼 만한 실패'로 읽고
+ * 세 번 더 부릅니다. 실제로 저장물 두 건에 호출이 여섯 번 나갔습니다 — 결과는 같고
+ * 돈만 세 배입니다.
+ */
+class GeminiCallError extends Error {
+  readonly retryable: boolean;
+
+  constructor(message: string, retryable: boolean) {
+    super(message);
+    this.name = 'GeminiCallError';
+    this.retryable = retryable;
+  }
+}
+
+/**
+ * HTTP 상태로 '다시 걸면 될 것'을 가릅니다.
+ *
+ * 설정이 틀려서 나는 400(모델과 안 맞는 생성 옵션), 키 문제 401·403, 모델명 오타
+ * 404는 몇 번을 걸어도 같습니다. 그걸 재시도 대상에 넣으면 고장 하나가 호출 세 번이
+ * 됩니다. 429는 시간이 지나면 풀리고, 5xx와 408은 구글 쪽이 흔들린 것일 수 있습니다.
+ */
+function isRetryableHttpStatus(status: number) {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/** 본문이 없는 이유를 사람이 읽을 말로. 원본 코드는 로그에만 남깁니다. */
+function describeMissingText(finishReason: string, blockReason?: string): string {
+  if (blockReason) {
+    return '모델이 이 글의 정리를 거부했습니다.';
+  }
+
+  switch (finishReason) {
+    case 'MAX_TOKENS':
+      return '글이 길어 정리가 끝나기 전에 잘렸습니다.';
+    case 'SAFETY':
+      return '모델이 이 글의 정리를 거부했습니다.';
+    case 'RECITATION':
+      return '원문을 그대로 옮기는 것으로 판단해 모델이 답을 멈췄습니다.';
+    default:
+      return '모델이 정리 결과를 돌려주지 않았습니다.';
+  }
+}
+
+/**
  * 응답을 보낸 뒤에도 작업을 이어가게 합니다.
  *
  * 런타임이 주는 전역이라 이름 그대로 부르면 없는 환경에서 ReferenceError로 터집니다.
@@ -273,7 +320,13 @@ async function handle(req: Request) {
   const outcome = await work;
 
   if (!outcome.ok) {
-    return json(502, { status: 'upstream_failed', reason: outcome.reason });
+    // 앱은 5xx를 '다시 걸어볼 만한 실패'로 읽고 세 번 더 부릅니다. 모델이 본문을
+    // 안 준 것은 다시 걸어도 같은 답이라, 그걸 502로 돌려주면 한 건에 호출이 세 번
+    // 나가고 결과는 똑같습니다. 실제로 저장물 두 건에 여섯 번이 나갔습니다.
+    // 다시 해서 될 것만 5xx로 돌려줍니다.
+    return outcome.retryable
+      ? json(502, { status: 'upstream_failed', reason: outcome.reason })
+      : json(422, { status: 'upstream_rejected', reason: outcome.reason });
   }
 
   return json(200, { status: 'ok', cached: false, data: outcome.data });
@@ -286,7 +339,7 @@ async function runGeneration(
   prompt: string,
   imageBase64: string | undefined,
   schema: unknown
-): Promise<{ ok: true; data: unknown } | { ok: false; reason: string }> {
+): Promise<{ ok: true; data: unknown } | { ok: false; reason: string; retryable: boolean }> {
   try {
     const data = await callGemini(prompt, imageBase64, schema);
 
@@ -317,7 +370,11 @@ async function runGeneration(
       console.error('[generate] 실패 기록도 실패했습니다:', writeError);
     }
 
-    return { ok: false, reason };
+    // 모델이 답을 줬는데 쓸 본문이 없던 경우는 다시 걸어도 같습니다. 같은 입력을
+    // 그대로 다시 넣는 것이니까요. 네트워크가 흔들린 것과 갈라서 알려줍니다.
+    // 우리가 분류한 것만 믿습니다. 여기까지 온 그 밖의 예외(네트워크·timeout)는
+    // 다시 걸어볼 만한 것으로 봅니다.
+    return { ok: false, reason, retryable: error instanceof GeminiCallError ? error.retryable : true };
   }
 }
 
@@ -355,14 +412,60 @@ async function callGemini(prompt: string, imageBase64: string | undefined, schem
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');
-    throw new Error(`Gemini HTTP ${response.status}: ${errorBody.slice(0, 300)}`);
+    console.error('[generate] Gemini HTTP 실패', {
+      status: response.status,
+      model: GEMINI_MODEL,
+      body: errorBody.slice(0, 500),
+    });
+    throw new GeminiCallError(
+      `Gemini HTTP ${response.status}: ${errorBody.slice(0, 300)}`,
+      isRetryableHttpStatus(response.status)
+    );
   }
 
   const payload = await response.json();
-  const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const candidate = payload?.candidates?.[0];
 
-  if (typeof text !== 'string') {
-    throw new Error('Gemini 응답에 본문이 없습니다.');
+  // parts를 전부 훑습니다.
+  //
+  // 첫 조각만 읽고 있었습니다. 응답은 조각이 여럿일 수 있고, 그중에는 모델이 생각한
+  // 흔적(thought)도 섞입니다. 최종 답이 두 번째 조각에 있으면 멀쩡한 응답을
+  // '본문 없음'으로 오판하게 됩니다. 지금은 thinkingBudget이 0이라 잘 안 생기겠지만,
+  // 원인을 가리려고 넣는 진단이 그 오판 위에 서 있으면 답이 어긋납니다.
+  const responseParts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+  const text = responseParts
+    .filter((part: { thought?: boolean; text?: unknown }) => !part?.thought && typeof part?.text === 'string')
+    .map((part: { text: string }) => part.text)
+    .join('')
+    .trim();
+
+  if (!text) {
+    // 왜 본문이 없는지는 응답에 적혀 있습니다. 전에는 그걸 버리고 "본문이 없습니다"
+    // 한 마디만 남겨서, 로그를 봐도 서버·앱 어디에서도 원인을 알 수 없었습니다.
+    // 상한에 걸린 것인지, 모델이 거부한 것인지, 원문 복제로 판단한 것인지가
+    // 전부 다른 문제인데 한 문장으로 뭉개고 있었습니다.
+    const finishReason = candidate?.finishReason ?? 'UNKNOWN';
+    const blockReason = payload?.promptFeedback?.blockReason;
+
+    // 모델명과 생성 설정도 같이 남깁니다. secret 값은 콘솔에서 다시 못 읽는데,
+    // "어떤 모델이 어떤 설정으로 이렇게 답했나"를 모르면 원인을 좁힐 수 없습니다.
+    console.error('[generate] Gemini가 본문을 주지 않았습니다.', {
+      build: BUILD,
+      model: GEMINI_MODEL,
+      thinkingBudget: GEMINI_THINKING_BUDGET,
+      promptChars: prompt.length,
+      finishReason,
+      blockReason,
+      usage: payload?.usageMetadata,
+      safety: candidate?.safetyRatings,
+      partKinds: responseParts.map((part: { thought?: boolean; text?: unknown }) => ({
+        thought: Boolean(part?.thought),
+        hasText: typeof part?.text === 'string',
+      })),
+    });
+
+    // 모델이 답은 했는데 쓸 것을 안 줬습니다. 같은 입력을 다시 넣어봐야 같습니다.
+    throw new GeminiCallError(describeMissingText(finishReason, blockReason), false);
   }
 
   // 여기서 파싱해 둡니다. 저장되는 것도, 다음에 캐시로 돌려주는 것도 같은 모양이어야
@@ -370,7 +473,8 @@ async function callGemini(prompt: string, imageBase64: string | undefined, schem
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error('Gemini 응답이 JSON이 아닙니다.');
+    // 스키마를 줬는데도 JSON이 아니면 다시 걸어도 같은 모양이 옵니다.
+    throw new GeminiCallError('Gemini 응답이 JSON이 아닙니다.', false);
   }
 }
 
@@ -416,7 +520,7 @@ function numberFromEnv(name: string, fallback?: number) {
  * 배포한 뒤에도 옛 인스턴스가 살아남아 옛 환경변수를 들고 응답하는 일이 있었습니다.
  * 설정을 고쳤는데 왜 그대로인지 응답만 봐서는 알 수 없어 한참 헤맸습니다.
  */
-const BUILD = '2026-09-16-1';
+const BUILD = '2026-09-21-1';
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify({ ...(body as object), build: BUILD }), {
